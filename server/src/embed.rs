@@ -8,9 +8,37 @@
 //! See `docs/SPEC_FORGE_RUST_UPDATE.md` §2.3c + §5 best-practice #3.
 
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// Embedding vector dimensionality (all-MiniLM-L6-v2 / bge-small-en-v1.5 = 384).
 pub const EMBED_DIM: usize = 384;
+
+/// Bootstrap item 1: the pinned HF commit, captured by `scripts/fetch-model` at first fetch.
+pub const MODEL_REVISION: &str = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf";
+/// Bootstrap item 2: SHA-256 of `onnx/model.onnx` at [`MODEL_REVISION`], captured at first fetch.
+pub const MODEL_SHA256: &str = "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452";
+/// The pinned Hugging Face repository the embedder is fetched from (§2.3c primary model).
+/// Singular source of truth so provenance tests can assert the fetch never targets a `bge` variant.
+pub const MODEL_REPO: &str = "sentence-transformers/all-MiniLM-L6-v2";
+
+/// The model directory: `GENESIS_MODEL_DIR` if set, else `<CARGO_MANIFEST_DIR>/models`.
+#[must_use]
+pub fn model_dir() -> PathBuf {
+    std::env::var_os("GENESIS_MODEL_DIR").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("models"),
+        PathBuf::from,
+    )
+}
+
+/// Paths to the ONNX model and tokenizer inside [`model_dir`].
+#[must_use]
+pub fn model_paths() -> (PathBuf, PathBuf) {
+    let base = model_dir();
+    (
+        base.join("onnx").join("model.onnx"),
+        base.join("tokenizer.json"),
+    )
+}
 
 /// A local sentence embedder: an ONNX Runtime session plus its tokenizer.
 #[derive(Debug)]
@@ -42,6 +70,32 @@ impl Embedder {
 // (groups "Embeddings" and "Model provenance").
 #[cfg(test)]
 mod tests {
+    use super::{model_paths, MODEL_REPO, MODEL_REVISION, MODEL_SHA256};
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    /// The worktree root (one level above `CARGO_MANIFEST_DIR = server/`), where the
+    /// committed `scripts/` and `.gitignore` live. Resolved at compile time so the
+    /// helpers below do not depend on the test binary's working directory.
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR (server/) has a parent (worktree root)")
+            .to_path_buf()
+    }
+
+    /// Path to the committed model-fetch script.
+    fn fetch_model_path() -> PathBuf {
+        repo_root().join("scripts").join("fetch-model")
+    }
+
+    /// The full text of `scripts/fetch-model` (the source of truth these provenance
+    /// tests inspect).
+    fn fetch_model_text() -> String {
+        std::fs::read_to_string(fetch_model_path()).expect("read scripts/fetch-model")
+    }
+
     // ─── Embeddings ──────────────────────────────────────────────────────────
 
     /// Fix the embedding dimensionality at `EMBED_DIM = 384`.
@@ -52,11 +106,25 @@ mod tests {
     }
 
     /// Use the `all-MiniLM-L6-v2` model (384-dim, mean pooling) and not `bge-small-en-v1.5`.
+    ///
+    /// Provenance-level: the fetch script targets the MiniLM repo (the singular source of
+    /// truth `MODEL_REPO`) and never a `bge` variant. §2.3c flags `bge`+mean-pool as a
+    /// stated correctness bug, so the wrong repo must be excluded at the fetch boundary.
     #[test]
     fn the_model_is_all_minilm_l6_v2_and_not_bge_small() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Use the all-MiniLM-L6-v2 model (384-dim, mean pooling) and not bge-small-en-v1.5"
+        assert_eq!(MODEL_REPO, "sentence-transformers/all-MiniLM-L6-v2");
+        let script = fetch_model_text();
+        assert!(
+            script.contains(MODEL_REPO),
+            "scripts/fetch-model must target {MODEL_REPO}"
+        );
+        assert!(
+            script.contains("all-MiniLM-L6-v2"),
+            "the fetched model must be all-MiniLM-L6-v2"
+        );
+        assert!(
+            !script.to_lowercase().contains("bge"),
+            "the fetched model must not be a bge-small variant"
         );
     }
 
@@ -180,42 +248,79 @@ mod tests {
     /// `server/models/`.
     #[test]
     fn a_fetch_model_script_is_provided() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Provide scripts/fetch-model, which downloads the model and tokenizer into server/models/"
+        let path = fetch_model_path();
+        assert!(
+            path.is_file(),
+            "scripts/fetch-model must exist at {}",
+            path.display()
+        );
+        let script = fetch_model_text();
+        assert!(
+            script.starts_with("#!"),
+            "scripts/fetch-model must be a script (shebang line)"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert!(
+            mode & 0o111 != 0,
+            "scripts/fetch-model must be executable (mode {mode:o})"
+        );
+        assert!(
+            script.contains("server/models"),
+            "scripts/fetch-model must download into server/models/"
         );
     }
 
     /// Fetch from the Hugging Face repository `sentence-transformers/all-MiniLM-L6-v2`.
     #[test]
     fn the_model_is_fetched_from_the_sentence_transformers_repository() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Fetch from the Hugging Face repository sentence-transformers/all-MiniLM-L6-v2"
+        let script = fetch_model_text();
+        assert!(
+            script.contains("huggingface.co"),
+            "scripts/fetch-model must fetch from Hugging Face"
+        );
+        assert!(
+            script.contains(MODEL_REPO),
+            "scripts/fetch-model must fetch from the {MODEL_REPO} repository"
         );
     }
 
     /// Fetch the files `onnx/model.onnx` and `tokenizer.json`.
     #[test]
     fn the_fetched_files_are_model_onnx_and_tokenizer_json() {
-        // TODO: Implement
-        unimplemented!("Implement via TDD — Fetch the files onnx/model.onnx and tokenizer.json");
+        let script = fetch_model_text();
+        assert!(
+            script.contains("onnx/model.onnx"),
+            "scripts/fetch-model must fetch onnx/model.onnx"
+        );
+        assert!(
+            script.contains("tokenizer.json"),
+            "scripts/fetch-model must fetch tokenizer.json"
+        );
     }
 
     /// Pin an explicit repository revision in `scripts/fetch-model`.
     #[test]
     fn fetch_model_pins_an_explicit_repository_revision() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Pin an explicit repository revision in scripts/fetch-model"
+        let script = fetch_model_text();
+        assert!(
+            script.contains(MODEL_REVISION),
+            "scripts/fetch-model must pin the explicit revision {MODEL_REVISION}"
         );
     }
 
     /// Download only from that pinned revision.
     #[test]
     fn downloads_come_only_from_the_pinned_revision() {
-        // TODO: Implement
-        unimplemented!("Implement via TDD — Download only from that pinned revision");
+        let script = fetch_model_text();
+        // Downloads resolve the pinned ${REVISION}, never a floating ref like main/latest.
+        assert!(
+            script.contains("resolve/${REVISION}"),
+            "downloads must resolve the pinned ${{REVISION}}"
+        );
+        assert!(
+            !script.contains("resolve/main") && !script.contains("resolve/latest"),
+            "downloads must not come from an unpinned ref (main/latest)"
+        );
     }
 
     /// Record in `scripts/fetch-model` that the revision is load-bearing because §6.2 #6
@@ -223,55 +328,98 @@ mod tests {
     /// `token_type_ids` is required.
     #[test]
     fn fetch_model_records_why_the_revision_is_load_bearing() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Record in scripts/fetch-model that the revision is load-bearing because §6.2 #6 states ONNX exports of the same model differ in output shape (pooled output vs last_hidden_state) and in whether token_type_ids is required"
+        let script = fetch_model_text().to_lowercase();
+        assert!(
+            script.contains("load-bearing"),
+            "scripts/fetch-model must record that the revision is load-bearing"
+        );
+        assert!(
+            script.contains("token_type_ids") && script.contains("last_hidden_state"),
+            "the recorded reason must cite the §6.2 #6 output-shape / token_type_ids dependency"
         );
     }
 
     /// Keep the model artifacts out of git (`.gitignore` already ignores `*.onnx`).
     #[test]
     fn the_model_artifacts_are_kept_out_of_git() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Keep the model artifacts out of git (.gitignore already ignores *.onnx)"
+        let gitignore = std::fs::read_to_string(repo_root().join(".gitignore"))
+            .expect("read .gitignore at repo root");
+        // The onnx weights AND the tokenizer.json must both be ignored; `*.onnx` alone would
+        // not cover tokenizer.json, so the directory-level `server/models/` rule is required.
+        assert!(
+            gitignore.contains("*.onnx"),
+            ".gitignore must ignore *.onnx model weights"
+        );
+        assert!(
+            gitignore.contains("server/models"),
+            ".gitignore must ignore server/models/ so tokenizer.json is never committed either"
         );
     }
 
     /// Assert the pinned SHA-256 of the fetched model file before running embedding tests.
     #[test]
     fn the_pinned_model_sha256_is_asserted_before_embedding_tests() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Assert the pinned SHA-256 of the fetched model file before running embedding tests"
+        let (model, _tok) = model_paths();
+        assert!(model.exists(), "model missing: run `scripts/fetch-model`");
+        let bytes = std::fs::read(&model).unwrap();
+        let digest = hex::encode(Sha256::digest(&bytes));
+        assert_eq!(
+            digest, MODEL_SHA256,
+            "fetched model does not match the pinned SHA-256"
         );
     }
 
     /// Commit the pinned revision string as a constant, captured at first fetch.
     #[test]
     fn the_pinned_revision_string_is_committed_as_a_constant() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Commit the pinned revision string as a constant, captured at first fetch"
+        // A git commit SHA-1 is 40 lowercase hex chars, and the fetch script must pin THIS one.
+        assert_eq!(
+            MODEL_REVISION.len(),
+            40,
+            "MODEL_REVISION must be a full 40-char git commit SHA"
+        );
+        assert!(
+            MODEL_REVISION.chars().all(|c| c.is_ascii_hexdigit()),
+            "MODEL_REVISION must be hex"
+        );
+        assert!(
+            fetch_model_text().contains(MODEL_REVISION),
+            "the committed MODEL_REVISION must match what scripts/fetch-model pins"
         );
     }
 
     /// Commit the pinned SHA-256 digest as a constant, captured at first fetch.
     #[test]
     fn the_pinned_sha256_digest_is_committed_as_a_constant() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Commit the pinned SHA-256 digest as a constant, captured at first fetch"
+        // A SHA-256 digest is 64 hex chars.
+        assert_eq!(
+            MODEL_SHA256.len(),
+            64,
+            "MODEL_SHA256 must be a 64-char SHA-256 hex digest"
+        );
+        assert!(
+            MODEL_SHA256.chars().all(|c| c.is_ascii_hexdigit()),
+            "MODEL_SHA256 must be hex"
         );
     }
 
-    /// Make embedding tests fail — never skip — with a message directing the developer to
-    /// run `scripts/fetch-model` when the model file is absent.
+    /// The model file must be present and match the pinned digest before embedding tests run —
+    /// and its ABSENCE must FAIL (never silently skip), directing the developer to fetch it.
     #[test]
     fn embedding_tests_fail_rather_than_skip_when_the_model_is_absent() {
-        // TODO: Implement
-        unimplemented!(
-            "Implement via TDD — Make embedding tests fail, never skip, with a message directing the developer to run scripts/fetch-model when the model file is absent"
+        let (model, _tok) = model_paths();
+        assert!(
+            model.exists(),
+            "model missing at {}: run `scripts/fetch-model` (docs/SPEC_FORGE_RUST_UPDATE.md §6.2 #6)",
+            model.display()
         );
+    }
+
+    /// `model_paths` resolves to `onnx/model.onnx` and `tokenizer.json` under the model dir.
+    #[test]
+    fn model_paths_point_into_server_models() {
+        let (model, tok) = model_paths();
+        assert!(model.ends_with("onnx/model.onnx"));
+        assert!(tok.ends_with("tokenizer.json"));
     }
 }
