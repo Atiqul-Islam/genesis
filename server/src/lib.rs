@@ -28,7 +28,7 @@ pub mod consolidate;
 pub mod embed;
 pub mod store;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -168,6 +168,21 @@ impl MemoryServer {
     fn err_result(e: &anyhow::Error) -> CallToolResult {
         CallToolResult::error(vec![ContentBlock::text(e.to_string())])
     }
+
+    /// Loads the embedder into `inner` on first use (lazy). Shared by the `store` and
+    /// `recall` tool adapters so the model-path construction and load live in one place.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model or tokenizer fails to load.
+    fn load_embedder_into(model_dir: &Path, inner: &mut Inner) -> Result<()> {
+        if inner.embedder.is_none() {
+            let m = model_dir.join("onnx/model.onnx");
+            let t = model_dir.join("tokenizer.json");
+            inner.embedder = Some(Embedder::load(&m.to_string_lossy(), &t.to_string_lossy())?);
+        }
+        Ok(())
+    }
 }
 
 #[tool_router]
@@ -178,13 +193,8 @@ impl MemoryServer {
         Parameters(a): Parameters<StoreArgs>,
     ) -> Result<CallToolResult, McpError> {
         let mut g = self.inner.lock().await;
-        if g.embedder.is_none() {
-            let m = self.model_dir.join("onnx/model.onnx");
-            let t = self.model_dir.join("tokenizer.json");
-            match Embedder::load(&m.to_string_lossy(), &t.to_string_lossy()) {
-                Ok(e) => g.embedder = Some(e),
-                Err(e) => return Ok(Self::err_result(&e)),
-            }
+        if let Err(e) = Self::load_embedder_into(&self.model_dir, &mut g) {
+            return Ok(Self::err_result(&e));
         }
         let Inner { store, embedder } = &mut *g;
         let Some(embedder) = embedder.as_mut() else {
@@ -213,13 +223,8 @@ impl MemoryServer {
         let k =
             a.k.map_or(DEFAULT_K, |v| usize::try_from(v).unwrap_or(DEFAULT_K));
         let mut g = self.inner.lock().await;
-        if g.embedder.is_none() {
-            let m = self.model_dir.join("onnx/model.onnx");
-            let t = self.model_dir.join("tokenizer.json");
-            match Embedder::load(&m.to_string_lossy(), &t.to_string_lossy()) {
-                Ok(e) => g.embedder = Some(e),
-                Err(e) => return Ok(Self::err_result(&e)),
-            }
+        if let Err(e) = Self::load_embedder_into(&self.model_dir, &mut g) {
+            return Ok(Self::err_result(&e));
         }
         let Inner { store, embedder } = &mut *g;
         let Some(embedder) = embedder.as_mut() else {
