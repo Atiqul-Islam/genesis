@@ -47,7 +47,11 @@ hex        = "0.4"
 
 # --- ifs lint gate, verbatim from denier-rust/common-rust (crate-level; genesis has no workspace) ---
 [lints.rust]
-unsafe_code = "forbid"
+# `deny` (not `forbid`) so exactly ONE sanctioned FFI exception is possible: registering the
+# sqlite-vec extension via `sqlite3_auto_extension(sqlite3_vec_init)` (spec §2.3b Vector-store
+# requirement) is inherently unsafe and has no safe wrapper. It carries a scoped
+# `#[allow(unsafe_code)]` on `VectorStore::open`; unsafe stays denied everywhere else.
+unsafe_code = "deny"
 missing_docs = "warn"
 unreachable_pub = "warn"
 
@@ -61,6 +65,10 @@ unimplemented = "warn"      # so unimplemented!() scaffold stubs compile
 module_name_repetitions = "allow"
 missing_errors_doc = "warn"
 missing_panics_doc = "warn"
+# doc_markdown is a purely cosmetic pedantic lint: it flags ordinary technical nouns in doc
+# prose (SQLite, ONNX, sqlite-vec, token_type_ids) for want of backticks. Zero correctness
+# value; allowed so `clippy -D warnings` gates on substance. Every other pedantic lint stays on.
+doc_markdown = "allow"
 
 [profile.release]
 lto = "fat"

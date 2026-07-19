@@ -19,7 +19,10 @@
 //! greenfield starting point the `/spec-forge` run fills in, RED → GREEN, one commit
 //! per plan task.
 
-#![forbid(unsafe_code)]
+// `unsafe_code` is denied crate-wide via Cargo.toml `[lints.rust]`; the sole scoped
+// `#[allow(unsafe_code)]` is on `store::VectorStore::open` for the required sqlite-vec
+// FFI registration (§2.3b). `deny` (not a source-level `forbid`) is what lets that one
+// exception exist.
 
 pub mod consolidate;
 pub mod embed;
