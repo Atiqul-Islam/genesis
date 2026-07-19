@@ -532,7 +532,7 @@ mod tests {
         // AC14 (stdin EOF => exit status 0) is verified end-to-end by server.feature (Task 10).
         // Unit-level: serve_stdio is the async Result-returning entry that `main` `?`-forwards,
         // so a clean shutdown propagates Ok(()) (exit 0) rather than a nonzero-exit panic.
-        let _entry = super::serve_stdio; // exists with the async Result<()> shape main forwards
+        let _ = super::serve_stdio; // exists with the async Result<()> shape main forwards
     }
 
     // ─── AC3 calibration fixture (bootstrap item 4) ──────────────────────────
