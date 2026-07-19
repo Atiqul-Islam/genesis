@@ -47,11 +47,15 @@ Full design + decisions: project memory `genesis-design.md`.
   + [[test]] harness=false wiring (E-6); dev-agent Rust idioms, size-limits kept (E-7); simplify globs
   (E-8); timeline forge actors (E-9). Routing-table + handoff-schema UNTOUCHED. Phase order 0→11 intact.
 
+## Run preconditions ✅ MET (2026-07-19, by bg "genesis agent" 27fe3893)
+- git: initialized; branch `master`; initial commit `52e4530` (63 files); `.gitignore` (target/,
+  test-results/, __pycache__/, *.pyc, *.onnx, .planning/builds/). Worktree smoke-test PASSED (Phase 0a OK).
+  Identity is a PLACEHOLDER `Atiqul-Islam <atiqul@localhost>` (global was unset) — update if desired.
+- tools: `rust-code-analysis-cli 0.0.25` installed; `cargo-llvm-cov 0.8.7` present. CRAP inputs ready.
+
 ## Remaining ⬜
-- **Two run preconditions:** (1) `git init` genesis (Phase 0a worktree / Phase 9 SHAs / Phase 11 need git);
-  (2) `cargo install rust-code-analysis-cli` (CRAP CC input; cargo-llvm-cov already present).
-- **Rust memory server** (`server/`) — scaffolded; now BUILD IT spec-driven by running `/spec-forge`.
-  (Native per-subagent `memory` field is the interim store.)
+- **Rust memory server** (`server/`) — scaffolded + preconditions met; now BUILD IT spec-driven by
+  running `/spec-forge`. (Native per-subagent `memory` field is the interim store.)
 - **Starter templates** (`templates/`) — coder / reviewer / researcher.
 - **Cross-platform paths** — hook commands use absolute /mnt/c paths; parametrize `GENESIS_HOME` for Windows.
 
