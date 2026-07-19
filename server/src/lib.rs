@@ -534,4 +534,41 @@ mod tests {
         // so a clean shutdown propagates Ok(()) (exit 0) rather than a nonzero-exit panic.
         let _entry = super::serve_stdio; // exists with the async Result<()> shape main forwards
     }
+
+    // ─── AC3 calibration fixture (bootstrap item 4) ──────────────────────────
+
+    /// The committed calibration fixture must keep ranking its source first for the
+    /// paraphrase query against the decoys, with the real model + real store (no mocks).
+    #[test]
+    fn ac3_calibration_fixture_ranks_the_source_first() {
+        let raw = std::fs::read_to_string("tests/fixtures/ac3_calibration.json").unwrap();
+        let fx: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let (_d, mut store, mut emb) = setup();
+        let cfg = ConsolidationConfig::default();
+        let clock = FixedClock(0);
+        let source = fx["source"].as_str().unwrap();
+        do_store(&mut store, &mut emb, &cfg, &clock, "cal", source).unwrap();
+        for d in fx["decoys"].as_array().unwrap() {
+            do_store(
+                &mut store,
+                &mut emb,
+                &cfg,
+                &clock,
+                "cal",
+                d.as_str().unwrap(),
+            )
+            .unwrap();
+        }
+        let json = do_recall(
+            &mut store,
+            &mut emb,
+            &clock,
+            "cal",
+            fx["paraphrase"].as_str().unwrap(),
+            5,
+        )
+        .unwrap();
+        let items: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(items[0]["text"].as_str().unwrap(), source);
+    }
 }
