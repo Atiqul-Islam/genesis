@@ -1,0 +1,81 @@
+[package]
+name = "genesis-memory-server"
+version = "0.1.0"
+edition = "2021"
+description = "Genesis MCP memory server — per-agent semantic memory over SQLite + local ONNX embeddings."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "genesis-memory-server"
+path = "src/main.rs"
+
+[lib]
+name = "genesis_memory"
+path = "src/lib.rs"
+
+[dependencies]
+# MCP server (official Rust SDK). transport-io is REQUIRED for stdio(); `server` already implies macros+schemars.
+rmcp       = { version = "2.2.0", features = ["server", "macros", "transport-io"] }
+schemars   = "1"
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+# async runtime
+tokio   = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "signal"] }
+anyhow  = "1"
+thiserror = "2"
+# vector store
+rusqlite   = { version = "0.40.1", features = ["bundled"] }
+sqlite-vec = "0.1.9"
+bytemuck   = "1"
+# embeddings
+ort        = { version = "=2.0.0-rc.12", features = ["download-binaries", "ndarray", "std"] }
+ndarray    = "0.17"
+tokenizers = "0.23.1"
+# logging
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+cucumber   = { version = "0.23", features = ["macros"] }
+assert_cmd = "2.2"
+approx     = "0.5"
+insta      = "1"
+tempfile   = "3"
+
+# --- ifs lint gate, verbatim from denier-rust/common-rust (crate-level; genesis has no workspace) ---
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "warn"      # so unimplemented!() scaffold stubs compile
+module_name_repetitions = "allow"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# cucumber BDD suites are harness=false bins (one per tool feature). /spec-compile
+# (skill: spec-compile, Rust branch) GENERATES each block below TOGETHER WITH its
+# tests/bdd/<slug>_steps.rs file — never add a [[test]] block whose path does not
+# yet exist, or `cargo test`/`cargo build` fails to find the target.
+#
+# Example emitted by /spec-compile once tests/bdd/store_steps.rs exists:
+#   [[test]]
+#   name = "bdd_store"
+#   path = "tests/bdd/store_steps.rs"
+#   harness = false
+# … likewise bdd_recall, bdd_consolidate.
+# ─────────────────────────────────────────────────────────────────────────────

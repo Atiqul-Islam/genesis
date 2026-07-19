@@ -1,0 +1,3 @@
+# cucumber-rs BDD step definitions live here — one harness=false bin per tool feature.
+# /spec-compile (Rust branch) generates tests/bdd/<slug>_steps.rs together with the
+# matching [[test]] block in ../../Cargo.toml. Empty until the first /spec-forge run.
