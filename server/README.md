@@ -4,10 +4,14 @@ The Genesis MCP memory server — per-agent semantic memory over SQLite + `sqlit
 KNN and local ONNX embeddings (`ort` + `tokenizers`). Runs fully offline over stdio;
 any MCP client (Claude Code) can `store`, `recall`, and `consolidate` memories.
 
-> **Status: greenfield scaffold.** Every function body is `unimplemented!("Implement
-> via TDD")`. This crate is built **spec-driven** by the Genesis copy of the `/spec-forge`
-> workflow (`.claude/skills/`), RED → GREEN, one commit per plan task. The scaffold's first
-> real compile is the workflow's RED gate.
+> **Status: v1 implemented.** `store` / `recall` / `consolidate` (decay-scored dedup/merge)
+> are built and tested — 86 unit tests + 17 BDD scenarios pass in release against the real
+> ONNX model, real SQLite, and the real spawned stdio server (no mocks). Built **spec-driven**
+> by the Genesis copy of the `/spec-forge` workflow (`.claude/skills/`), RED → GREEN, one
+> commit per plan task.
+>
+> **Out of scope (v2):** `consolidate`'s summarize/evict pass (its thresholds are unsourced —
+> see the ratified spec's "Out of scope (v2)"); `cap` is retained in config but unused in v1.
 
 ## Layout (flat `src/` — ifs Rust convention)
 
@@ -17,7 +21,7 @@ any MCP client (Claude Code) can `store`, `recall`, and `consolidate` memories.
 | `src/main.rs` | thin binary → `genesis_memory::serve_stdio()` |
 | `src/store.rs` | `VectorStore` — `vec0(embedding float[384])` insert + KNN |
 | `src/embed.rs` | `Embedder` — ONNX mean-pool + L2-normalize, 384-dim |
-| `src/consolidate.rs` | decay/recency, dedup/merge, summarize/evict |
+| `src/consolidate.rs` | decay/recency scoring + dedup/merge (summarize/evict is v2, deferred) |
 | `tests/bdd/` | cucumber-rs suites (one `harness=false` bin per tool) |
 | `tests/golden/` | frozen embedding golden vectors |
 

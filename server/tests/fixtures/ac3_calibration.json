@@ -1,0 +1,9 @@
+{
+  "decoys": [
+    "The cat slept on the warm windowsill all afternoon.",
+    "Quarterly revenue exceeded the forecast by twelve percent.",
+    "Remember to water the office plants on Fridays."
+  ],
+  "paraphrase": "Apply the schema migration prior to bouncing the service.",
+  "source": "The database migration must run before the service restarts."
+}
