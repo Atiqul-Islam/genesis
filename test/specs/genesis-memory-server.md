@@ -229,6 +229,26 @@ reading of the source — §2.4 says "on insert" and v1 does not.
   thresholds as placeholders. The deviation is nonetheless written down rather than silently
   absorbed.
 
+**D9 — AC12 "syntactically invalid" → structurally-invalid-but-parseable.** (Discovered at
+implementation, Phase 9; recorded here for Atiqul's confirmation — it clarifies the *test* for a
+ratified criterion, not the server's behavior.) Expected Behavior 12 / Acceptance Criterion 12 say a
+"**syntactically invalid** JSON-RPC request … yields a JSON-RPC error object". The chosen MCP SDK
+(`rmcp` 2.2.0) **silently ignores** byte-garbage that is not valid JSON (verified against
+`rmcp/src/transport/async_rw.rs`; rust-sdk#938) — it sends no reply at all — and returns a JSON-RPC
+`error` (`-32600 Invalid Request`) only for **well-formed JSON that is not a valid JSON-RPC message**.
+
+- What is actually asserted: `server.feature` sends `{"jsonrpc":"2.0","id":1,"not_a_valid_member":"x"}`
+  (parseable JSON, invalid JSON-RPC) and asserts the server replies with a JSON-RPC `error` object
+  (not an `isError` result). This is the malformed-request protocol-error path §5 #5 sanctions
+  ("reserve protocol-error assertions for malformed requests").
+- Why not the literal wording: intercepting pre-parse byte-garbage would mean fighting the SDK's
+  transport (it drops such input by design). The observable, testable protocol-error boundary is the
+  structurally-invalid-but-parseable request.
+- Stakes: low. The distinction (`isError` result vs JSON-RPC error) that AC12 exists to pin is fully
+  exercised; only the specific "syntactically invalid" input class is narrowed to what the transport
+  actually surfaces. **Flagged for Atiqul's sign-off** — if he wants the literal byte-garbage path,
+  it requires a pre-parse guard around the transport (out of scope for v1).
+
 ### Changelog v2 → v3
 
 - **D1 — `base_score` initial value.** Added `base_score` to `ConsolidationConfig` with default

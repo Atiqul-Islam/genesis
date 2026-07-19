@@ -17,7 +17,7 @@
 
 use anyhow::Result;
 
-use crate::store::VectorStore;
+use crate::store::{MemRow, VectorStore};
 
 /// Tunable consolidation thresholds. All values are placeholders to calibrate via tests.
 #[derive(Debug, Clone)]
@@ -104,6 +104,35 @@ struct Merge {
     loser_use_count: i64,
 }
 
+/// Builds a [`Merge`] if `mem` and its neighbour `nid` (at L2 distance `dist`) are a
+/// mergeable pair — distinct rows whose cosine similarity is at or above `tau_merge` — with
+/// the higher-`effective` row kept as survivor. Returns `None` otherwise.
+fn merge_from_candidate(
+    mems: &[MemRow],
+    mem: &MemRow,
+    nid: i64,
+    dist: f64,
+    cfg: &ConsolidationConfig,
+    now: i64,
+) -> Option<Merge> {
+    if nid == mem.id || cosine_from_l2(dist) < cfg.tau_merge {
+        return None;
+    }
+    let cand = mems.iter().find(|m| m.id == nid)?;
+    let score_mem = effective(cfg, mem.base_score, mem.created_at, now, mem.use_count);
+    let score_cand = effective(cfg, cand.base_score, cand.created_at, now, cand.use_count);
+    let (survivor, loser) = if score_mem >= score_cand {
+        (mem, cand)
+    } else {
+        (cand, mem)
+    };
+    Some(Merge {
+        survivor: survivor.id,
+        loser: loser.id,
+        loser_use_count: loser.use_count,
+    })
+}
+
 /// Finds the first mergeable pair among `agent_id`'s active memories, or `None`.
 fn find_merge(
     store: &VectorStore,
@@ -115,27 +144,9 @@ fn find_merge(
     for mem in &mems {
         let emb = store.embedding_of(mem.id)?;
         for (nid, dist) in store.knn(agent_id, &emb, 2)? {
-            if nid == mem.id {
-                continue;
+            if let Some(m) = merge_from_candidate(&mems, mem, nid, dist, cfg, now) {
+                return Ok(Some(m));
             }
-            if cosine_from_l2(dist) < cfg.tau_merge {
-                continue;
-            }
-            let Some(cand) = mems.iter().find(|m| m.id == nid) else {
-                continue;
-            };
-            let score_mem = effective(cfg, mem.base_score, mem.created_at, now, mem.use_count);
-            let score_cand = effective(cfg, cand.base_score, cand.created_at, now, cand.use_count);
-            let (survivor, loser) = if score_mem >= score_cand {
-                (mem, cand)
-            } else {
-                (cand, mem)
-            };
-            return Ok(Some(Merge {
-                survivor: survivor.id,
-                loser: loser.id,
-                loser_use_count: loser.use_count,
-            }));
         }
     }
     Ok(None)

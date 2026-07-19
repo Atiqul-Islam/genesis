@@ -1,23 +1,24 @@
 //! `genesis_memory` — the Genesis MCP memory server.
 //!
 //! Exposes per-agent semantic memory to any MCP client (Claude Code) over stdio:
-//! `store` a memory, `recall` the k most relevant, and `consolidate` (decay / dedup /
-//! summarize). Backed by SQLite + `sqlite-vec` for KNN and a local ONNX sentence
+//! `store` a memory, `recall` the k most relevant, and `consolidate` (decay-scored
+//! dedup/merge). Backed by SQLite + `sqlite-vec` for KNN and a local ONNX sentence
 //! embedder (`ort` + `tokenizers`), so it runs fully offline under Claude Max.
 //!
 //! # Architecture
 //!
 //! - [`store`] — the `vec0(embedding float[384])` vector store (insert + KNN).
 //! - [`embed`] — local ONNX embeddings (mean-pool + L2-normalize, 384-dim).
-//! - [`consolidate`] — decay/recency scoring, dedup/merge, summarize/evict.
+//! - [`consolidate`] — decay/recency scoring + dedup/merge (v1; summarize/evict is v2, deferred).
 //!
 //! Tool handlers stay thin: the `store`/`recall`/`consolidate` **logic** lives in these
 //! modules (unit-testable with an injected store + embedder), and the `#[tool]` methods
 //! are thin adapters over them (see `docs/SPEC_FORGE_RUST_UPDATE.md` §5 best-practice #1).
 //!
-//! Every function body below is an `unimplemented!("Implement via TDD")` stub — the
-//! greenfield starting point the `/spec-forge` run fills in, RED → GREEN, one commit
-//! per plan task.
+//! Built spec-driven by the Genesis `/spec-forge` workflow (RED → GREEN, one commit per
+//! plan task). v1 scope: `store` / `recall` / `consolidate` (decay + dedup/merge only);
+//! summarize/evict is deferred to v2 (its thresholds are unsourced — see the spec's
+//! "Out of scope (v2)").
 
 // `unsafe_code` is denied crate-wide via Cargo.toml `[lints.rust]`; the sole scoped
 // `#[allow(unsafe_code)]` is on `store::VectorStore::open` for the required sqlite-vec

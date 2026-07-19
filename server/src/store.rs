@@ -68,6 +68,24 @@ pub struct MemRow {
     pub base_score: f64,
 }
 
+impl MemRow {
+    /// Reads a `MemRow` from a query row (`id, created_at, last_used_at, use_count, base_score`).
+    fn from_row(r: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: r.get(0)?,
+            created_at: r.get(1)?,
+            last_used_at: r.get(2)?,
+            use_count: r.get(3)?,
+            base_score: r.get(4)?,
+        })
+    }
+}
+
+/// Maps a KNN result row to `(id, distance)`.
+fn id_distance(r: &rusqlite::Row) -> rusqlite::Result<(i64, f64)> {
+    Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+}
+
 impl VectorStore {
     /// Opens (or creates) the store, registering `sqlite-vec` and ensuring the schema.
     ///
@@ -154,10 +172,8 @@ impl VectorStore {
     pub fn knn(&self, agent_id: &str, query: &[f32], k: usize) -> Result<Vec<(i64, f64)>> {
         Self::check_dim(query)?;
         let k_i64 = i64::try_from(k).unwrap_or(i64::MAX);
-        let total: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM vec_items", [], |r| r.get(0))?;
-        let pool = total.max(k_i64).max(1);
+        // Candidate pool >= all vec rows so the outer agent/superseded filter never under-returns.
+        let pool = self.count_vectors()?.max(k_i64).max(1);
         let mut stmt = self.conn.prepare(
             "SELECT m.id, k.distance
                FROM ( SELECT rowid, distance FROM vec_items
@@ -174,9 +190,19 @@ impl VectorStore {
                 agent_id,
                 k_i64
             ],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)),
+            id_distance,
         )?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// The number of stored vectors (the KNN candidate-pool upper bound).
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    fn count_vectors(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM vec_items", [], |r| r.get(0))?)
     }
 
     /// Returns the stored text for `id`.
@@ -214,15 +240,7 @@ impl VectorStore {
             "SELECT id, created_at, last_used_at, use_count, base_score
                FROM memories WHERE agent_id = ?1 AND superseded_by IS NULL ORDER BY id",
         )?;
-        let rows = stmt.query_map(params![agent_id], |r| {
-            Ok(MemRow {
-                id: r.get(0)?,
-                created_at: r.get(1)?,
-                last_used_at: r.get(2)?,
-                use_count: r.get(3)?,
-                base_score: r.get(4)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![agent_id], MemRow::from_row)?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 

@@ -109,26 +109,38 @@ impl Embedder {
     ///
     /// Returns an error if tokenization or the ONNX inference run fails.
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
+        let (ids, mask, seq) = self.tokenize(text)?;
+        let hidden = self.run_model(&ids, &mask, seq)?;
+        Ok(mean_pool_l2(&hidden, &mask, seq))
+    }
+
+    /// Tokenizes `text` into `(input_ids, attention_mask, seq_len)` with special tokens enabled.
+    fn tokenize(&self, text: &str) -> Result<(Vec<i64>, Vec<i64>, usize)> {
         let enc = self
             .tokenizer
             .encode(text, true)
             .map_err(|e| EmbedError::Tokenize(e.to_string()))?;
         let seq = enc.len();
-        let ids: Vec<i64> = enc.get_ids().iter().map(|&x| i64::from(x)).collect();
-        let mask: Vec<i64> = enc
+        let ids = enc.get_ids().iter().map(|&x| i64::from(x)).collect();
+        let mask = enc
             .get_attention_mask()
             .iter()
             .map(|&x| i64::from(x))
             .collect();
-        // §6.2 #6 CONFIRMED at implementation: this all-MiniLM-L6-v2 export REQUIRES a third
-        // input, `token_type_ids` (its token_type_embeddings/Gather node reads it). For a single
-        // sentence it is all zeros. Inputs are bound BY NAME so graph input order cannot corrupt
-        // the result.
+        Ok((ids, mask, seq))
+    }
+
+    /// Runs the ONNX session over the tokenized inputs, returning the rank-3
+    /// `last_hidden_state` (owned).
+    ///
+    /// §6.2 #6 CONFIRMED at implementation: this all-MiniLM-L6-v2 export REQUIRES a third
+    /// input, `token_type_ids` (its token_type_embeddings/Gather node reads it). For a single
+    /// sentence it is all zeros. Inputs are bound BY NAME so graph input order cannot corrupt
+    /// the result; output[0] is `last_hidden_state` (confirmed by the golden test).
+    fn run_model(&mut self, ids: &[i64], mask: &[i64], seq: usize) -> Result<ndarray::Array3<f32>> {
         let type_ids: Vec<i64> = vec![0_i64; seq];
-        let a_ids = TensorRef::from_array_view(([1_usize, seq], &*ids)).map_err(ort_anyhow)?;
-        let a_mask = TensorRef::from_array_view(([1_usize, seq], &*mask)).map_err(ort_anyhow)?;
-        let a_types =
-            TensorRef::from_array_view(([1_usize, seq], &*type_ids)).map_err(ort_anyhow)?;
+        let (a_ids, a_mask, a_types) =
+            make_tensors(ids, mask, &type_ids, seq).map_err(ort_anyhow)?;
         let outputs = self
             .session
             .run(ort::inputs![
@@ -137,35 +149,62 @@ impl Embedder {
                 "token_type_ids" => a_types,
             ])
             .map_err(ort_anyhow)?;
-        // §6.2 #6: assumes last_hidden_state at output[0]; confirmed by the golden test.
-        let hidden = outputs[0]
-            .try_extract_array::<f32>()
-            .map_err(ort_anyhow)?
-            .into_dimensionality::<ndarray::Ix3>()
-            .map_err(|e| EmbedError::OutputRank(e.to_string()))?;
-        let dim = hidden.shape()[2];
-        let mut pooled = vec![0f32; dim];
-        // Attention mask is binary {0,1}; branch instead of casting i64->f32 (clippy pedantic).
-        let mut denom = 0f32;
-        for (t, &m) in mask.iter().enumerate().take(seq) {
-            if m == 0 {
-                continue;
-            }
-            denom += 1.0;
-            for d in 0..dim {
-                pooled[d] += hidden[[0, t, d]];
-            }
-        }
-        let denom = denom.max(1e-9); // pooling-denominator clamp (avoids div-by-zero)
-        for v in &mut pooled {
-            *v /= denom;
-        }
-        let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12); // L2 clamp
-        for v in &mut pooled {
-            *v /= norm;
-        }
-        Ok(pooled)
+        extract_hidden(&outputs[0])
     }
+}
+
+/// Builds the three named `[1, seq]` i64 input tensors (`input_ids`, `attention_mask`,
+/// `token_type_ids`), borrowing the caller's slices.
+#[allow(clippy::type_complexity)]
+fn make_tensors<'a>(
+    ids: &'a [i64],
+    mask: &'a [i64],
+    type_ids: &'a [i64],
+    seq: usize,
+) -> ort::Result<(TensorRef<'a, i64>, TensorRef<'a, i64>, TensorRef<'a, i64>)> {
+    Ok((
+        TensorRef::from_array_view(([1_usize, seq], ids))?,
+        TensorRef::from_array_view(([1_usize, seq], mask))?,
+        TensorRef::from_array_view(([1_usize, seq], type_ids))?,
+    ))
+}
+
+/// Extracts ONNX `output[0]` as an owned rank-3 `last_hidden_state` (`[1, seq, dim]`).
+fn extract_hidden(value: &ort::value::DynValue) -> Result<ndarray::Array3<f32>> {
+    let hidden = value
+        .try_extract_array::<f32>()
+        .map_err(ort_anyhow)?
+        .into_dimensionality::<ndarray::Ix3>()
+        .map_err(|e| EmbedError::OutputRank(e.to_string()))?;
+    Ok(hidden.to_owned())
+}
+
+/// Attention-mask-weighted mean pool over `hidden` (`[1, seq, dim]`), then L2-normalize,
+/// with the pooling-denominator (`1e-9`) and L2-norm (`1e-12`) clamps that guard against
+/// division producing NaN/inf.
+fn mean_pool_l2(hidden: &ndarray::Array3<f32>, mask: &[i64], seq: usize) -> Vec<f32> {
+    let dim = hidden.shape()[2];
+    let mut pooled = vec![0f32; dim];
+    // Attention mask is binary {0,1}; branch instead of casting i64->f32 (clippy pedantic).
+    let mut denom = 0f32;
+    for (t, &m) in mask.iter().enumerate().take(seq) {
+        if m == 0 {
+            continue;
+        }
+        denom += 1.0;
+        for d in 0..dim {
+            pooled[d] += hidden[[0, t, d]];
+        }
+    }
+    let denom = denom.max(1e-9);
+    for v in &mut pooled {
+        *v /= denom;
+    }
+    let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+    for v in &mut pooled {
+        *v /= norm;
+    }
+    pooled
 }
 
 // Source: test/specs/genesis-memory-server.md — Implementation Requirements
