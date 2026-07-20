@@ -76,7 +76,7 @@ def frontmatter(name, meta, gh, skills):
         '    - matcher: "startup|resume|compact"\n'
         "      hooks:\n"
         "        - type: command\n"
-        f'          command: "{py} {hooks_dir}/inject.py {exp_dir}"\n'
+        f'          command: "{py} {hooks_dir}/inject.py {exp_dir} {name}"\n'
         "  PreToolUse:\n"
         '    - matcher: "Write|Edit"\n'
         "      hooks:\n"
@@ -85,7 +85,7 @@ def frontmatter(name, meta, gh, skills):
         "  Stop:\n"
         "    - hooks:\n"
         "        - type: command\n"
-        f'          command: "{py} {hooks_dir}/validate.py ."\n'
+        f'          command: "{py} {hooks_dir}/validate.py . {name}"\n'
         "---\n")
 
 

@@ -24,6 +24,7 @@ RULES = """Genesis house rules (enforced by hooks — the gate blocks, the valid
 
 def main():
     exp_dir = sys.argv[1] if len(sys.argv) > 1 else ""
+    agent = sys.argv[2] if len(sys.argv) > 2 else ""
     pointers = ""
     if exp_dir and os.path.isdir(exp_dir):
         files = sorted(f for f in os.listdir(exp_dir) if f.endswith(".md"))
@@ -32,7 +33,19 @@ def main():
             pointers = ("\nYour expertise store (decoupled, authoritative — read the file your behavior "
                         "names, on demand, before deep work):\n" + lines)
 
-    ctx = RULES + pointers
+    required = ""
+    if agent and exp_dir:
+        try:
+            req = json.load(open(os.path.join(exp_dir, "required.json"), encoding="utf-8")).get(agent, [])
+        except Exception:
+            req = []
+        if req:
+            required = (f"\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: "
+                        + ", ".join(req) + ". Before finishing, declare each on its own line — "
+                        "`APPLIED-EXPERTISE: <name>#<rule-ids>`. The Stop hook (validate) blocks finishing "
+                        "until all are declared; declaring is cheap, so do it.")
+
+    ctx = RULES + required + pointers
     if len(ctx) > 9500:                       # stay under the 10,000-char hook-output cap
         ctx = ctx[:9500] + "\n…(truncated)"
     print(json.dumps({"hookSpecificOutput": {
