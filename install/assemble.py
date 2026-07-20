@@ -33,6 +33,15 @@ EXPERTISE_NOTE = (
     "- Read the expertise file your behavior names, on demand, before deep work. It is authoritative.\n"
     "- The hard, checkable rules are also enforced by gate/validate hooks — you cannot violate them.")
 
+# Per-agent semantic memory via the Genesis MCP memory server (registered as `genesis-memory`).
+MEMORY_TOOLS = ["mcp__genesis-memory__store", "mcp__genesis-memory__recall", "mcp__genesis-memory__consolidate"]
+MEMORY_NOTE = (
+    "## Your memory (per-agent, durable across sessions)\n"
+    "- The `genesis-memory` MCP server gives you your own semantic memory: `store`, `recall`, `consolidate`.\n"
+    "- ALWAYS pass your own agent name as `agent_id` — the store is scoped by it, so you only see your own memories.\n"
+    "- `store` a durable fact/decision; `recall` before deep work to retrieve what you learned before; "
+    "`consolidate` to dedup. This is separate from the transient session context.")
+
 
 def read(p):
     with open(p, encoding="utf-8") as f:
@@ -101,9 +110,11 @@ def main():
         meta = json.load(open(mp, encoding="utf-8"))
         if "description" not in meta or "tools" not in meta:
             sys.exit(f"{mp} must contain 'description' and 'tools'.")
+    # Every assembled agent gets per-agent memory tools (design: each agent has its own vector memory).
+    meta = {**meta, "tools": list(meta["tools"]) + MEMORY_TOOLS}
     skills = install_skills(src, target)
     body = "\n\n".join([read(os.path.join(src, "persona.md")),
-                        read(os.path.join(src, "behavior.md")), EXPERTISE_NOTE])
+                        read(os.path.join(src, "behavior.md")), EXPERTISE_NOTE, MEMORY_NOTE])
     out_dir = os.path.join(target, ".claude", "agents")
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"{name}.md")
