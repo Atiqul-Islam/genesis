@@ -18,12 +18,14 @@ AGENTS = {
         "description": "Genesis coordinator - the user talks to Sensei; it verifies requirements, plans, "
                        "delegates authoring to Method, then assembles, wires, installs, and delivers.",
         "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "SendMessage"],
+        "expertise": ["agent-building", "agentic-teams", "expertise-application"],
     },
     "method": {
         # No `Agent` tool -> cannot spawn/delegate. Boundary enforced by config, not prompt.
         "description": "Genesis craftsman - authors and tests each agent's persona, behavior, and skills. "
                        "Writes tests first; ships nothing untested; never orchestrates.",
         "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "SendMessage"],
+        "expertise": ["persona-creation", "prompt-engineering", "expertise-application"],
     },
 }
 
@@ -46,6 +48,22 @@ MEMORY_NOTE = (
 def read(p):
     with open(p, encoding="utf-8") as f:
         return f.read().rstrip()
+
+
+def register_required(gh, name, expertise):
+    """Upsert this agent's REQUIRED expertise into expertise/required.json so the validate (Stop) hook
+    enforces the APPLIED-EXPERTISE declaration for it — identical machinery to sensei/method. Preserves
+    every other agent's entry and the _doc note."""
+    path = os.path.join(gh, "expertise", "required.json")
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        data = {"_doc": "Per-agent REQUIRED expertise (auto-registered by assemble.py); the validate Stop "
+                        "hook blocks finishing until each is declared via APPLIED-EXPERTISE."}
+    data[name] = list(expertise)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
 
 
 def install_skills(src, target):
@@ -112,7 +130,11 @@ def main():
             sys.exit(f"{mp} must contain 'description' and 'tools'.")
     # Every assembled agent gets per-agent memory tools (design: each agent has its own vector memory).
     meta = {**meta, "tools": list(meta["tools"]) + MEMORY_TOOLS}
-    skills = install_skills(src, target)
+    # Parity with sensei/method: register this agent's required expertise so the Stop hook enforces the
+    # declaration. Built agents supply it via meta.json ("required_expertise" or "expertise"); built-ins
+    # via the AGENTS table. No expertise assigned -> nothing to enforce (declaration check is a no-op).
+    expertise = meta.get("expertise") or meta.get("required_expertise") or []
+    register_required(gh, name, expertise)
     body = "\n\n".join([read(os.path.join(src, "persona.md")),
                         read(os.path.join(src, "behavior.md")), EXPERTISE_NOTE, MEMORY_NOTE])
     out_dir = os.path.join(target, ".claude", "agents")
