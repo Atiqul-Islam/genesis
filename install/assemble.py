@@ -112,6 +112,22 @@ def frontmatter(name, meta, gh, skills):
     stop = _q(py) + " " + _q(os.path.join(hooks_dir, "validate.py")) + " . " + name
     review = _q(py) + " " + _q(os.path.join(hooks_dir, "review.py")) + " . " + name
     skills_line = f"skills: {', '.join(skills)}\n" if skills else ""
+    # PreToolUse: every agent gets the Write|Edit gate (house rules + rule surfacing). SENSEI additionally
+    # gets a Bash gate that blocks assembling a built agent unless the research-expertise skill ran this
+    # session — only Sensei orchestrates/assembles, so it is wired Sensei-scoped and no other agent changes.
+    pretooluse = (
+        "  PreToolUse:\n"
+        '    - matcher: "Write|Edit"\n'
+        "      hooks:\n"
+        "        - type: command\n"
+        + _yaml_cmd(gate))
+    if name == "sensei":
+        enforce = _q(py) + " " + _q(os.path.join(hooks_dir, "enforce_research.py"))
+        pretooluse += (
+            '    - matcher: "Bash"\n'
+            "      hooks:\n"
+            "        - type: command\n"
+            + _yaml_cmd(enforce))
     # Verified frontmatter-hooks YAML shape (docs db-reader example): event -> [{matcher, hooks:[{type,command}]}].
     return (
         "---\n"
@@ -124,12 +140,8 @@ def frontmatter(name, meta, gh, skills):
         '    - matcher: "startup|resume|compact"\n'
         "      hooks:\n"
         "        - type: command\n"
-        + _yaml_cmd(inject) +
-        "  PreToolUse:\n"
-        '    - matcher: "Write|Edit"\n'
-        "      hooks:\n"
-        "        - type: command\n"
-        + _yaml_cmd(gate) +
+        + _yaml_cmd(inject)
+        + pretooluse +
         "  Stop:\n"
         "    - hooks:\n"
         "        - type: command\n"

@@ -22,8 +22,10 @@ Usage:
 import argparse, collections, json, os, sys
 
 HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_LOG = os.path.join(HOOK_DIR, "..", ".genesis", "hook-decisions.log")
-DEFAULT_REVIEW = os.path.join(HOOK_DIR, "..", ".genesis", "review.log")
+_HOME = os.path.dirname(HOOK_DIR)   # genesis home; runtime dir avoids a nested .genesis/.genesis/ in a bootstrap
+_RUNTIME = _HOME if os.path.basename(_HOME) == ".genesis" else os.path.join(_HOME, ".genesis")
+DEFAULT_LOG = os.path.join(_RUNTIME, "hook-decisions.log")
+DEFAULT_REVIEW = os.path.join(_RUNTIME, "review.log")
 
 # Map a validator block-reason string to a category (first match wins).
 REASON_CATS = [

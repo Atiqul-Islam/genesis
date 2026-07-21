@@ -84,6 +84,22 @@ def main():
     except ImportError:
         print("  SKIP  YAML parse (pyyaml not installed)")
 
+    # Sensei gets an ADDITIONAL Sensei-only Bash gate (enforce_research); no other agent's wiring changes.
+    sensei_fm = assemble.frontmatter("sensei", {"description": "d", "tools": ["Read", "Bash", "Agent"]}, gh, [])
+    scmds = command_lines(sensei_fm)
+    check("sensei has five hook commands (adds enforce_research)", len(scmds) == 5)
+    check("sensei wires enforce_research under a Bash matcher",
+          'matcher: "Bash"' in sensei_fm and any("enforce_research.py" in unyaml_single(c) for c in scmds))
+    check("method (non-sensei) has NO enforce_research / Bash matcher",
+          "enforce_research.py" not in fm and 'matcher: "Bash"' not in fm)
+    try:
+        import yaml
+        sdoc = yaml.safe_load(sensei_fm.split("---", 2)[1])
+        matchers = {blk.get("matcher") for blk in sdoc["hooks"]["PreToolUse"]}
+        check("sensei PreToolUse has both Write|Edit and Bash matchers", {"Write|Edit", "Bash"} <= matchers)
+    except ImportError:
+        print("  SKIP  sensei YAML parse (pyyaml not installed)")
+
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 

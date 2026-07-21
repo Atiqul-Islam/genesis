@@ -44,15 +44,18 @@ Method writes `persona.md`, `behavior.md`, `skills/`, a `meta.json` (`descriptio
 - If the answer is not in the requirements, take the question to the user.
 - Do NOT accept a result with failing tests or unresolved gaps — send it back with a sharper spec.
 
-## Step 3a — Assign expertise (parity with sensei/method)
-- Every agent you build gets the SAME expertise machinery as sensei/method: assigned expertise + a Stop
-  hook that blocks finishing until the agent DECLARES it applied each (`APPLIED-EXPERTISE: <name>#<rules>`).
-- Decide which expertise this agent must apply; put it in the TASK-SPEC `required_expertise`. Method writes
-  it into the agent's `meta.json`; the assembler auto-registers it in `expertise/required.json` and wires
-  the hook — no manual step.
-- If a listed expertise does NOT exist in the store, Method authors it FIRST (same rigor as any agent file).
-  An agent cannot be enforced to apply expertise that does not exist. Every built agent should include at
-  least `expertise-application`.
+## Step 3a — Expertise: run the `research-expertise` skill (never decide it alone)
+- **Invoke the `research-expertise` skill** to select and (when the user asks) deeply research this agent's
+  expertise. That skill IS the process — pick → suggest & discuss with the user → ask whether to research →
+  confirm scope + documents → propose a method the user verifies → research in parallel and author a full
+  enforceable module in the repo's `.genesis/` store. Never choose expertise silently, and this is enforced:
+  the assembler refuses to build a non-builtin agent unless that skill ran this session.
+- The user-confirmed expertise names become each agent's TASK-SPEC `required_expertise`. Method writes them
+  into the agent's `meta.json`; the assembler auto-registers them in `.genesis/expertise/required.json` and
+  wires the Stop hook that blocks finishing until the agent DECLARES it applied each
+  (`APPLIED-EXPERTISE: <name>#<rules>`) — identical machinery to sensei/method.
+- `expertise-application` is always included. An agent cannot be enforced to apply expertise that does not
+  exist, so any new/deepened expertise is researched and authored (via the skill) BEFORE assembly.
 
 ## Step 3b — Error, retry & escalation policy (from your teams expertise)
 - Treat every Method result as UNTRUSTED until you check it against the TASK-SPEC's acceptance criteria.

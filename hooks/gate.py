@@ -44,7 +44,11 @@ SURFACE_N = 5       # top-N governing rules to re-assert
 # artifact path → the expertise whose top rules to re-assert
 AUTHORING = re.compile(r"(persona|behavior)\.md$|(^|/)CLAUDE\.md$|\.claude/agents/.*\.md$", re.I)
 PROMPTISH = re.compile(r"(prompt|tool)[\w\-]*\.(md|jsonc?|txt)$|\.prompt$", re.I)
-LOG = os.path.join(HOOK_DIR, "..", ".genesis", "hook-decisions.log")
+# Runtime dir: the genesis home when it IS a `.genesis/` workspace (bootstrapped repo), else home/.genesis
+# (central install) — avoids a nested .genesis/.genesis/ in a bootstrapped repo.
+_HOME = os.path.dirname(HOOK_DIR)
+_RUNTIME = _HOME if os.path.basename(_HOME) == ".genesis" else os.path.join(_HOME, ".genesis")
+LOG = os.path.join(_RUNTIME, "hook-decisions.log")
 
 
 def log(decision, path, rule="", surfaced=""):

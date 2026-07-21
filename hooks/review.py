@@ -41,7 +41,11 @@ MECHANICAL_KINDS = {"regex", "line_count", "declaration"}
 HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIRED_JSON = os.path.join(HOOK_DIR, "..", "expertise", "required.json")
 MANIFEST_DIR = os.path.join(HOOK_DIR, "..", "expertise", "manifests")
-LOG = os.path.join(HOOK_DIR, "..", ".genesis", "review.log")
+# Runtime dir: the genesis home when it IS a `.genesis/` workspace (bootstrapped repo), else home/.genesis
+# (central install) — avoids a nested .genesis/.genesis/ in a bootstrapped repo.
+_HOME = os.path.dirname(HOOK_DIR)
+_RUNTIME = _HOME if os.path.basename(_HOME) == ".genesis" else os.path.join(_HOME, ".genesis")
+LOG = os.path.join(_RUNTIME, "review.log")
 ARTIFACT_GLOBS = ("*persona.md", "*behavior.md", "CLAUDE.md", ".claude/agents/*.md",
                   "*persona.spec.json", "*.tests.json")
 
