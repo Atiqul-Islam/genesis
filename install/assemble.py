@@ -158,6 +158,8 @@ def main():
     # via the AGENTS table. No expertise assigned -> nothing to enforce (declaration check is a no-op).
     expertise = meta.get("expertise") or meta.get("required_expertise") or []
     register_required(gh, name, expertise)
+    # Copy this agent's skills into <target>/.claude/skills/ and collect their names for the frontmatter.
+    skills = install_skills(src, target)
     body = "\n\n".join([read(os.path.join(src, "persona.md")),
                         read(os.path.join(src, "behavior.md")), EXPERTISE_NOTE, MEMORY_NOTE])
     out_dir = os.path.join(target, ".claude", "agents")
