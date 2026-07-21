@@ -9,7 +9,8 @@ NOT injected — that would blow the 10,000-char cap and the attention budget). 
 
 Wire in a member's frontmatter or settings.json:
   "SessionStart": [{ "matcher":"startup|resume|compact",
-                     "hooks":[{ "type":"command","command":"python3 <this> <expertise_dir>","timeout":10 }] }]
+                     "hooks":[{ "type":"command","command":"<python> <this> <expertise_dir>","timeout":10 }] }]
+  (assemble.py fills <python> with the absolute interpreter + quotes paths, so it works on Windows and POSIX.)
 
 Written as factual statements (not out-of-band commands) so it isn't flagged as prompt-injection (§16).
 """
@@ -41,9 +42,15 @@ def main():
             req = []
         if req:
             required = (f"\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: "
-                        + ", ".join(req) + ". Before finishing, declare each on its own line — "
-                        "`APPLIED-EXPERTISE: <name>#<rule-ids>`. The Stop hook (validate) blocks finishing "
-                        "until all are declared; declaring is cheap, so do it.")
+                        + ", ".join(req) + ". Each has a rule manifest at expertise/manifests/<name>.json "
+                        "(stable rule-ids + predicates). Before finishing, declare the governing rules you "
+                        "actually applied — ONE LINE PER RULE, carrying evidence:\n"
+                        "  APPLIED-EXPERTISE: <name>#<rule-id> — <evidence>\n"
+                        "where <evidence> is the file the rule is embodied in (e.g. release-manager/CLAUDE.md) "
+                        "or a short verbatim quote from your output. The Stop hook (validate) verifies each "
+                        "citation: a bare `APPLIED-EXPERTISE: <name>` with no rule-id, a rule-id not in the "
+                        "manifest, or evidence pointing to a nonexistent file / a quote absent from your work "
+                        "all BLOCK finishing. Cite at least the rules you truly used (a token gesture fails).")
 
     ctx = RULES + required + pointers
     if len(ctx) > 9500:                       # stay under the 10,000-char hook-output cap

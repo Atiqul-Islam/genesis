@@ -86,10 +86,31 @@ def install_skills(src, target):
     return names
 
 
+def _yaml_cmd(*parts):
+    """Build a cross-platform hook `command:` YAML line from already-native path parts.
+
+    Portability (Windows + POSIX): each path is double-quoted so paths with spaces survive, and NATIVE
+    separators are kept (this assembler runs on the same machine the hooks will run on, so os.sep is right —
+    backslashes on Windows, forward on POSIX). The whole value is a YAML SINGLE-quoted scalar, which keeps
+    backslashes and inner double-quotes literal (only `'` doubles). So a Windows path like
+    C:\\Users\\Jane Doe\\genesis\\hooks\\gate.py round-trips intact and the shell still sees it quoted."""
+    shell = " ".join(parts)
+    return "          command: '" + shell.replace("'", "''") + "'\n"
+
+
+def _q(p):
+    """Double-quote a path arg for the generated shell command (handles spaces; native separators kept)."""
+    return '"' + p + '"'
+
+
 def frontmatter(name, meta, gh, skills):
     hooks_dir = os.path.join(gh, "hooks")
     exp_dir = os.path.join(gh, "expertise")
-    py = "python3"
+    py = sys.executable or "python3"   # absolute interpreter path (portable; 'python3' is not on PATH on Windows)
+    inject = _q(py) + " " + _q(os.path.join(hooks_dir, "inject.py")) + " " + _q(exp_dir) + " " + name
+    gate = _q(py) + " " + _q(os.path.join(hooks_dir, "gate.py"))
+    stop = _q(py) + " " + _q(os.path.join(hooks_dir, "validate.py")) + " . " + name
+    review = _q(py) + " " + _q(os.path.join(hooks_dir, "review.py")) + " . " + name
     skills_line = f"skills: {', '.join(skills)}\n" if skills else ""
     # Verified frontmatter-hooks YAML shape (docs db-reader example): event -> [{matcher, hooks:[{type,command}]}].
     return (
@@ -103,16 +124,18 @@ def frontmatter(name, meta, gh, skills):
         '    - matcher: "startup|resume|compact"\n'
         "      hooks:\n"
         "        - type: command\n"
-        f'          command: "{py} {hooks_dir}/inject.py {exp_dir} {name}"\n'
+        + _yaml_cmd(inject) +
         "  PreToolUse:\n"
         '    - matcher: "Write|Edit"\n'
         "      hooks:\n"
         "        - type: command\n"
-        f'          command: "{py} {hooks_dir}/gate.py"\n'
+        + _yaml_cmd(gate) +
         "  Stop:\n"
         "    - hooks:\n"
         "        - type: command\n"
-        f'          command: "{py} {hooks_dir}/validate.py . {name}"\n'
+        + _yaml_cmd(stop) +
+        "        - type: command\n"
+        + _yaml_cmd(review) +
         "---\n")
 
 
