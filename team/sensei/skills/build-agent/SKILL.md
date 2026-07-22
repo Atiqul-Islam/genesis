@@ -19,6 +19,26 @@ agent-building expertise for the judgment calls. You (Sensei) never author perso
 - Prefer a single agent unless the task genuinely needs a team (single-agent-first).
 - State the plan back to the user for confirmation.
 
+## Step 2b — Offer session-copy (SINGLE-agent builds only)
+For a single custom agent, ASK the user: **a fresh custom agent, or copy your current session into it?**
+(The user chooses; never assume.) If they choose **copy**, the agent is built as a portable copy of the user's
+current Claude Code session — carrying its full conversation history + all memory/context — then specialized.
+- Requires the session-pointer hook wired in the repo (records the live session id) so `--session current`
+  resolves; else ask the user for their session id.
+- Run the orchestrator (captures ALL stores, scrubbed, → portable history + summary, and embeds the history
+  into the repo's shared memory under `agent_id=<name>`):
+  ```
+  python3 <genesis>/session_copy/build_session_agent.py --session current --name <name> --repo <target_repo> \
+      --genesis-home <target_repo>/.genesis --server-bin <...>/genesis-memory-server \
+      --model-dir <...>/models --memory-db <target_repo>/.genesis/memory.db
+  ```
+- Then continue the NORMAL build (Step 3): Method authors the agent's specialized persona (the "custom" part);
+  the assembler wires it. At runtime the agent recalls its carried-over history via its memory tools and loads
+  its `summary.md` digest at start (inject.py). The bundle lives at `<target_repo>/.genesis/agents/<name>/` and
+  travels with a git clone (portable — no `~/.claude` dependency).
+- Credentials are never copied; pass any known secret values via `--known-secret` for guaranteed removal.
+- SCOPE NOTE: session-copy is single-agent only; the result is a separate named agent (not auto-mounted).
+
 ## Step 3 — Delegate authoring to Method (one TASK-SPEC per agent)
 Spawn Method with the Agent tool, then use SendMessage to hand it this TASK-SPEC:
 ```json

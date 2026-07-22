@@ -22,6 +22,23 @@ RULES = """Genesis house rules (enforced by hooks — the gate blocks, the valid
 - Keep persona.md / behavior.md / CLAUDE.md at or under 200 lines each.
 - These are checkable and enforced deterministically; do not rely on memory to honor them."""
 
+SUMMARY_CAP = 7000  # chars of the session-copy digest to inject; the rest is recall-only
+
+
+def find_summary(exp_dir, agent):
+    """A session-copy agent has a carried-over digest at <genesis_home>/agents/<name>/summary.md (derivable
+    from exp_dir = <genesis_home>/expertise) or <cwd>/.genesis/agents/<name>/summary.md. First hit wins."""
+    if not agent:
+        return None
+    cands = []
+    if exp_dir:
+        cands.append(os.path.join(os.path.dirname(os.path.abspath(exp_dir)), "agents", agent, "summary.md"))
+    cands.append(os.path.join(os.getcwd(), ".genesis", "agents", agent, "summary.md"))
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    return None
+
 
 def main():
     exp_dir = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -52,7 +69,23 @@ def main():
                         "manifest, or evidence pointing to a nonexistent file / a quote absent from your work "
                         "all BLOCK finishing. Cite at least the rules you truly used (a token gesture fails).")
 
-    ctx = RULES + required + pointers
+    # Session-copy agents: surface the carried-over memory digest at start (D5). Recall the rest on demand.
+    summary_block = ""
+    sp = find_summary(exp_dir, agent)
+    if sp:
+        try:
+            body = open(sp, encoding="utf-8", errors="replace").read().strip()
+        except Exception:
+            body = ""
+        if body:
+            if len(body) > SUMMARY_CAP:
+                body = body[:SUMMARY_CAP] + "\n…(digest truncated — recall the rest via your memory tools)"
+            summary_block = ("\n\n## Your carried-over session memory (you were created by copying a prior "
+                             "Claude Code session)\n" + body +
+                             "\nThe full prior conversation history + memory is stored under your agent id — "
+                             "recall any specific detail with your memory tools (recall).")
+
+    ctx = RULES + required + pointers + summary_block
     if len(ctx) > 9500:                       # stay under the 10,000-char hook-output cap
         ctx = ctx[:9500] + "\n…(truncated)"
     print(json.dumps({"hookSpecificOutput": {
