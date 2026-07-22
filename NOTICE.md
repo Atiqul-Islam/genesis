@@ -107,5 +107,43 @@ license.
 
 ---
 
+## 6. Vendored skills — `superpowers` plugin
+
+Genesis's `/spec-forge` workflow (skills `spec-forge`, `forge-dev-agent`,
+`forge-review-agent`) invokes a set of discipline skills that originate in the
+**superpowers** plugin. So that Genesis ships self-contained (a fresh install has no
+dependency on superpowers being installed), the complete transitive closure of those
+skills is vendored verbatim into `skills/`, with their inter-skill references rewired
+to Genesis's own bare-name convention.
+
+- **Component:** superpowers — Core skills library for Claude Code
+- **Version vendored:** `6.1.1`
+- **Copyright:** © 2025 Jesse Vincent
+- **License:** **MIT License** — verified from the plugin's `LICENSE` file and
+  `.claude-plugin/plugin.json` (`"license": "MIT"`) on 2026-07-22. The full license
+  text is preserved at [`skills/VENDORED-superpowers-LICENSE`](./skills/VENDORED-superpowers-LICENSE).
+- **Source:** https://github.com/obra/superpowers
+  (per the plugin's `.claude-plugin/plugin.json` `homepage`/`repository` fields).
+
+The 11 vendored skills (each a directory under `skills/`):
+
+| Skill | Skill | Skill |
+|---|---|---|
+| `brainstorming` | `writing-plans` | `using-git-worktrees` |
+| `test-driven-development` | `systematic-debugging` | `verification-before-completion` |
+| `requesting-code-review` | `receiving-code-review` | `finishing-a-development-branch` |
+| `subagent-driven-development` | `executing-plans` | |
+
+Support files bundled with these skills (e.g. `requesting-code-review/code-reviewer.md`,
+`systematic-debugging/*.md` + `find-polluter.sh`, `brainstorming/scripts/*`,
+`subagent-driven-development/scripts/*` + prompt templates, `writing-plans/plan-document-reviewer-prompt.md`,
+`test-driven-development/testing-anti-patterns.md`) are copied verbatim under the same
+MIT license. Minor edits were limited to (a) rewiring `superpowers:<skill>` skill
+references to Genesis's bare-name form, and (b) removing one now-dangling relative-path
+pointer in `executing-plans` to the non-vendored `using-superpowers` skill. No
+functional logic of the vendored skills was changed.
+
+---
+
 _Licenses verified 2026-07-22 against the primary sources cited above. If you
 redistribute Genesis, retain this notice together with the `LICENSE` file._

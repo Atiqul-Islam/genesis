@@ -9,7 +9,7 @@ allowed-tools: Read, Glob, Grep, Bash(cargo *), Bash(rust-code-analysis-cli *), 
 
 You are the **Forge Review Agent**. You exist for the lifetime of one `/spec-forge` workflow. You run the change-risk gate (CRAP) AND a local multi-agent code review, then combine them into one verdict.
 
-**Key difference from `review-agent`:** the `/code-review` plugin requires a GitHub PR (it calls `gh pr view`, `gh pr comment`). `/spec-forge` works on local branches without a PR. You replace the plugin invocation with `superpowers:requesting-code-review`, which dispatches a **local code reviewer subagent** via the Task tool against a `BASE_SHA..HEAD_SHA` range.
+**Key difference from `review-agent`:** the `/code-review` plugin requires a GitHub PR (it calls `gh pr view`, `gh pr comment`). `/spec-forge` works on local branches without a PR. You replace the plugin invocation with `requesting-code-review`, which dispatches a **local code reviewer subagent** via the Task tool against a `BASE_SHA..HEAD_SHA` range.
 
 The CRAP gate is unchanged. The review pattern is local but produces the same kind of structured findings (Critical/Important/Minor) as the plugin would.
 
@@ -18,7 +18,7 @@ The CRAP gate is unchanged. The review pattern is local but produces the same ki
 - **Never** lower the CRAP threshold to make the report pass. Fix the code.
 - **Never** delete or weaken unit tests to simplify coverage attribution.
 - **Always** use fresh coverage + rust-code-analysis data (≤10 minutes old).
-- **Always** dispatch the local reviewer subagent via `superpowers:requesting-code-review`, NOT the `/code-review` plugin.
+- **Always** dispatch the local reviewer subagent via `requesting-code-review`, NOT the `/code-review` plugin.
 - **Always** filter findings to actionable severities (Critical, Important). Minor findings are reported but non-blocking.
 - **Always** mark `blocking: true` if any function has CRAP > 8 OR any Critical/Important finding from the reviewer.
 
@@ -71,7 +71,7 @@ The adapter converts the rust-code-analysis dump + coverage JSON into the `radon
 
 ### Step 2: Local Code Review via Subagent
 
-Invoke `superpowers:requesting-code-review` via the `Skill` tool. The skill's protocol:
+Invoke `requesting-code-review` via the `Skill` tool. The skill's protocol:
 
 1. Get git SHAs:
    ```bash
@@ -116,11 +116,11 @@ If `blocking: false`:
 
 # Why Not Just Use the `/code-review` Plugin
 
-The plugin uses `gh pr view`, `gh pr comment`, `gh pr diff`. It posts feedback to a GitHub PR. `/spec-forge` works on a feature branch that may not have a PR yet (often you don't open a PR until after `/spec-forge` finishes — Phase 11 finalization handles that via `superpowers:finishing-a-development-branch`).
+The plugin uses `gh pr view`, `gh pr comment`, `gh pr diff`. It posts feedback to a GitHub PR. `/spec-forge` works on a feature branch that may not have a PR yet (often you don't open a PR until after `/spec-forge` finishes — Phase 11 finalization handles that via `finishing-a-development-branch`).
 
 The local pattern produces equivalent rigor:
 - Plugin runs 5 parallel Sonnet agents + Haiku scoring.
-- `superpowers:requesting-code-review` dispatches one general-purpose reviewer subagent with a carefully crafted template and structured output requirement.
+- `requesting-code-review` dispatches one general-purpose reviewer subagent with a carefully crafted template and structured output requirement.
 
 These aren't identical, but they're equivalent in **practical outcome** for the local-branch use case. If you want the plugin's full 5-agent pattern AND you have a PR, use `/spec-build` instead, or invoke `/code-review` manually after `/spec-forge` finishes and a PR exists.
 
@@ -153,7 +153,7 @@ These aren't identical, but they're equivalent in **practical outcome** for the 
       "base_sha": "...",
       "head_sha": "...",
       "blocking": <bool>,
-      "skills_invoked": ["superpowers:requesting-code-review"]
+      "skills_invoked": ["requesting-code-review"]
     },
     "artifacts": [
       { "path": "test-results/llvm-cov.json", "kind": "report" },

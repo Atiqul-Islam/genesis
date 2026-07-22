@@ -170,26 +170,26 @@ Multi-agent mode **inlines** the equivalent behavior into each specialist's `SKI
 
 | Phase | `/spec-build` | `/spec-forge` adds |
 |---|---|---|
-| 0 Initiation | Spawn 5 agents | + 0a: invoke `superpowers:using-git-worktrees` for isolation |
-| 1 Spec Discovery | Multi-round audit | Optional pre-step: `superpowers:brainstorming` if description is vague |
-| 2.5 Plan | — | **NEW:** invoke `superpowers:writing-plans` → `docs/superpowers/plans/<date>-<slug>.md` |
-| 4 TDD inner loop | dev-agent iterates by test | forge-dev-agent executes plan tasks one-by-one with `superpowers:test-driven-development`, commits per task |
-| 4 TDD loop (iter ≥ 3) | dev-agent retries | **forge-dev-agent invokes `superpowers:systematic-debugging`** — 4-phase scientific method; escalates on architectural issues |
-| Every dev verdict | declared in persona | forge-dev-agent invokes `superpowers:verification-before-completion` before claiming PASS |
-| 9 Review | review-agent invokes `/code-review` plugin (**requires GitHub PR**) | forge-review-agent invokes `superpowers:requesting-code-review` (**local subagent**, no PR needed) |
-| 9 Review FAIL | dev-agent applies fixes | forge-dev-agent invokes `superpowers:receiving-code-review` first — verifies findings before complying |
-| 11 Finalize | Report summary | + invoke `superpowers:finishing-a-development-branch` for merge/PR/cleanup choice |
+| 0 Initiation | Spawn 5 agents | + 0a: invoke `using-git-worktrees` for isolation |
+| 1 Spec Discovery | Multi-round audit | Optional pre-step: `brainstorming` if description is vague |
+| 2.5 Plan | — | **NEW:** invoke `writing-plans` → `docs/superpowers/plans/<date>-<slug>.md` |
+| 4 TDD inner loop | dev-agent iterates by test | forge-dev-agent executes plan tasks one-by-one with `test-driven-development`, commits per task |
+| 4 TDD loop (iter ≥ 3) | dev-agent retries | **forge-dev-agent invokes `systematic-debugging`** — 4-phase scientific method; escalates on architectural issues |
+| Every dev verdict | declared in persona | forge-dev-agent invokes `verification-before-completion` before claiming PASS |
+| 9 Review | review-agent invokes `/code-review` plugin (**requires GitHub PR**) | forge-review-agent invokes `requesting-code-review` (**local subagent**, no PR needed) |
+| 9 Review FAIL | dev-agent applies fixes | forge-dev-agent invokes `receiving-code-review` first — verifies findings before complying |
+| 11 Finalize | Report summary | + invoke `finishing-a-development-branch` for merge/PR/cleanup choice |
 
 ### Why two variants?
 
-The honest answer: `/spec-build` is the floor (works without the superpowers plugin) and `/spec-forge` is the ceiling (enforces every discipline at every gate).
+The honest answer: `/spec-build` is the floor (lean, fewer gates) and `/spec-forge` is the ceiling (enforces every discipline at every gate). The discipline skills are **bundled with Genesis** (vendored from the MIT-licensed superpowers project — see `NOTICE.md`), so both variants work out of the box with no external plugin required.
 
-If the superpowers plugin isn't installed, only `/spec-build` works. If it is installed, `/spec-forge` is recommended for production work because the disciplines actively prevent the most common failure modes:
+`/spec-forge` is recommended for production work because the disciplines actively prevent the most common failure modes:
 
 - **TDD without `test-driven-development` skill:** dev-agent's persona declares Three Laws but Claude can drift over a long session. The skill enforces them fresh on each task.
 - **Stuck loops without `systematic-debugging` skill:** dev-agent at iter 3+ will keep guessing. The skill forces root-cause analysis and surfaces architectural problems.
 - **False completion claims without `verification-before-completion`:** dev-agent claims PASS without running the verification command, leading to "should work" rationalizations.
-- **Code review without a PR:** the `/code-review` plugin can't run on a local branch; `superpowers:requesting-code-review` does the same job locally.
+- **Code review without a PR:** the `/code-review` plugin can't run on a local branch; `requesting-code-review` does the same job locally.
 
 ### When NOT to use `/spec-forge`
 

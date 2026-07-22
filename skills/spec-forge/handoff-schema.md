@@ -2,7 +2,7 @@
 
 Identical structure to `/spec-build`'s schema, with two added fields:
 
-- Directives include a `superpowers_skills_to_invoke: []` list when the supervisor wants an agent to invoke specific skills (e.g., for dev-agent's `execute_plan_task` directive, the supervisor specifies `["superpowers:test-driven-development", "superpowers:verification-before-completion"]`).
+- Directives include a `superpowers_skills_to_invoke: []` list when the supervisor wants an agent to invoke specific skills (e.g., for dev-agent's `execute_plan_task` directive, the supervisor specifies `["test-driven-development", "verification-before-completion"]`).
 - Verdicts include a `skills_invoked: []` list so the supervisor can verify the agent actually followed the discipline.
 
 See `${CLAUDE_PLUGIN_ROOT}/skills/spec-build/handoff-schema.md` for the base schema; only the deltas are documented here.
@@ -25,7 +25,7 @@ See `${CLAUDE_PLUGIN_ROOT}/skills/spec-build/handoff-schema.md` for the base sch
     "worktree_path": "...",                                        // NEW: isolation
     "systematic_debug": <bool>                                     // NEW: TDD iter >= 3 flag
   },
-  "superpowers_skills_to_invoke": ["superpowers:test-driven-development", "..."],  // NEW
+  "superpowers_skills_to_invoke": ["test-driven-development", "..."],  // NEW
   "expected_response_schema": "verdict-v1"
 }
 ```
@@ -43,7 +43,7 @@ See `${CLAUDE_PLUGIN_ROOT}/skills/spec-build/handoff-schema.md` for the base sch
     "details": { ... },
     "artifacts": [...],
     "assumptions_made": [...],
-    "skills_invoked": ["superpowers:test-driven-development", "..."]   // NEW: audit trail
+    "skills_invoked": ["test-driven-development", "..."]   // NEW: audit trail
   }
 }
 ```
@@ -69,8 +69,8 @@ All other verbs are inherited from /spec-build's schema.
   "changed_files": ["..."],
   "tests_targeted": ["..."],
   "summary": "<what was changed and why>",
-  "skills_invoked": ["superpowers:test-driven-development",
-                     "superpowers:verification-before-completion"],
+  "skills_invoked": ["test-driven-development",
+                     "verification-before-completion"],
   "commit_sha": "<created on task completion>"
 }
 ```
@@ -86,9 +86,9 @@ All other verbs are inherited from /spec-build's schema.
                                   "phase_4_implementation"],
   "root_cause": "<identified root cause>",
   "single_fix_applied": "<minimal fix>",
-  "skills_invoked": ["superpowers:systematic-debugging",
-                     "superpowers:test-driven-development",
-                     "superpowers:verification-before-completion"]
+  "skills_invoked": ["systematic-debugging",
+                     "test-driven-development",
+                     "verification-before-completion"]
 }
 ```
 
@@ -106,7 +106,7 @@ If `systematic-debugging` reports "architecture problem" (3+ fixes failed), the 
   "base_sha": "<git rev-parse HEAD~N>",
   "head_sha": "<git rev-parse HEAD>",
   "blocking": <bool>,
-  "skills_invoked": ["superpowers:requesting-code-review"]
+  "skills_invoked": ["requesting-code-review"]
 }
 ```
 
@@ -120,5 +120,5 @@ Same as /spec-build.
 
 Two reasons:
 
-1. **Audit trail for the timeline.** When the user looks at `timeline.html` and sees a dev-agent verdict, they can see exactly which discipline skills the agent invoked. If dev-agent claims PASS without `superpowers:verification-before-completion` in the list, the supervisor downgrades to NEEDS_INPUT and re-issues the directive.
+1. **Audit trail for the timeline.** When the user looks at `timeline.html` and sees a dev-agent verdict, they can see exactly which discipline skills the agent invoked. If dev-agent claims PASS without `verification-before-completion` in the list, the supervisor downgrades to NEEDS_INPUT and re-issues the directive.
 2. **Behavior parity check.** If a future run reports different results than a prior run on the same feature, comparing `skills_invoked` lists across runs surfaces which discipline was skipped.

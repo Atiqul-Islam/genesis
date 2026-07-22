@@ -6,12 +6,12 @@ Same routing rules as `/spec-build`, with two added rows for the new phases (Pha
 
 | Current phase | Agent verdict status | next_responsibility | → next agent | Notes |
 |---|---|---|---|---|
-| Initiation | — | worktree | (supervisor invokes `superpowers:using-git-worktrees`) | Phase 0a |
+| Initiation | — | worktree | (supervisor invokes `using-git-worktrees`) | Phase 0a |
 | Worktree | PASS | spawn_agents | (supervisor spawns 5 forge-agents) | |
 | Worktree | ERROR | escalate | (supervisor halts, asks user) | Worktree creation failed |
 | Spec Discovery | NEEDS_INPUT | clarify | (user via AskUserQuestion) | Audit markers |
 | Spec Discovery | PASS | compile | forge-spec-agent (compile mode) | Spec ratified |
-| Compile | PASS | plan | (supervisor invokes `superpowers:writing-plans`) | **Phase 2.5 new** |
+| Compile | PASS | plan | (supervisor invokes `writing-plans`) | **Phase 2.5 new** |
 | Compile | FAIL | repair_spec | forge-spec-agent | |
 | Plan | PASS | red_check | forge-verify-agent | Plan written to `docs/superpowers/plans/` |
 | Plan | ERROR | escalate | (supervisor halts) | Plan-skill failed |
@@ -31,7 +31,7 @@ Same routing rules as `/spec-build`, with two added rows for the new phases (Pha
 | Regression | FAIL | fix_regression | forge-dev-agent (with diagnostic) | |
 | Review | PASS | docs | forge-docs-agent | |
 | Review | FAIL (blocking) | fix_review_findings | forge-dev-agent (invoke receiving-code-review) | |
-| Docs | PASS | finalize | (supervisor invokes `superpowers:finishing-a-development-branch`) | **Augmented Phase 11** |
+| Docs | PASS | finalize | (supervisor invokes `finishing-a-development-branch`) | **Augmented Phase 11** |
 | Finalize | PASS | terminate | (terminate all agents) | |
 | Any | ERROR | escalate | (supervisor halts, asks user) | |
 
@@ -53,9 +53,9 @@ on verdict V from agent A:
   next = lookup(current_phase, V.status, V.next_responsibility)
 
   # The two new branches:
-  if next == "supervisor invokes superpowers:writing-plans":
+  if next == "supervisor invokes writing-plans":
     invoke via Skill tool; on completion advance phase
-  if next == "supervisor invokes superpowers:finishing-a-development-branch":
+  if next == "supervisor invokes finishing-a-development-branch":
     invoke via Skill tool; on completion terminate agents
 
   # Existing branches as in /spec-build
@@ -70,7 +70,7 @@ on verdict V from agent A:
 The TDD-loop FAIL row branches on iteration count, NOT on the supervisor's judgment:
 
 - Iterations 1–2: retry with diagnostic. Same as /spec-build.
-- Iteration ≥ 3: **dev-agent must invoke `superpowers:systematic-debugging`** before another fix. This is a hard rule, encoded in dev-agent's persona. The supervisor's routing simply passes a flag (`systematic_debug: true`) in the directive.
+- Iteration ≥ 3: **dev-agent must invoke `systematic-debugging`** before another fix. This is a hard rule, encoded in dev-agent's persona. The supervisor's routing simply passes a flag (`systematic_debug: true`) in the directive.
 
 This is the single most important divergence from /spec-build's routing: it prevents the "keep trying random fixes" thrash pattern by forcing scientific method after 2 failures.
 

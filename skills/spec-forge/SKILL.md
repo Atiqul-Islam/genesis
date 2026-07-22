@@ -52,7 +52,7 @@ Your three jobs are identical to `/spec-build`'s supervisor:
 
 ## Phase 0a: Worktree Isolation
 
-**NEW vs /spec-build.** Invoke `superpowers:using-git-worktrees` via the Skill tool.
+**NEW vs /spec-build.** Invoke `using-git-worktrees` via the Skill tool.
 
 The skill creates an isolated worktree at a path the skill defines. Capture the worktree path; record in `state.json.worktree_path`. All subsequent agent work happens in that worktree.
 
@@ -68,9 +68,9 @@ Spawn all five `forge-*` agents in parallel via `Task` calls (`subagent_type: "g
 
 **Optional pre-step.** If the feature description is vague (fewer than ~15 words, no clear behaviors mentioned), supervisor offers:
 
-> *"Description looks light on detail. Run `superpowers:brainstorming` first to sharpen intent, or proceed directly to spec drafting?"*
+> *"Description looks light on detail. Run `brainstorming` first to sharpen intent, or proceed directly to spec drafting?"*
 
-If user accepts, invoke `superpowers:brainstorming` via Skill tool BEFORE spawning agents in Phase 0b. The brainstorming output becomes the seed `user_intent` for forge-spec-agent.
+If user accepts, invoke `brainstorming` via Skill tool BEFORE spawning agents in Phase 0b. The brainstorming output becomes the seed `user_intent` for forge-spec-agent.
 
 If user declines or description is already detailed, proceed directly.
 
@@ -88,7 +88,7 @@ SendMessage to forge-spec-agent: `compile_to_gherkin`. Generates `test/features/
 
 ## Phase 2.5: Implementation Plan (NEW vs /spec-build)
 
-Supervisor invokes `superpowers:writing-plans` via Skill tool, passing:
+Supervisor invokes `writing-plans` via Skill tool, passing:
 - The spec content
 - The compiled feature file
 - The unit test stubs
@@ -110,13 +110,13 @@ SendMessage to forge-verify-agent: `red_check`. All BDD + unit tests must fail. 
 For each task in `docs/superpowers/plans/<date>-<slug>.md`:
 
 1. SendMessage to forge-dev-agent: `{ directive: "execute_plan_task", context: { task_number: <n>, plan_path: "..." } }`.
-2. forge-dev-agent internally invokes `superpowers:test-driven-development` to enforce Three Laws while executing the task.
-3. forge-dev-agent applies edits, runs `superpowers:verification-before-completion` before claiming PASS.
+2. forge-dev-agent internally invokes `test-driven-development` to enforce Three Laws while executing the task.
+3. forge-dev-agent applies edits, runs `verification-before-completion` before claiming PASS.
 4. SendMessage to forge-verify-agent: `tdd_green_check` for the task's target test.
 5. **If GREEN:** task complete. forge-dev-agent commits (one commit per task). Advance to next task.
 6. **If RED after a fix attempt:**
    - **Iteration 1-2:** forge-dev-agent retries with diagnostic forwarded.
-   - **Iteration 3+:** forge-dev-agent invokes `superpowers:systematic-debugging` — 4-phase scientific method (root-cause investigation, pattern analysis, hypothesis, single fix). If `systematic-debugging` reports "architecture problem" after 3+ failed fixes, supervisor escalates to user via AskUserQuestion.
+   - **Iteration 3+:** forge-dev-agent invokes `systematic-debugging` — 4-phase scientific method (root-cause investigation, pattern analysis, hypothesis, single fix). If `systematic-debugging` reports "architecture problem" after 3+ failed fixes, supervisor escalates to user via AskUserQuestion.
 
 ## Phase 5: GREEN (full BDD + unit run, same as /spec-build)
 
@@ -124,7 +124,7 @@ SendMessage to forge-verify-agent: `full_green_check`. Loop back to forge-dev-ag
 
 ## Phase 6: Simplify (same as /spec-build)
 
-SendMessage to forge-dev-agent: `simplify`. forge-dev-agent invokes the built-in `simplify` skill, then `superpowers:verification-before-completion` to confirm tests still pass before returning PASS.
+SendMessage to forge-dev-agent: `simplify`. forge-dev-agent invokes the built-in `simplify` skill, then `verification-before-completion` to confirm tests still pass before returning PASS.
 
 ## Phase 7: Verify Post-Simplify (same as /spec-build)
 
@@ -140,13 +140,13 @@ SendMessage to forge-review-agent: `run_review`.
 
 forge-review-agent does two things:
 1. Runs `/spec-crap` for the CRAP report (unchanged behavior — CRAP > 8 fails).
-2. Invokes `superpowers:requesting-code-review` which dispatches a **local code reviewer subagent** via Task tool with the `code-reviewer.md` template. The reviewer evaluates the diff between `state.json.base_sha` and current HEAD against `state.json.artifacts.plan_path`.
+2. Invokes `requesting-code-review` which dispatches a **local code reviewer subagent** via Task tool with the `code-reviewer.md` template. The reviewer evaluates the diff between `state.json.base_sha` and current HEAD against `state.json.artifacts.plan_path`.
 
-Why this is different: the `/code-review` plugin requires a GitHub PR (`gh pr view`, `gh pr comment`). `/spec-forge` works on local branches without a PR. `superpowers:requesting-code-review` produces the same kind of structured feedback (Critical/Important/Minor) locally.
+Why this is different: the `/code-review` plugin requires a GitHub PR (`gh pr view`, `gh pr comment`). `/spec-forge` works on local branches without a PR. `requesting-code-review` produces the same kind of structured feedback (Critical/Important/Minor) locally.
 
 Verdict criteria preserved:
 - `blocking: true` if any function has CRAP > 8 OR any Critical/Important reviewer finding.
-- Route back to forge-dev-agent on blocking findings with the full diagnostic; forge-dev-agent invokes `superpowers:receiving-code-review` (technical rigor; don't comply blindly).
+- Route back to forge-dev-agent on blocking findings with the full diagnostic; forge-dev-agent invokes `receiving-code-review` (technical rigor; don't comply blindly).
 
 ## Phase 10: Docs (same as /spec-build)
 
@@ -155,7 +155,7 @@ SendMessage to forge-docs-agent: `update_docs`. Inlines `/docs-update` behavior.
 ## Phase 11: Finalization (augmented)
 
 1. Generate run summary.
-2. Invoke `superpowers:finishing-a-development-branch` via Skill tool. This presents merge / PR / cleanup options to the user (handled by the skill itself — user picks).
+2. Invoke `finishing-a-development-branch` via Skill tool. This presents merge / PR / cleanup options to the user (handled by the skill itself — user picks).
 3. SendMessage to all 5 agents: `terminate`.
 4. Update `state.json.current_phase = "complete"`.
 5. Report timeline path.
@@ -172,7 +172,7 @@ Same algorithm as /spec-build. The routing table includes the two new phases (Ph
 
 Identical mechanics to /spec-build. State, CHECKPOINT.md, and per-agent checkpoint files live in `.planning/builds/<run_id>/`. On resume, all 5 forge-agents are re-spawned with `mode: "resume"` and prior context. Additionally:
 
-- If the worktree from Phase 0a still exists, reuse it. If it was removed, supervisor re-invokes `superpowers:using-git-worktrees` to recreate.
+- If the worktree from Phase 0a still exists, reuse it. If it was removed, supervisor re-invokes `using-git-worktrees` to recreate.
 
 # Why /spec-forge When /spec-build Exists
 
