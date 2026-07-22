@@ -9,7 +9,7 @@ For the underlying methodology see [`spec-driven-development.md`](spec-driven-de
 | Mode | Command | When to use |
 |---|---|---|
 | **Multi-Agent — Lean** | `/spec-build <description>` | Default. Fewest plugin dependencies. Conversational, audited, observable. |
-| **Multi-Agent — Forge** | `/spec-forge <description>` | Same orchestration + `superpowers` discipline at every step. Requires the superpowers plugin. |
+| **Multi-Agent — Forge** | `/spec-forge <description>` | Same orchestration + bundled discipline skills at every step. Self-contained — no external plugin required. |
 | **Manual** | `/spec-create`, `/spec-compile`, `/spec-test`, `/spec-simplify`, `/spec-crap`, `/docs-update` | Power-user escape hatch. Same behavior; you drive each step. |
 
 All three modes preserve identical gates and thresholds — no behavioral difference, only orchestration.
@@ -193,7 +193,6 @@ The honest answer: `/spec-build` is the floor (lean, fewer gates) and `/spec-for
 
 ### When NOT to use `/spec-forge`
 
-- You don't have the `superpowers` plugin installed.
 - You're prototyping and want minimal overhead per task.
 - You're already in a worktree (the Phase 0a worktree skill is a no-op then, but the rest of the discipline still runs).
 
