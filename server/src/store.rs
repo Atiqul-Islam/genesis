@@ -1,0 +1,580 @@
+//! Vector store — SQLite + `sqlite-vec` KNN over per-agent memory embeddings.
+//!
+//! The store owns a `rusqlite::Connection` with the `sqlite-vec` extension registered
+//! (`sqlite3_auto_extension(sqlite3_vec_init)`) and a `vec0(embedding float[384])`
+//! virtual table. KNN uses the verified form
+//! `WHERE embedding MATCH ?1 ORDER BY distance LIMIT k` (default L2 distance; because
+//! embeddings are L2-normalized, L2 order == cosine order). Agent scoping and the
+//! `superseded_by` exclusion are applied by joining that verified inner query back to
+//! `memories` in an outer query (candidate-pool over-fetch), never by adding predicates
+//! to the `vec0` KNN itself. See `docs/SPEC_FORGE_RUST_UPDATE.md` §2.3b.
+
+use anyhow::Result;
+use rusqlite::{ffi::sqlite3_auto_extension, params, Connection};
+use sqlite_vec::sqlite3_vec_init;
+
+use crate::embed::EMBED_DIM;
+
+/// The default on-disk database filename used when `GENESIS_MEMORY_DB` is unset.
+pub const DEFAULT_DB_FILENAME: &str = "genesis-memory.db";
+
+/// Resolves the database path from an optional `GENESIS_MEMORY_DB` value, falling back to
+/// [`DEFAULT_DB_FILENAME`] in the working directory. Pure (env read is done by the caller)
+/// so it is testable without touching global process state.
+fn resolve_db_path(env_value: Option<String>) -> String {
+    env_value.unwrap_or_else(|| DEFAULT_DB_FILENAME.to_string())
+}
+
+/// The database path from the environment: `GENESIS_MEMORY_DB` if set, else the default.
+#[must_use]
+pub fn db_path_from_env() -> String {
+    resolve_db_path(std::env::var("GENESIS_MEMORY_DB").ok())
+}
+
+/// Errors specific to the vector store.
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    /// An embedding did not have exactly [`EMBED_DIM`] elements.
+    #[error("embedding dimension mismatch: expected {expected}, got {got}")]
+    DimensionMismatch {
+        /// The required dimensionality ([`EMBED_DIM`]).
+        expected: usize,
+        /// The dimensionality actually supplied.
+        got: usize,
+    },
+    /// No `memories` row exists for the given id.
+    #[error("no memory row for id {0}")]
+    MissingRow(i64),
+}
+
+/// A per-agent vector store backed by SQLite + `sqlite-vec`.
+#[derive(Debug)]
+pub struct VectorStore {
+    conn: Connection,
+}
+
+/// A decay-relevant snapshot of a `memories` row (no embedding).
+#[derive(Debug, Clone)]
+pub struct MemRow {
+    /// Row id (== `vec_items.rowid`).
+    pub id: i64,
+    /// Unix seconds when the memory was stored.
+    pub created_at: i64,
+    /// Unix seconds when the memory was last recalled.
+    pub last_used_at: i64,
+    /// Number of times the memory has been recalled.
+    pub use_count: i64,
+    /// The memory's base relevance score.
+    pub base_score: f64,
+}
+
+impl MemRow {
+    /// Reads a `MemRow` from a query row (`id, created_at, last_used_at, use_count, base_score`).
+    fn from_row(r: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: r.get(0)?,
+            created_at: r.get(1)?,
+            last_used_at: r.get(2)?,
+            use_count: r.get(3)?,
+            base_score: r.get(4)?,
+        })
+    }
+}
+
+/// Maps a KNN result row to `(id, distance)`.
+fn id_distance(r: &rusqlite::Row) -> rusqlite::Result<(i64, f64)> {
+    Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+}
+
+impl VectorStore {
+    /// Opens (or creates) the store, registering `sqlite-vec` and ensuring the schema.
+    ///
+    /// # Errors
+    /// Returns an error if the extension fails to register or the connection/DDL fails.
+    // The sole sanctioned `unsafe` in the crate: `sqlite3_auto_extension` is the verified
+    // (§2.3b) way to register the statically-linked sqlite-vec extension; there is no safe
+    // wrapper. `unsafe_code = "deny"` at the crate level makes this scoped allow the only
+    // place unsafe is permitted.
+    #[allow(unsafe_code)]
+    pub fn open(path: &str) -> Result<Self> {
+        // Register the extension BEFORE opening the connection (spec requirement). Uses
+        // transmute-by-inference (the exact xEntryPoint fn-pointer type is spelled out by
+        // libsqlite3-sys); this is the sqlite-vec crate's own documented registration form.
+        #[allow(clippy::missing_transmute_annotations)]
+        unsafe {
+            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+        }
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memories (
+                 id            INTEGER PRIMARY KEY,
+                 agent_id      TEXT    NOT NULL,
+                 text          TEXT    NOT NULL,
+                 created_at    INTEGER NOT NULL,
+                 last_used_at  INTEGER NOT NULL,
+                 use_count     INTEGER NOT NULL DEFAULT 0,
+                 base_score    REAL    NOT NULL,
+                 superseded_by INTEGER REFERENCES memories(id)
+             );
+             CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(embedding float[384]);",
+        )?;
+        Ok(Self { conn })
+    }
+
+    /// Returns an error if `embedding` is not exactly [`EMBED_DIM`] elements.
+    fn check_dim(embedding: &[f32]) -> Result<()> {
+        if embedding.len() != EMBED_DIM {
+            return Err(StoreError::DimensionMismatch {
+                expected: EMBED_DIM,
+                got: embedding.len(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Inserts a memory + its embedding under one shared rowid; returns the assigned id.
+    ///
+    /// # Errors
+    /// Returns an error on dimension mismatch or any SQL failure.
+    pub fn insert(
+        &mut self,
+        agent_id: &str,
+        text: &str,
+        embedding: &[f32],
+        base_score: f64,
+        now_unix: i64,
+    ) -> Result<i64> {
+        Self::check_dim(embedding)?;
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO memories (agent_id, text, created_at, last_used_at, use_count, base_score)
+             VALUES (?1, ?2, ?3, ?3, 0, ?4)",
+            params![agent_id, text, now_unix, base_score],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO vec_items(rowid, embedding) VALUES (?1, ?2)",
+            params![id, bytemuck::cast_slice::<f32, u8>(embedding)],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Returns the `k` nearest non-superseded memories for `agent_id`, nearest first.
+    ///
+    /// The verified `vec0` KNN (`MATCH ... ORDER BY distance LIMIT`) runs as an inner
+    /// subquery over a candidate pool sized to the whole table, so the outer agent /
+    /// `superseded_by` filter never under-returns.
+    ///
+    /// # Errors
+    /// Returns an error on dimension mismatch or any SQL failure.
+    pub fn knn(&self, agent_id: &str, query: &[f32], k: usize) -> Result<Vec<(i64, f64)>> {
+        Self::check_dim(query)?;
+        let k_i64 = i64::try_from(k).unwrap_or(i64::MAX);
+        // Candidate pool >= all vec rows so the outer agent/superseded filter never under-returns.
+        let pool = self.count_vectors()?.max(k_i64).max(1);
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, k.distance
+               FROM ( SELECT rowid, distance FROM vec_items
+                      WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2 ) AS k
+               JOIN memories m ON m.id = k.rowid
+              WHERE m.agent_id = ?3 AND m.superseded_by IS NULL
+              ORDER BY k.distance
+              LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                bytemuck::cast_slice::<f32, u8>(query),
+                pool,
+                agent_id,
+                k_i64
+            ],
+            id_distance,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// The number of stored vectors (the KNN candidate-pool upper bound).
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    fn count_vectors(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM vec_items", [], |r| r.get(0))?)
+    }
+
+    /// Returns the stored text for `id`.
+    ///
+    /// # Errors
+    /// Returns an error if the row is missing or SQL fails.
+    pub fn text_of(&self, id: i64) -> Result<String> {
+        self.conn
+            .query_row(
+                "SELECT text FROM memories WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .map_err(|_| StoreError::MissingRow(id).into())
+    }
+
+    /// Bumps `use_count` and sets `last_used_at` for a recalled row.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn touch(&mut self, id: i64, now_unix: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE memories SET use_count = use_count + 1, last_used_at = ?2 WHERE id = ?1",
+            params![id, now_unix],
+        )?;
+        Ok(())
+    }
+
+    /// Returns all non-superseded memory rows for `agent_id` (no embeddings).
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn active_memories(&self, agent_id: &str) -> Result<Vec<MemRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, created_at, last_used_at, use_count, base_score
+               FROM memories WHERE agent_id = ?1 AND superseded_by IS NULL ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![agent_id], MemRow::from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Returns the stored embedding for `id`.
+    ///
+    /// Reads the raw blob and decodes native-endian `f32`s via `chunks_exact` (avoids the
+    /// alignment panic `bytemuck::cast_slice::<u8, f32>` would risk on an unaligned buffer).
+    ///
+    /// # Errors
+    /// Returns an error if the row is missing or SQL fails.
+    pub fn embedding_of(&self, id: i64) -> Result<Vec<f32>> {
+        let blob: Vec<u8> = self.conn.query_row(
+            "SELECT embedding FROM vec_items WHERE rowid = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        Ok(blob
+            .chunks_exact(4)
+            .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+            .collect())
+    }
+
+    /// Marks `loser` as superseded by `survivor`.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn set_superseded(&mut self, loser: i64, survivor: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE memories SET superseded_by = ?2 WHERE id = ?1",
+            params![loser, survivor],
+        )?;
+        Ok(())
+    }
+
+    /// Adds `delta` to a survivor's `use_count`.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn add_use_count(&mut self, id: i64, delta: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE memories SET use_count = use_count + ?2 WHERE id = ?1",
+            params![id, delta],
+        )?;
+        Ok(())
+    }
+
+    /// Returns the ids of rows with a non-null `superseded_by` for `agent_id`.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn superseded_ids(&self, agent_id: &str) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM memories WHERE agent_id = ?1 AND superseded_by IS NOT NULL")?;
+        let rows = stmt.query_map(params![agent_id], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+}
+
+// Source: test/specs/genesis-memory-server.md — Implementation Requirements
+// (groups "Database location" and "Vector store"). Tests run against a real temp SQLite
+// database with the real sqlite-vec extension (no mocks, §5 #6: fresh DB per test).
+#[cfg(test)]
+mod tests {
+    use super::{resolve_db_path, MemRow, VectorStore, DEFAULT_DB_FILENAME};
+    use crate::embed::EMBED_DIM;
+
+    fn open_temp() -> (tempfile::TempDir, VectorStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db");
+        let store = VectorStore::open(path.to_str().unwrap()).unwrap();
+        (dir, store)
+    }
+
+    /// A 384-dim vector distinguished by `seed` in slot 0 (and `1 - seed` in slot 1).
+    fn emb(seed: f32) -> Vec<f32> {
+        let mut e = vec![0.0f32; EMBED_DIM];
+        e[0] = seed;
+        e[1] = 1.0 - seed;
+        e
+    }
+
+    // ─── Database location ───────────────────────────────────────────────────
+
+    #[test]
+    fn db_path_is_read_from_the_genesis_memory_db_env_var() {
+        assert_eq!(
+            resolve_db_path(Some("/tmp/custom-genesis.db".to_string())),
+            "/tmp/custom-genesis.db"
+        );
+    }
+
+    #[test]
+    fn db_path_falls_back_to_genesis_memory_db_in_the_working_directory() {
+        assert_eq!(DEFAULT_DB_FILENAME, "genesis-memory.db");
+        assert_eq!(resolve_db_path(None), DEFAULT_DB_FILENAME);
+    }
+
+    // ─── Vector store ────────────────────────────────────────────────────────
+
+    #[test]
+    fn sqlite_vec_is_registered_before_the_connection_is_opened() {
+        // Inserting into the vec0 virtual table only works if the extension registered.
+        let (_d, mut s) = open_temp();
+        assert!(s.insert("a", "x", &emb(1.0), 1.0, 0).is_ok());
+    }
+
+    #[test]
+    fn vec_items_is_created_as_vec0_embedding_float_384() {
+        let (_d, s) = open_temp();
+        let sql: String = s
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='vec_items'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.contains("vec0"), "{sql}");
+        assert!(sql.contains("float[384]"), "{sql}");
+    }
+
+    #[test]
+    fn a_memories_table_is_created() {
+        let (_d, s) = open_temp();
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='memories'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn memories_has_the_eight_specified_columns() {
+        let (_d, s) = open_temp();
+        let mut stmt = s
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('memories') ORDER BY cid")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            cols,
+            [
+                "id",
+                "agent_id",
+                "text",
+                "created_at",
+                "last_used_at",
+                "use_count",
+                "base_score",
+                "superseded_by"
+            ]
+        );
+    }
+
+    #[test]
+    fn memories_id_is_an_integer_primary_key() {
+        let (_d, s) = open_temp();
+        let pk: i64 = s
+            .conn
+            .query_row(
+                "SELECT pk FROM pragma_table_info('memories') WHERE name='id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pk, 1);
+    }
+
+    #[test]
+    fn memories_superseded_by_is_nullable_and_references_memories_id() {
+        let (_d, s) = open_temp();
+        let notnull: i64 = s
+            .conn
+            .query_row(
+                "SELECT \"notnull\" FROM pragma_table_info('memories') WHERE name='superseded_by'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(notnull, 0, "superseded_by must be nullable");
+        let refs: String = s
+            .conn
+            .query_row(
+                "SELECT \"table\" FROM pragma_foreign_key_list('memories')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(refs, "memories");
+    }
+
+    #[test]
+    fn vec_items_rowid_equals_memories_id() {
+        let (_d, mut s) = open_temp();
+        let id = s.insert("a", "hello", &emb(0.7), 1.0, 0).unwrap();
+        assert_eq!(s.embedding_of(id).unwrap().len(), EMBED_DIM);
+        let mid: i64 = s
+            .conn
+            .query_row("SELECT id FROM memories WHERE text='hello'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(mid, id);
+    }
+
+    #[test]
+    fn the_assigned_id_is_read_with_last_insert_rowid() {
+        let (_d, mut s) = open_temp();
+        let id1 = s.insert("a", "x", &emb(0.1), 1.0, 0).unwrap();
+        let id2 = s.insert("a", "y", &emb(0.2), 1.0, 0).unwrap();
+        assert_eq!(id2, id1 + 1);
+    }
+
+    #[test]
+    fn the_embedding_is_inserted_under_that_same_rowid() {
+        let (_d, mut s) = open_temp();
+        let v = emb(0.42);
+        let id = s.insert("a", "x", &v, 1.0, 0).unwrap();
+        assert_eq!(s.embedding_of(id).unwrap(), v);
+    }
+
+    #[test]
+    fn insert_returns_the_assigned_i64() {
+        let (_d, mut s) = open_temp();
+        let id = s.insert("a", "x", &emb(0.3), 1.0, 0).unwrap();
+        assert!(id >= 1);
+    }
+
+    #[test]
+    fn insert_accepts_no_caller_supplied_id() {
+        // The signature takes no id; SQLite assigns each row a distinct one.
+        let (_d, mut s) = open_temp();
+        let a = s.insert("a", "x", &emb(0.1), 1.0, 0).unwrap();
+        let b = s.insert("a", "y", &emb(0.2), 1.0, 0).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn embeddings_are_passed_to_sqlite_via_bytemuck_cast_slice() {
+        let (_d, mut s) = open_temp();
+        let mut v = emb(0.9);
+        v[100] = 0.123_456;
+        let id = s.insert("a", "x", &v, 1.0, 0).unwrap();
+        assert_eq!(
+            s.embedding_of(id).unwrap(),
+            v,
+            "f32 byte round-trip is exact"
+        );
+    }
+
+    #[test]
+    fn knn_uses_the_verified_match_order_by_distance_limit_form() {
+        let (_d, mut s) = open_temp();
+        let near = s.insert("a", "near", &emb(1.0), 1.0, 0).unwrap();
+        let _far = s.insert("a", "far", &emb(0.0), 1.0, 0).unwrap();
+        let hits = s.knn("a", &emb(1.0), 1).unwrap();
+        assert_eq!(hits.len(), 1, "LIMIT k respected");
+        assert_eq!(hits[0].0, near, "nearest first");
+    }
+
+    #[test]
+    fn vec0_keeps_its_default_l2_distance_metric() {
+        let (_d, mut s) = open_temp();
+        let v = emb(0.6);
+        let id = s.insert("a", "x", &v, 1.0, 0).unwrap();
+        let hits = s.knn("a", &v, 1).unwrap();
+        assert_eq!(hits[0].0, id);
+        assert!(hits[0].1.abs() < 1e-6, "exact match => L2 distance 0.0");
+    }
+
+    #[test]
+    fn insert_takes_agent_id_and_records_the_row_under_it() {
+        let (_d, mut s) = open_temp();
+        s.insert("alpha", "x", &emb(0.5), 1.0, 0).unwrap();
+        assert_eq!(s.active_memories("alpha").unwrap().len(), 1);
+        assert_eq!(s.active_memories("beta").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn knn_takes_agent_id_and_restricts_results_to_that_agent() {
+        let (_d, mut s) = open_temp();
+        let a_id = s.insert("alpha", "a", &emb(1.0), 1.0, 0).unwrap();
+        let _b = s.insert("beta", "b", &emb(1.0), 1.0, 0).unwrap();
+        let hits = s.knn("alpha", &emb(1.0), 5).unwrap();
+        assert!(
+            hits.iter().all(|(id, _)| *id == a_id),
+            "no cross-agent rows"
+        );
+    }
+
+    #[test]
+    fn rows_with_a_non_null_superseded_by_are_excluded_from_recall() {
+        let (_d, mut s) = open_temp();
+        let keep = s.insert("a", "keep", &emb(1.0), 1.0, 0).unwrap();
+        let gone = s.insert("a", "gone", &emb(0.99), 1.0, 0).unwrap();
+        s.set_superseded(gone, keep).unwrap();
+        let hits = s.knn("a", &emb(1.0), 5).unwrap();
+        assert!(
+            hits.iter().all(|(id, _)| *id != gone),
+            "superseded excluded"
+        );
+        assert!(hits.iter().any(|(id, _)| *id == keep));
+    }
+
+    /// AC10: a wrong-length vector is rejected (returns `Err`) rather than panicking.
+    #[test]
+    fn a_383_element_vector_is_rejected_by_insert_and_knn_without_panicking() {
+        let (_d, mut s) = open_temp();
+        let short = vec![0.0f32; 383];
+        assert!(s.insert("a", "x", &short, 1.0, 0).is_err());
+        assert!(s.knn("a", &short, 5).is_err());
+    }
+
+    /// Exercises `MemRow`'s decay-relevant fields end-to-end (used by consolidation).
+    #[test]
+    fn active_memories_returns_decay_fields() {
+        let (_d, mut s) = open_temp();
+        let id = s.insert("a", "x", &emb(0.5), 2.0, 100).unwrap();
+        s.touch(id, 200).unwrap();
+        let rows: Vec<MemRow> = s.active_memories("a").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].created_at, 100);
+        assert_eq!(rows[0].last_used_at, 200);
+        assert_eq!(rows[0].use_count, 1);
+        assert!((rows[0].base_score - 2.0).abs() < 1e-9);
+    }
+}

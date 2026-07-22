@@ -1,0 +1,111 @@
+# Third-Party Notices
+
+Genesis itself is licensed under the **MIT License** — see [`LICENSE`](./LICENSE),
+Copyright (c) 2026 Atiqul Islam.
+
+This document attributes the third-party software and machine-learning model that
+Genesis bundles, downloads, or links against. Nothing here modifies the terms under
+which those components are licensed by their respective owners; it records them so
+that redistributors of Genesis carry the required notices.
+
+All licenses below were verified against a primary source (the component's official
+model card, repository `LICENSE` file, or its published crate metadata on crates.io)
+at the URLs cited. Where a component is offered under a dual/multi license
+(e.g. `MIT OR Apache-2.0`), the "OR" is the upstream author's, meaning a downstream
+user may choose either license.
+
+---
+
+## 1. Embedding model — `sentence-transformers/all-MiniLM-L6-v2`
+
+Genesis's memory server (`genesis-memory-server`) computes sentence embeddings using
+the pre-trained model **`sentence-transformers/all-MiniLM-L6-v2`**. The server ships
+with / fetches this model's ONNX weights (`onnx/model.onnx`) and tokenizer
+(`tokenizer.json`) from a pinned Hugging Face revision.
+
+- **Model:** `sentence-transformers/all-MiniLM-L6-v2`
+- **Source:** https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+- **Pinned revision:** `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`
+  (see `scripts/fetch-model`)
+- **License:** **Apache-2.0** — verified from the model card metadata header
+  ("License: apache-2.0") at the source URL above on 2026-07-22.
+  Apache License 2.0 full text: https://www.apache.org/licenses/LICENSE-2.0
+
+The tokenizer file (`tokenizer.json`) is a data artifact of the same model repository
+and is covered by the same Apache-2.0 license.
+
+---
+
+## 2. ONNX Runtime (native inference engine)
+
+The memory server runs the model above through **ONNX Runtime**, whose prebuilt
+native libraries are downloaded at build time by the `ort` crate
+(`features = ["download-binaries"]`).
+
+- **Project:** ONNX Runtime — https://github.com/microsoft/onnxruntime
+- **License:** **MIT License**, Copyright (c) Microsoft Corporation — verified from
+  the repository `LICENSE` file (https://github.com/microsoft/onnxruntime/blob/main/LICENSE)
+  on 2026-07-22.
+
+---
+
+## 3. SQLite (bundled)
+
+The memory server stores vectors and metadata in **SQLite**, compiled directly into
+the binary via `rusqlite`'s `bundled` feature (through `libsqlite3-sys`).
+
+- **Project:** SQLite — https://www.sqlite.org
+- **License:** **Public Domain** (SQLite is dedicated to the public domain by its
+  authors — https://www.sqlite.org/copyright.html).
+
+---
+
+## 4. Key Rust dependencies (memory server)
+
+The `genesis-memory-server` crate links the following notable dependencies. Licenses
+below were verified from each crate's published metadata on crates.io (the version is
+the one resolved in `server/Cargo.lock`). Each crates.io page is reachable at
+`https://crates.io/crates/<name>` and the machine-readable license at
+`https://crates.io/api/v1/crates/<name>/<version>`.
+
+| Crate | Version | License (SPDX, as published) | Role |
+|---|---|---|---|
+| `rmcp` | 2.2.0 | Apache-2.0 | Official Rust MCP SDK (stdio server) |
+| `rusqlite` | 0.40.1 | MIT | SQLite bindings (bundled build) |
+| `libsqlite3-sys` | 0.38.1 | MIT | SQLite native bindings (transitive, bundled) |
+| `sqlite-vec` | 0.1.9 | MIT OR Apache-2.0 | SQLite vector / KNN extension |
+| `ort` | 2.0.0-rc.12 | MIT OR Apache-2.0 | ONNX Runtime Rust bindings |
+| `ort-sys` | 2.0.0-rc.12 | MIT OR Apache-2.0 | ONNX Runtime native sys crate |
+| `tokenizers` | 0.23.1 | Apache-2.0 | Hugging Face tokenizer |
+| `ndarray` | 0.17.2 | MIT OR Apache-2.0 | N-dimensional arrays |
+| `bytemuck` | 1.25.1 | Zlib OR Apache-2.0 OR MIT | Byte-level casting for embeddings |
+| `serde` | 1.0.229 | MIT OR Apache-2.0 | Serialization framework |
+| `serde_json` | 1.0.150 | MIT OR Apache-2.0 | JSON serialization |
+| `schemars` | 1.2.1 | MIT | JSON Schema generation |
+| `tokio` | 1.53.0 | MIT | Async runtime |
+| `anyhow` | 1.0.104 | MIT OR Apache-2.0 | Error handling |
+| `thiserror` | 2.0.19 | MIT OR Apache-2.0 | Error `derive` |
+| `tracing` | 0.1.44 | MIT | Structured logging |
+| `tracing-subscriber` | 0.3.23 | MIT | Logging subscriber |
+
+Development-only dependencies (test harnesses, not distributed in the release binary)
+include `cucumber`, `assert_cmd`, `approx`, `insta`, `tempfile`, `sha2`, and `hex`;
+these are standard permissively licensed (MIT / MIT-OR-Apache-2.0) crates and are not
+linked into the shipped binary.
+
+Each dependency in turn pulls transitive crates. The full, authoritative dependency
+graph is captured in `server/Cargo.lock`; per-crate license text can be regenerated
+from a checkout with a tool such as `cargo-about` or `cargo-license`.
+
+---
+
+## 5. Python components
+
+Genesis's hooks, installer, and session-copy pipeline are pure Python 3 standard
+library (no third-party runtime dependencies) and are covered by Genesis's own MIT
+license.
+
+---
+
+_Licenses verified 2026-07-22 against the primary sources cited above. If you
+redistribute Genesis, retain this notice together with the `LICENSE` file._

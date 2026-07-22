@@ -1,0 +1,76 @@
+{
+  "_doc": "Genesis plugin enforcement, session-scoped. A plugin-shipped agent CANNOT carry frontmatter hooks (security-blocked), so the inject/gate/validate/review enforcement that used to live in each agent's frontmatter lives HERE, at the plugin level. Each hook derives the ACTIVE AGENT from the payload's `agent_type` (verified: code.claude.com/docs/en/hooks, 2026-07-22); main thread = sensei via settings.json, Method runs as a subagent. Runtime-substituted ${CLAUDE_PLUGIN_ROOT} is the absolute plugin path (versioned + cleaned ~14 days after an update — read-only; runtime data is written under the PROJECT's .genesis/, never here). Interpreter is `python3`, matching the .mcp.json launcher convention.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.py\" \"${CLAUDE_PLUGIN_ROOT}/expertise\" --main-agent sensei"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "method|genesis:method",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.py\" \"${CLAUDE_PLUGIN_ROOT}/expertise\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/enforce_research.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/validate.py\" . --main-agent sensei"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/review.py\" . --main-agent sensei"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "method|genesis:method",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/validate.py\" ."
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/review.py\" ."
+          }
+        ]
+      }
+    ]
+  }
+}

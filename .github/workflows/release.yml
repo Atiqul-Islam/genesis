@@ -1,0 +1,173 @@
+name: release
+
+# On a version tag, build the genesis-memory-server for every supported platform, package the
+# pinned ONNX model, compute one authoritative checksums.txt, and publish all of it as GitHub
+# Release assets. bin/genesis-memory downloads these assets on first run and verifies them against
+# checksums.txt, whose OWN sha256 the launcher pins (see the RELEASING note printed by the
+# `release` job below — the single value a maintainer updates per release).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.1.0) when running manually"
+        required: true
+
+permissions:
+  contents: write   # required for `gh release create`
+
+env:
+  BINARY_STEM: genesis-memory-server
+  MODEL_ASSET: genesis-memory-model.tar.gz
+
+jobs:
+  # ── Build one self-contained binary per platform (ort statically links ONNX Runtime, so each
+  #    binary is standalone — no sidecar shared library is shipped). ────────────────────────────
+  build-binaries:
+    name: build ${{ matrix.os_key }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13       # Intel
+            os_key: macos
+            arch: x64
+          - runner: macos-14       # Apple Silicon
+            os_key: macos
+            arch: arm64
+          - runner: ubuntu-latest
+            os_key: linux
+            arch: x64
+          - runner: windows-latest
+            os_key: windows
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc --version && cargo --version
+
+      - name: Build release binary
+        shell: bash
+        working-directory: server
+        run: cargo build --release --bin "$BINARY_STEM"
+
+      - name: Stage renamed asset
+        id: stage
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.os_key }}" = "windows" ]; then
+            src="server/target/release/${BINARY_STEM}.exe"
+            asset="${BINARY_STEM}-${{ matrix.os_key }}-${{ matrix.arch }}.exe"
+          else
+            src="server/target/release/${BINARY_STEM}"
+            asset="${BINARY_STEM}-${{ matrix.os_key }}-${{ matrix.arch }}"
+          fi
+          test -f "$src" || { echo "missing built binary: $src"; exit 1; }
+          cp "$src" "dist/$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.os_key }}-${{ matrix.arch }}
+          path: dist/${{ steps.stage.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Package the pinned ONNX model once (platform-independent). ───────────────────────────────
+  package-model:
+    name: package model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch pinned model (verifies the pinned SHA-256)
+        run: python3 scripts/fetch-model.py --dest model-pkg
+
+      - name: "Create model archive (root: onnx/ + tokenizer.json)"
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${MODEL_ASSET}" -C model-pkg onnx tokenizer.json
+          tar -tzf "dist/${MODEL_ASSET}"
+
+      - name: Upload model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model
+          path: dist/${{ env.MODEL_ASSET }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Collect everything, compute the authoritative checksums.txt + its anchor, publish. ───────
+  release:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, package-model]
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: staging
+          merge-multiple: true   # flatten every artifact into staging/
+
+      - name: Compute checksums + anchor
+        id: sums
+        shell: bash
+        working-directory: staging
+        run: |
+          # One authoritative checksums.txt over every published asset (deterministic order).
+          # Compute the file list BEFORE creating checksums.txt and explicitly exclude it, so the
+          # manifest never lists itself regardless of shell expansion order.
+          files="$(ls | grep -vx 'checksums.txt' | sort)"
+          sha256sum $files > checksums.txt
+          echo "----- checksums.txt -----"
+          cat checksums.txt
+          anchor="$(sha256sum checksums.txt | cut -d' ' -f1)"
+          echo "anchor=$anchor" >> "$GITHUB_OUTPUT"
+          {
+            echo "## genesis-memory launcher pin"
+            echo ""
+            echo "Paste this into \`bin/genesis-memory\` (and set \`PINNED_VERSION\`), then commit:"
+            echo ""
+            echo '```python'
+            echo "CHECKSUMS_SHA256 = \"$anchor\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          ANCHOR: ${{ steps.sums.outputs.anchor }}
+        shell: bash
+        working-directory: staging
+        run: |
+          notes="$(printf 'Prebuilt genesis-memory-server binaries + pinned ONNX model.\n\nchecksums.txt SHA-256 (pin into bin/genesis-memory CHECKSUMS_SHA256):\n\n    %s\n' "$ANCHOR")"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "$TAG" \
+            --notes "$notes" \
+            $(ls | sort)

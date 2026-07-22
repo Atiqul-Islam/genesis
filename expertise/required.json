@@ -1,0 +1,13 @@
+{
+  "_doc": "Per-agent REQUIRED expertise. Hooks (inject/validate) and the assembler read this to enforce that each agent loads, declares, and applies its expertise. Names match files in expertise/<name>.md. Keep tight \u2014 only expertise relevant to the agent's job (token mitigation: fewer required items = fewer misses = fewer redos).",
+  "sensei": [
+    "agent-building",
+    "agentic-teams",
+    "expertise-application"
+  ],
+  "method": [
+    "persona-creation",
+    "prompt-engineering",
+    "expertise-application"
+  ]
+}
