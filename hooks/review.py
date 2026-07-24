@@ -258,6 +258,9 @@ def main():
     argv_root, argv_agent, main_agent = agent_ident.split_args(sys.argv[1:])
     root = argv_root if argv_root is not None else os.getcwd()
     agent = agent_ident.resolve_agent(ev, argv_agent, main_agent)
+    # DORMANCY GUARD: no genesis agent active → no-op (never review/block a normal session).
+    if not agent:
+        sys.exit(0)
     try:
         reasons, rows = review(root, agent)
     except Exception as e:

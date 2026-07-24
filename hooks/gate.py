@@ -134,6 +134,13 @@ def main():
         ev = json.load(sys.stdin)
     except Exception:
         sys.exit(0)  # not our event / no input → allow, fail-open on parse
+    # DORMANCY GUARD: this hook fires on EVERY Write|Edit session-wide (a PreToolUse matcher keys on the tool
+    # name, not the agent), so it must do NOTHING unless a genesis agent is actually active. The active agent
+    # comes from the payload's `agent_type`; on a normal (non-genesis) main thread there is none → no-op. This
+    # is what keeps Genesis from policing every user's writes globally. Genesis's own agents (sensei/method,
+    # incl. their scoped `genesis:` form) surface agent_type and are enforced; built agents pass it too.
+    if not agent_ident.resolve_agent(ev):
+        sys.exit(0)
     ti = ev.get("tool_input", {}) or {}
     path = ti.get("file_path", "") or ""
     content = ti.get("content") or ti.get("new_string") or ""

@@ -10,13 +10,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GATE = os.path.join(HERE, "gate.py")
 
 
-def run(file_path, content, edit=False):
+def run(file_path, content, edit=False, agent_type="sensei"):
     key = "new_string" if edit else "content"
     ev = {"tool_input": {"file_path": file_path, key: content}}
+    # gate.py is DORMANT unless a genesis agent is active (payload agent_type). These functional tests run
+    # AS a genesis agent (default "sensei"); pass agent_type=None to exercise the dormant path.
+    if agent_type:
+        ev["agent_type"] = agent_type
     p = subprocess.run([sys.executable, GATE], input=json.dumps(ev),
                        capture_output=True, text=True, timeout=30)
+    out = p.stdout.strip()
+    if not out:
+        return {}
     try:
-        d = json.loads(p.stdout.strip()).get("hookSpecificOutput", {})
+        d = json.loads(out).get("hookSpecificOutput", {})
     except Exception:
         return {}
     return d
@@ -68,6 +75,15 @@ def main():
     ctx = d.get("additionalContext", "")
     check("prompt/tool artifact surfaces prompt-engineering rules",
           d.get("permissionDecision") != "deny" and "prompt-engineering" in ctx and "pe-" in ctx)
+
+    # 8. DORMANCY: with NO genesis agent active, gate does NOTHING — even banned content is not denied.
+    #    This is what keeps genesis from policing a normal user's writes in every repo.
+    d = run("release-manager/CLAUDE.md", "Use chain-of-thought reasoning.\n" + big, agent_type=None)
+    check("DORMANT without a genesis agent: banned content is NOT denied (no global policing)",
+          d.get("permissionDecision") != "deny" and "permissionDecision" not in d)
+    d = run("method|genesis:method-check/CLAUDE.md", "chain-of-thought\n" + big, agent_type="genesis:method")
+    check("scoped agent_type genesis:method still enforces",
+          d.get("permissionDecision") == "deny")
 
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

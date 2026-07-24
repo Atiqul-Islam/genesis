@@ -254,6 +254,13 @@ def main():
     agent = agent_ident.resolve_agent(ev, argv_agent, main_agent)
     session = ev.get("session_id", "") or ""
 
+    # DORMANCY GUARD: do nothing unless a genesis agent is active. After the plugin re-architecture this hook
+    # is wired only to SubagentStop for sensei/method (agent_type present), and the built-agent path passes an
+    # explicit argv agent — so a real genesis stop always resolves an agent. A bare/main-thread stop resolves
+    # '' → no-op, so we never scan or block a normal user's session (not even the offenders/line-budget check).
+    if not agent:
+        sys.exit(0)
+
     files = produced_files(root)
     reasons = offenders(files)
 

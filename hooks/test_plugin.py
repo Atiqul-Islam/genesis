@@ -87,20 +87,29 @@ def main():
     hj = json.load(open(os.path.join(REPO, "hooks", "hooks.json"), encoding="utf-8"))
     H = hj.get("hooks", {})
     check("hooks.json parses with a 'hooks' object", isinstance(H, dict) and H)
-    for ev in ("SessionStart", "PreToolUse", "Stop", "SubagentStop"):
+    # DORMANT model: genesis acts only on its own agents (SubagentStart/SubagentStop) + self-guarded
+    # PreToolUse. There is NO SessionStart main-thread injection and NO main-thread Stop enforcement.
+    for ev in ("SubagentStart", "PreToolUse", "SubagentStop"):
         check(f"hooks.json wires {ev}", ev in H)
+    check("hooks.json does NOT wire main-thread SessionStart (dormant)", "SessionStart" not in H)
+    check("hooks.json does NOT wire main-thread Stop (dormant)", "Stop" not in H)
     # collect every command string
     cmds = [h["command"] for blocks in H.values() for blk in blocks for h in blk.get("hooks", [])]
     check("every hook command uses ${CLAUDE_PLUGIN_ROOT}", all("${CLAUDE_PLUGIN_ROOT}" in c for c in cmds))
+    check("NO --main-agent anywhere (no forced main-thread agent)", not any("--main-agent" in c for c in cmds))
     for script in ("inject.py", "gate.py", "enforce_research.py", "validate.py", "review.py"):
         check(f"hooks.json references {script}", any(script in c for c in cmds))
     pre_matchers = {blk.get("matcher") for blk in H.get("PreToolUse", [])}
     check("PreToolUse matches Write|Edit and Bash", {"Write|Edit", "Bash"} <= pre_matchers)
+    start_matchers = " ".join(blk.get("matcher", "") for blk in H.get("SubagentStart", []))
+    check("SubagentStart injects for BOTH sensei and method",
+          "sensei" in start_matchers and "method" in start_matchers)
     sub_matchers = " ".join(blk.get("matcher", "") for blk in H.get("SubagentStop", []))
-    check("SubagentStop matcher targets method", "method" in sub_matchers)
-    check("Stop runs validate THEN review",
-          any("validate.py" in h["command"] for blk in H["Stop"] for h in blk["hooks"])
-          and any("review.py" in h["command"] for blk in H["Stop"] for h in blk["hooks"]))
+    check("SubagentStop enforces on BOTH sensei and method",
+          "sensei" in sub_matchers and "method" in sub_matchers)
+    check("SubagentStop runs validate THEN review",
+          any("validate.py" in h["command"] for blk in H["SubagentStop"] for h in blk["hooks"])
+          and any("review.py" in h["command"] for blk in H["SubagentStop"] for h in blk["hooks"]))
 
     # ---- .mcp.json ----
     mj = json.load(open(os.path.join(REPO, ".mcp.json"), encoding="utf-8"))
@@ -108,9 +117,17 @@ def main():
     check(".mcp.json launcher: python3 + ${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory",
           gm["command"] == "python3" and any("${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory" in a for a in gm["args"]))
 
-    # ---- settings.json ----
-    sj = json.load(open(os.path.join(REPO, "settings.json"), encoding="utf-8"))
-    check("settings.json == {'agent': 'sensei'}", sj == {"agent": "sensei"})
+    # ---- dormancy: NO settings.json agent auto-activation ----
+    check("settings.json is absent (no global agent:sensei auto-activation)",
+          not os.path.exists(os.path.join(REPO, "settings.json")))
+
+    # ---- /genesis entry command ----
+    cmd = os.path.join(REPO, "commands", "genesis.md")
+    check("commands/genesis.md exists (the on-demand /genesis entry point)", os.path.isfile(cmd))
+    if os.path.isfile(cmd):
+        ctext = open(cmd, encoding="utf-8").read()
+        check("commands/genesis.md invokes the sensei agent", "sensei" in ctext.lower())
+        check("commands/genesis.md passes $ARGUMENTS to the build", "$ARGUMENTS" in ctext)
 
     # ---- agent_ident: payload derivation ----
     check("normalize strips the plugin scope (genesis:method -> method)",
