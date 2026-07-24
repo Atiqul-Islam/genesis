@@ -121,13 +121,14 @@ def main():
     check("settings.json is absent (no global agent:sensei auto-activation)",
           not os.path.exists(os.path.join(REPO, "settings.json")))
 
-    # ---- /genesis entry command ----
-    cmd = os.path.join(REPO, "commands", "genesis.md")
-    check("commands/genesis.md exists (the on-demand /genesis entry point)", os.path.isfile(cmd))
+    # ---- /genesis:new entry command ----
+    cmd = os.path.join(REPO, "commands", "new.md")
+    check("commands/new.md exists (the on-demand /genesis:new entry point)", os.path.isfile(cmd))
+    check("old commands/genesis.md is gone (renamed to new.md)", not os.path.isfile(os.path.join(REPO, "commands", "genesis.md")))
     if os.path.isfile(cmd):
         ctext = open(cmd, encoding="utf-8").read()
-        check("commands/genesis.md invokes the sensei agent", "sensei" in ctext.lower())
-        check("commands/genesis.md passes $ARGUMENTS to the build", "$ARGUMENTS" in ctext)
+        check("commands/new.md invokes the sensei agent", "sensei" in ctext.lower())
+        check("commands/new.md passes $ARGUMENTS to the build", "$ARGUMENTS" in ctext)
 
     # ---- agent_ident: payload derivation ----
     check("normalize strips the plugin scope (genesis:method -> method)",
