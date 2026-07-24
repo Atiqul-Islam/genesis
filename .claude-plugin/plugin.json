@@ -2,7 +2,9 @@
   "name": "genesis",
   "description": "An agent-builder for Claude Code: a two-agent team (Sensei + Method) that builds, tests, and installs specialized Claude Code agents with enforced expertise and per-agent semantic memory.",
   "version": "0.1.0",
-  "author": "Atiqul Islam",
+  "author": {
+    "name": "Atiqul Islam"
+  },
   "license": "MIT",
   "homepage": "https://github.com/Atiqul-Islam/genesis",
   "repository": "https://github.com/Atiqul-Islam/genesis"
