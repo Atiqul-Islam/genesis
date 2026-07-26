@@ -130,14 +130,19 @@ def _q(p):
     return '"' + p + '"'
 
 
-def frontmatter(name, meta, gh, skills):
-    hooks_dir = os.path.join(gh, "hooks")
-    exp_dir = os.path.join(gh, "expertise")
-    py = sys.executable or "python3"   # absolute interpreter path (portable; 'python3' is not on PATH on Windows)
-    inject = _q(py) + " " + _q(os.path.join(hooks_dir, "inject.py")) + " " + _q(exp_dir) + " " + name
-    gate = _q(py) + " " + _q(os.path.join(hooks_dir, "gate.py"))
-    stop = _q(py) + " " + _q(os.path.join(hooks_dir, "validate.py")) + " . " + name
-    review = _q(py) + " " + _q(os.path.join(hooks_dir, "review.py")) + " . " + name
+def frontmatter(name, meta, home, skills):
+    # PORTABLE hook paths (cross-platform): reference the repo's own .genesis via $CLAUDE_PROJECT_DIR, which
+    # Claude Code substitutes at runtime to the project root (Windows + macOS + Linux) — NEVER an absolute
+    # machine path. So a BUILT agent survives a clone to any machine/OS. `home` is e.g.
+    # "$CLAUDE_PROJECT_DIR/.genesis". Interpreter is `python3` (resolved via PATH), matching the plugin's
+    # own hooks.json rather than baking this machine's sys.executable.
+    hooks_dir = home + "/hooks"
+    exp_dir = home + "/expertise"
+    py = "python3"
+    inject = _q(py) + " " + _q(hooks_dir + "/inject.py") + " " + _q(exp_dir) + " " + name
+    gate = _q(py) + " " + _q(hooks_dir + "/gate.py")
+    stop = _q(py) + " " + _q(hooks_dir + "/validate.py") + " . " + name
+    review = _q(py) + " " + _q(hooks_dir + "/review.py") + " . " + name
     skills_line = f"skills: {', '.join(skills)}\n" if skills else ""
     # PreToolUse: every agent gets the Write|Edit gate (house rules + rule surfacing). SENSEI additionally
     # gets a Bash gate that blocks assembling a built agent unless the research-expertise skill ran this
@@ -149,7 +154,7 @@ def frontmatter(name, meta, gh, skills):
         "        - type: command\n"
         + _yaml_cmd(gate))
     if name == "sensei":
-        enforce = _q(py) + " " + _q(os.path.join(hooks_dir, "enforce_research.py"))
+        enforce = _q(py) + " " + _q(hooks_dir + "/enforce_research.py")
         pretooluse += (
             '    - matcher: "Bash"\n'
             "      hooks:\n"
@@ -209,8 +214,14 @@ def main():
     out_dir = os.path.join(target, ".claude", "agents")
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"{name}.md")
+    # Portable hook base: express genesis_home RELATIVE to the target repo via $CLAUDE_PROJECT_DIR so the
+    # written agent has NO absolute machine path (works on any machine/OS after the repo's .genesis exists).
+    # Normal case: gh = <target>/.genesis -> "$CLAUDE_PROJECT_DIR/.genesis". If gh is somehow outside the
+    # repo, fall back to the (non-portable) absolute path rather than emit a broken reference.
+    rel = os.path.relpath(gh, target).replace(os.sep, "/")
+    home = ("$CLAUDE_PROJECT_DIR/" + rel) if not rel.startswith("..") else gh.replace(os.sep, "/")
     with open(out, "w", encoding="utf-8") as f:
-        f.write(frontmatter(name, meta, gh, skills) + "\n" + body + "\n")
+        f.write(frontmatter(name, meta, home, skills) + "\n" + body + "\n")
     print(json.dumps({"agent": name, "written": out, "tools": meta["tools"],
                       "skills_installed": skills, "body_lines": body.count("\n") + 1}))
 

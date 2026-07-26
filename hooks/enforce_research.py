@@ -99,6 +99,13 @@ def main():
         ev = json.load(sys.stdin)
     except Exception:
         sys.exit(0)  # no/garbled input → allow, fail-open on parse (nothing to enforce)
+    # DORMANCY GUARD: this hook fires on EVERY Bash call session-wide (a PreToolUse Bash matcher keys on the
+    # tool, not the agent). Without this, it policed normal sessions — e.g. a plain `grep install/assemble.py`
+    # got blocked because the command merely contained the string "assemble.py". Do NOTHING unless a genesis
+    # agent is actually active (payload `agent_type`); a normal main thread has none → no-op. Enforcement
+    # still applies when Sensei (the only agent that assembles) is the acting agent.
+    if not agent_ident.resolve_agent(ev):
+        sys.exit(0)
     command = (ev.get("tool_input", {}) or {}).get("command", "") or ""
     name = assembled_agent_name(command)
     if name is None:

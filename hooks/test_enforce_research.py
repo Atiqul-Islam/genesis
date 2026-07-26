@@ -12,8 +12,13 @@ ENFORCE = os.path.join(HERE, "enforce_research.py")
 GEN = "/x/.genesis"
 
 
-def run(command, transcript_path):
+def run(command, transcript_path, agent="sensei"):
+    # `agent` populates the payload's agent_type. enforce_research now has a DORMANCY GUARD: it no-ops
+    # unless a genesis agent is active. Sensei is the only agent that assembles, so enforcement runs with
+    # agent="sensei"; pass agent=None to simulate a normal (non-genesis) session.
     ev = {"tool_input": {"command": command}, "transcript_path": transcript_path}
+    if agent:
+        ev["agent_type"] = agent
     p = subprocess.run([sys.executable, ENFORCE], input=json.dumps(ev),
                        capture_output=True, text=True, timeout=30)
     out = p.stdout.strip()
@@ -79,6 +84,11 @@ def main():
     # 7. malformed assemble (no name arg) → deny (fail-closed)
     blocked, _ = run(f"{sys.executable} {GEN}/install/assemble.py", without_skill)
     check("assemble with no agent name → DENY (fail-closed)", blocked)
+
+    # 8. DORMANCY: no genesis agent active (normal session) → no-op even for an assemble command.
+    # This is the bug that blocked a plain `grep install/assemble.py` in a normal session.
+    blocked, _ = run(assemble_cmd("acme-bot"), without_skill, agent=None)
+    check("normal session (no genesis agent) → allow even an assemble cmd (DORMANT)", not blocked)
 
     import shutil
     shutil.rmtree(root, ignore_errors=True)

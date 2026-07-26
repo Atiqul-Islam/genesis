@@ -64,7 +64,12 @@ def main():
         # agents wired to .genesis/, sensei has the enforce gate, method does not
         sensei = open(os.path.join(target, ".claude", "agents", "sensei.md"), encoding="utf-8").read()
         method = open(os.path.join(target, ".claude", "agents", "method.md"), encoding="utf-8").read()
-        check("sensei.md hooks reference repo .genesis/hooks", os.path.join(dest, "hooks") in sensei)
+        # PORTABLE: built-agent hooks reference $CLAUDE_PROJECT_DIR/.genesis/hooks (runtime-resolved to the
+        # repo root, cross-platform) — NOT an absolute machine path, so the agent survives a clone.
+        check("sensei.md hooks reference $CLAUDE_PROJECT_DIR/.genesis/hooks (portable)",
+              "$CLAUDE_PROJECT_DIR/.genesis/hooks" in sensei)
+        check("sensei.md hooks carry NO absolute machine path", os.path.join(dest, "hooks") not in sensei
+              and "/mnt/" not in sensei)
         check("sensei has Bash enforce_research gate", "enforce_research.py" in sensei)
         check("method has NO enforce_research gate", "enforce_research.py" not in method)
 
