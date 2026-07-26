@@ -60,6 +60,26 @@ def main():
         check(".mcp.json command → repo-local binary", gm["command"] == binp)
         check(".mcp.json env → repo-local model + db",
               dest in gm["env"]["GENESIS_MODEL_DIR"] and dest in gm["env"]["GENESIS_MEMORY_DB"])
+        # portable memory: the server is told where to write the committed JSONL mirror
+        check(".mcp.json env → GENESIS_MEMORY_EXPORT under .genesis/memory/",
+              "GENESIS_MEMORY_EXPORT" in gm["env"]
+              and os.path.join(dest, "memory") in gm["env"]["GENESIS_MEMORY_EXPORT"]
+              and gm["env"]["GENESIS_MEMORY_EXPORT"].endswith(".jsonl"))
+
+        # .gitignore commits the brain + portable memory, ignores machine junk (via `git check-ignore`)
+        gi = open(os.path.join(target, ".gitignore"), encoding="utf-8").read()
+        check(".gitignore has the managed genesis block", "genesis runtime (managed by bootstrap)" in gi)
+
+        def _ignored(p):
+            return subprocess.run(["git", "-C", target, "check-ignore", "-q", p]).returncode == 0
+        subprocess.run(["git", "-C", target, "init", "-q"], check=False)
+        check("memory JSONL is COMMITTED (not ignored)", not _ignored(".genesis/memory/memory.jsonl"))
+        check("expertise is COMMITTED (not ignored)", not _ignored(".genesis/expertise/portfolio-truth.md"))
+        check("hooks are COMMITTED (not ignored)", not _ignored(".genesis/hooks/inject.py"))
+        check("memory.db is ignored (machine-local)", _ignored(".genesis/memory.db"))
+        check("server binary is ignored (machine-local)",
+              _ignored(".genesis/server/target/release/genesis-memory-server"))
+        check(".mcp.json is ignored (absolute paths)", _ignored(".mcp.json"))
 
         # agents wired to .genesis/, sensei has the enforce gate, method does not
         sensei = open(os.path.join(target, ".claude", "agents", "sensei.md"), encoding="utf-8").read()

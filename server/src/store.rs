@@ -81,6 +81,45 @@ impl MemRow {
     }
 }
 
+/// A COMPLETE `memories` row — every column, so it round-trips losslessly through the
+/// JSONL export/import (see [`crate::persist`]). The embedding is deliberately absent:
+/// it is a derived index regenerated from `text` on import, not source data.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MemRecord {
+    /// Row id (== `vec_items.rowid`). Preserved so `superseded_by` links stay valid.
+    pub id: i64,
+    /// The agent the memory belongs to.
+    pub agent_id: String,
+    /// The memory text (the source the embedding is derived from).
+    pub text: String,
+    /// Unix seconds when the memory was stored.
+    pub created_at: i64,
+    /// Unix seconds when the memory was last recalled.
+    pub last_used_at: i64,
+    /// Number of times the memory has been recalled.
+    pub use_count: i64,
+    /// The memory's base relevance score.
+    pub base_score: f64,
+    /// The id of the memory that superseded this one, if any (null = active).
+    pub superseded_by: Option<i64>,
+}
+
+impl MemRecord {
+    /// Reads a full `MemRecord` from a query row selecting all eight columns in schema order.
+    fn from_row(r: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
+            text: r.get(2)?,
+            created_at: r.get(3)?,
+            last_used_at: r.get(4)?,
+            use_count: r.get(5)?,
+            base_score: r.get(6)?,
+            superseded_by: r.get(7)?,
+        })
+    }
+}
+
 /// Maps a KNN result row to `(id, distance)`.
 fn id_distance(r: &rusqlite::Row) -> rusqlite::Result<(i64, f64)> {
     Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
@@ -298,6 +337,67 @@ impl VectorStore {
         let rows = stmt.query_map(params![agent_id], |r| r.get::<_, i64>(0))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
+
+    /// The total number of `memories` rows (all agents, including superseded).
+    ///
+    /// Used to decide whether an empty DB should be rebuilt from a JSONL export on startup.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn count_memories(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?)
+    }
+
+    /// Exports every `memories` row — all agents, all columns, including superseded rows —
+    /// ordered by `id` for a deterministic, diff-friendly export. Embeddings are excluded
+    /// (they are regenerated from `text` on import), so this captures the full source of truth.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn export_all(&self) -> Result<Vec<MemRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by
+               FROM memories ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], MemRecord::from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Inserts a full `MemRecord` under its ORIGINAL id (not auto-assigned) plus its embedding,
+    /// so `id` and every `superseded_by` link survive an export→import round-trip exactly.
+    ///
+    /// Used only by the JSONL importer ([`crate::persist::import_jsonl`]); normal writes use
+    /// [`VectorStore::insert`], which assigns a fresh id.
+    ///
+    /// # Errors
+    /// Returns an error on dimension mismatch or any SQL failure.
+    pub fn insert_with_id(&mut self, rec: &MemRecord, embedding: &[f32]) -> Result<()> {
+        Self::check_dim(embedding)?;
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO memories
+                 (id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                rec.id,
+                rec.agent_id,
+                rec.text,
+                rec.created_at,
+                rec.last_used_at,
+                rec.use_count,
+                rec.base_score,
+                rec.superseded_by,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO vec_items(rowid, embedding) VALUES (?1, ?2)",
+            params![rec.id, bytemuck::cast_slice::<f32, u8>(embedding)],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 // Source: test/specs/genesis-memory-server.md — Implementation Requirements
@@ -305,7 +405,7 @@ impl VectorStore {
 // database with the real sqlite-vec extension (no mocks, §5 #6: fresh DB per test).
 #[cfg(test)]
 mod tests {
-    use super::{resolve_db_path, MemRow, VectorStore, DEFAULT_DB_FILENAME};
+    use super::{resolve_db_path, MemRecord, MemRow, VectorStore, DEFAULT_DB_FILENAME};
     use crate::embed::EMBED_DIM;
 
     fn open_temp() -> (tempfile::TempDir, VectorStore) {
@@ -576,5 +676,95 @@ mod tests {
         assert_eq!(rows[0].last_used_at, 200);
         assert_eq!(rows[0].use_count, 1);
         assert!((rows[0].base_score - 2.0).abs() < 1e-9);
+    }
+
+    // ─── Lossless export/import (memory portability across systems) ───────────
+
+    #[test]
+    fn count_memories_counts_all_rows_including_superseded() {
+        let (_d, mut s) = open_temp();
+        let a = s.insert("x", "a", &emb(0.1), 1.0, 0).unwrap();
+        let b = s.insert("x", "b", &emb(0.2), 1.0, 0).unwrap();
+        s.set_superseded(a, b).unwrap();
+        assert_eq!(s.count_memories().unwrap(), 2, "superseded rows still count");
+    }
+
+    #[test]
+    fn export_all_returns_every_column_of_every_row_ordered_by_id() {
+        let (_d, mut s) = open_temp();
+        s.insert("alpha", "first", &emb(0.1), 1.5, 100).unwrap();
+        let b = s.insert("beta", "second", &emb(0.2), 2.5, 200).unwrap();
+        s.touch(b, 250).unwrap();
+        let rows = s.export_all().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, 1);
+        assert_eq!(rows[0].agent_id, "alpha");
+        assert_eq!(rows[0].text, "first");
+        assert_eq!(rows[0].created_at, 100);
+        assert_eq!(rows[0].superseded_by, None);
+        assert_eq!(rows[1].agent_id, "beta");
+        assert_eq!(rows[1].last_used_at, 250);
+        assert_eq!(rows[1].use_count, 1);
+    }
+
+    /// THE lossless guarantee: a full `memories` table survives binary → JSON text → binary
+    /// with **every column of every row byte-identical** — including special characters in the
+    /// text and a `superseded_by` link. Uses dummy embeddings (embeddings are a regenerated
+    /// index, not source data), so this runs with no ONNX model present.
+    #[test]
+    fn export_to_jsonl_and_back_preserves_every_row_exactly() {
+        let (_d, mut s) = open_temp();
+        s.insert_with_id(
+            &MemRecord {
+                id: 1,
+                agent_id: "atlas".into(),
+                text: "plain memory".into(),
+                created_at: 1000,
+                last_used_at: 1200,
+                use_count: 4,
+                base_score: 1.25,
+                superseded_by: None,
+            },
+            &emb(0.3),
+        )
+        .unwrap();
+        s.insert_with_id(
+            &MemRecord {
+                id: 2,
+                agent_id: "atlas".into(),
+                // newline, quotes, comma, unicode, backslash — the things a naive text conversion drops
+                text: "line one\nline \"two\", café\\path — 90%".into(),
+                created_at: 2000,
+                last_used_at: 2000,
+                use_count: 0,
+                base_score: -0.5,
+                superseded_by: Some(1),
+            },
+            &emb(0.4),
+        )
+        .unwrap();
+
+        let before = s.export_all().unwrap();
+
+        // Simulate the on-disk JSONL round-trip (one JSON object per line).
+        let jsonl: String = before
+            .iter()
+            .map(|r| serde_json::to_string(r).unwrap() + "\n")
+            .collect();
+        let parsed: Vec<MemRecord> = jsonl
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(parsed, before, "JSON text round-trip is exact");
+
+        // Re-import into a FRESH store (fresh machine), then export again.
+        let (_d2, mut s2) = open_temp();
+        for r in &parsed {
+            s2.insert_with_id(r, &emb(0.0)).unwrap();
+        }
+        let after = s2.export_all().unwrap();
+
+        assert_eq!(after, before, "nothing is lost across export → text → import");
     }
 }

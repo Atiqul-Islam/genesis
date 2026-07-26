@@ -33,6 +33,56 @@ def _copy_tree(src, dst):
     shutil.copytree(src, dst, dirs_exist_ok=True, ignore=_ignore_junk)
 
 
+# The managed .gitignore block. COMMIT the agent brain (expertise + hooks) and portable memory
+# (.genesis/memory/*.jsonl); IGNORE machine-local junk (the DB, server binary+model, caches, logs,
+# the absolute-path .mcp.json). Rewritten in place between the sentinels on every bootstrap.
+GITIGNORE_START = "# >>> genesis runtime (managed by bootstrap) >>>"
+GITIGNORE_END = "# <<< genesis runtime <<<"
+GITIGNORE_BLOCK = "\n".join([
+    GITIGNORE_START,
+    "# Commit the agent brain (expertise + hooks) and portable memory (JSONL) so agents and their",
+    "# learned memory travel with the repo across systems. Ignore machine-local / regenerable junk.",
+    ".genesis/*",
+    "!.genesis/expertise/",
+    "!.genesis/hooks/",
+    "!.genesis/memory/",
+    ".genesis/**/__pycache__/",
+    ".genesis/expertise/.genesis/",
+    ".genesis/memory/*.tmp",
+    "*.db",
+    ".mcp.json",
+    GITIGNORE_END,
+    "",
+])
+
+
+def _merge_gitignore(target):
+    """Idempotently write the managed genesis block into <target>/.gitignore.
+
+    Replaces an existing managed block (between sentinels) in place; otherwise appends. Never
+    touches the user's own lines. Returns a note if a conflicting blanket `.genesis/` ignore is
+    found outside the managed block (it would defeat the re-includes).
+    """
+    path = os.path.join(target, ".gitignore")
+    try:
+        existing = open(path, encoding="utf-8").read()
+    except Exception:
+        existing = ""
+    if GITIGNORE_START in existing and GITIGNORE_END in existing:
+        pre = existing.split(GITIGNORE_START)[0]
+        post = existing.split(GITIGNORE_END, 1)[1]
+        merged = pre.rstrip("\n") + ("\n\n" if pre.strip() else "") + GITIGNORE_BLOCK + post.lstrip("\n")
+    else:
+        sep = "" if (not existing or existing.endswith("\n")) else "\n"
+        merged = existing + sep + ("\n" if existing.strip() else "") + GITIGNORE_BLOCK
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(merged)
+    # Warn if a blanket `.genesis/` ignore lives OUTSIDE our block — it would win and defeat the re-includes.
+    outside = merged.split(GITIGNORE_START)[0] + merged.split(GITIGNORE_END, 1)[-1]
+    conflict = any(ln.strip() in (".genesis", ".genesis/") for ln in outside.splitlines())
+    return "conflicting blanket '.genesis/' ignore present — remove it" if conflict else None
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: bootstrap.py <target_repo> [genesis_home]  (or set $GENESIS_HOME)")
@@ -84,7 +134,11 @@ def main():
     _copy_tree(models_src, os.path.join(dest, "server", "models"))
 
     # 3. Memory DB lives under .genesis/ (server creates the file on first use). Never clobber an existing one.
+    #    The DB is machine-local + regenerable; the PORTABLE, COMMITTED form of memory is the JSONL export
+    #    at .genesis/memory/memory.jsonl (see step 4b + the .gitignore in step 6). On a fresh clone the DB is
+    #    absent but the JSONL is present, so the server rebuilds (re-embeds) the memory on first run.
     mem_db = os.path.join(dest, "memory.db")
+    mem_export = os.path.join(dest, "memory", "memory.jsonl")
 
     # 4. Register the repo-local memory MCP server in <repo>/.mcp.json (merge; preserve other servers).
     mcp_path = os.path.join(target, ".mcp.json")
@@ -99,11 +153,20 @@ def main():
         "command": bin_dst,
         "args": [],
         "env": {"GENESIS_MODEL_DIR": os.path.join(dest, "server", "models"),
-                "GENESIS_MEMORY_DB": mem_db},
+                "GENESIS_MEMORY_DB": mem_db,
+                # The committed, cross-system-portable mirror. The server snapshots to this after every
+                # store/consolidate and rebuilds from it when the DB is empty (fresh clone).
+                "GENESIS_MEMORY_EXPORT": mem_export},
     }
     with open(mcp_path, "w", encoding="utf-8") as f:
         json.dump(mcp, f, indent=2)
         f.write("\n")
+
+    # 6. Ensure the repo's .gitignore commits the agent BRAIN (expertise + hooks) and PORTABLE MEMORY
+    #    (.genesis/memory/*.jsonl) while ignoring machine-local junk (the DB, the server binary+model,
+    #    caches, logs, the absolute-path .mcp.json). Without this, agents' memory + corrections never
+    #    travel across systems — the flaw this block fixes.
+    gitignore_note = _merge_gitignore(target)
 
     # 5. Install sensei + method into <repo>/.claude/agents/, wired to the REPO-LEVEL .genesis/ home.
     assembler = os.path.join(dest, "install", "assemble.py")
@@ -125,6 +188,10 @@ def main():
         "model_dir": os.path.join(dest, "server", "models"),
         "memory_db": mem_db,
         "memory_db_preexisting": os.path.exists(mem_db),
+        "memory_export": mem_export,
+        "memory_export_preexisting": os.path.exists(mem_export),
+        "gitignore": os.path.join(target, ".gitignore"),
+        "gitignore_warning": gitignore_note,
         "mcp_json": mcp_path,
         "next": "Open Claude Code in the repo; talk to Sensei to build agents (expertise via the research-expertise skill).",
     }, indent=2))

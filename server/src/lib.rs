@@ -27,6 +27,7 @@
 
 pub mod consolidate;
 pub mod embed;
+pub mod persist;
 pub mod store;
 
 use std::path::{Path, PathBuf};
@@ -148,10 +149,12 @@ pub struct MemoryServer {
     inner: Arc<Mutex<Inner>>,
     cfg: ConsolidationConfig,
     model_dir: PathBuf,
+    export_path: Option<PathBuf>,
 }
 
 impl MemoryServer {
     /// Builds a server over an already-open `store`; the embedder loads lazily from `model_dir`.
+    /// No JSONL export is written until [`MemoryServer::with_export`] sets a path.
     #[must_use]
     pub fn new(store: VectorStore, model_dir: PathBuf) -> Self {
         Self {
@@ -161,6 +164,26 @@ impl MemoryServer {
             })),
             cfg: ConsolidationConfig::default(),
             model_dir,
+            export_path: None,
+        }
+    }
+
+    /// Sets the committed JSONL export path the server snapshots to after every mutating tool
+    /// call (`store`, `consolidate`), so an agent's memory travels with the repo.
+    #[must_use]
+    pub fn with_export(mut self, path: PathBuf) -> Self {
+        self.export_path = Some(path);
+        self
+    }
+
+    /// Best-effort snapshot of the whole `memories` table to the JSONL export, if one is set.
+    /// A snapshot failure is logged but never fails the tool call: the memory is already durable
+    /// in the DB, and the next mutating call (or the shutdown flush) re-attempts the export.
+    fn snapshot(&self, store: &VectorStore) {
+        if let Some(path) = &self.export_path {
+            if let Err(e) = crate::persist::export_jsonl(store, path) {
+                tracing::warn!("memory snapshot to {} failed: {e:#}", path.display());
+            }
         }
     }
 
@@ -209,9 +232,12 @@ impl MemoryServer {
             &a.agent_id,
             &a.text,
         ) {
-            Ok(id) => Ok(CallToolResult::success(vec![ContentBlock::text(
-                id.to_string(),
-            )])),
+            Ok(id) => {
+                self.snapshot(store); // mirror to the committed JSONL export
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    id.to_string(),
+                )]))
+            }
             Err(e) => Ok(Self::err_result(&e)),
         }
     }
@@ -244,7 +270,10 @@ impl MemoryServer {
     ) -> Result<CallToolResult, McpError> {
         let mut g = self.inner.lock().await;
         match crate::consolidate::consolidate(&mut g.store, &a.agent_id, &self.cfg, &SystemClock) {
-            Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text("ok")])),
+            Ok(()) => {
+                self.snapshot(&g.store); // mirror to the committed JSONL export
+                Ok(CallToolResult::success(vec![ContentBlock::text("ok")]))
+            }
             Err(e) => Ok(Self::err_result(&e)),
         }
     }
@@ -259,20 +288,86 @@ impl ServerHandler for MemoryServer {
     }
 }
 
-/// Runs the MCP memory server over stdio until the client disconnects.
+/// Entry point: dispatches the migration subcommands or runs the MCP stdio server.
 ///
-/// Reads the database path from `GENESIS_MEMORY_DB` (fallback `genesis-memory.db`) and the
-/// model directory from `GENESIS_MODEL_DIR` (via [`embed::model_dir`]). Returns `Ok(())` on
-/// a clean shutdown so stdin EOF yields exit status 0.
+/// - `genesis-memory-server export [db] [out.jsonl]` — mirror the DB to a JSONL export.
+/// - `genesis-memory-server import [in.jsonl] [db]` — rebuild the DB from a JSONL export.
+/// - (no subcommand) — run the MCP memory server over stdio (the normal mode).
 ///
 /// # Errors
 ///
-/// Returns an error if the store or stdio transport fails to initialise.
+/// Returns an error if the chosen subcommand or the server fails.
+pub async fn run() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("export") => cli_export(args.get(2).cloned(), args.get(3).cloned()),
+        Some("import") => cli_import(args.get(2).cloned(), args.get(3).cloned()),
+        _ => serve_stdio().await,
+    }
+}
+
+/// `export [db] [out]` — writes the whole `memories` table to a JSONL export (for migration).
+///
+/// # Errors
+/// Returns an error if the store cannot be opened or the export fails.
+fn cli_export(db: Option<String>, out: Option<String>) -> Result<()> {
+    let db = db.unwrap_or_else(crate::store::db_path_from_env);
+    let out = out.map_or_else(|| crate::persist::export_path_from_env(&db), PathBuf::from);
+    let store = VectorStore::open(&db)?;
+    crate::persist::export_jsonl(&store, &out)?;
+    eprintln!(
+        "exported {} memories to {}",
+        store.count_memories()?,
+        out.display()
+    );
+    Ok(())
+}
+
+/// `import [in] [db]` — rebuilds the DB from a JSONL export, re-embedding each memory.
+///
+/// # Errors
+/// Returns an error if the store/embedder cannot be opened or the import fails.
+fn cli_import(input: Option<String>, db: Option<String>) -> Result<()> {
+    let db = db.unwrap_or_else(crate::store::db_path_from_env);
+    let input = input.map_or_else(|| crate::persist::export_path_from_env(&db), PathBuf::from);
+    let model_dir = crate::embed::model_dir();
+    let model = model_dir.join("onnx/model.onnx");
+    let tokenizer = model_dir.join("tokenizer.json");
+    let mut store = VectorStore::open(&db)?;
+    let mut embedder = Embedder::load(&model.to_string_lossy(), &tokenizer.to_string_lossy())?;
+    let n = crate::persist::import_jsonl(&mut store, &mut embedder, &input)?;
+    eprintln!("imported {n} memories from {} into {db}", input.display());
+    Ok(())
+}
+
+/// Runs the MCP memory server over stdio until the client disconnects.
+///
+/// Reads the database path from `GENESIS_MEMORY_DB` (fallback `genesis-memory.db`) and the
+/// model directory from `GENESIS_MODEL_DIR` (via [`embed::model_dir`]). On startup, if the DB
+/// is empty and a committed JSONL export exists, the memory is rebuilt from it (cross-system
+/// portability). On clean shutdown the DB is flushed back to the export so recall-updated
+/// counters are captured. Returns `Ok(())` on a clean shutdown so stdin EOF yields exit 0.
+///
+/// # Errors
+///
+/// Returns an error if the store, rebuild, or stdio transport fails to initialise.
 pub async fn serve_stdio() -> Result<()> {
-    let store = VectorStore::open(&crate::store::db_path_from_env())?;
-    let server = MemoryServer::new(store, crate::embed::model_dir());
+    let db = crate::store::db_path_from_env();
+    let export = crate::persist::export_path_from_env(&db);
+    let model_dir = crate::embed::model_dir();
+    let mut store = VectorStore::open(&db)?;
+    let restored = crate::persist::rebuild_if_needed(&mut store, &model_dir, &export)?;
+    if restored > 0 {
+        tracing::info!("restored {restored} memories from {}", export.display());
+    }
+    let server = MemoryServer::new(store, model_dir).with_export(export.clone());
+    let flush = server.clone(); // shares the same Arc<Mutex<Inner>> for the shutdown flush
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
+    let g = flush.inner.lock().await;
+    if let Err(e) = crate::persist::export_jsonl(&g.store, &export) {
+        tracing::warn!("final memory snapshot to {} failed: {e:#}", export.display());
+    }
     Ok(())
 }
 
