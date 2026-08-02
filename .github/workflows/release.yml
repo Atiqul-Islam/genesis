@@ -49,15 +49,17 @@ jobs:
         # tract is pure Rust, so target choice is purely about host arch vs. cross/glibc-floor:
         # native `cargo` when the runner matches the target arch, `cargo-zigbuild` for cross,
         # musl (fully static), and the low-glibc gnu floor. No ORT-prebuilt gating anywhere.
+        # ALPHA scope: the 5 targets that build cleanly. ARM64-Linux (gnu+musl) and Windows-ARM are
+        # DEFERRED — tract-linalg's hand-written ARM64 SIMD (SVE C + asm) does not cross-compile via
+        # zig or MSVC-on-an-x64-host; they need native ARM runners (a follow-up). The launcher still
+        # lists all 8 in optionalDependencies, so ARM users get a clean "unsupported" message until
+        # those platform packages are published.
         include:
-          - { key: darwin-arm64,     runner: macos-14,       target: aarch64-apple-darwin,       tool: cargo }
-          - { key: darwin-x64,       runner: macos-13,       target: x86_64-apple-darwin,        tool: cargo }
-          - { key: linux-x64-gnu,    runner: ubuntu-22.04,   target: x86_64-unknown-linux-gnu,   tool: cargo }    # glibc 2.35 floor
-          - { key: linux-arm64-gnu,  runner: ubuntu-22.04,   target: aarch64-unknown-linux-gnu,  tool: zigbuild } # cross + low glibc
-          - { key: linux-x64-musl,   runner: ubuntu-22.04,   target: x86_64-unknown-linux-musl,  tool: zigbuild } # fully static
-          - { key: linux-arm64-musl, runner: ubuntu-22.04,   target: aarch64-unknown-linux-musl, tool: zigbuild } # fully static
-          - { key: win32-x64,        runner: windows-latest, target: x86_64-pc-windows-msvc,     tool: cargo }
-          - { key: win32-arm64,      runner: windows-11-arm, target: aarch64-pc-windows-msvc,    tool: cargo }    # NATIVE arm64 runner: tract-linalg's ARM64 asm can't cross-assemble on an x64 MSVC host (LNK1181)
+          - { key: darwin-arm64,  runner: macos-14,       target: aarch64-apple-darwin,      tool: cargo }
+          - { key: darwin-x64,    runner: macos-13,       target: x86_64-apple-darwin,       tool: cargo }
+          - { key: linux-x64-gnu, runner: ubuntu-22.04,   target: x86_64-unknown-linux-gnu,  tool: cargo }    # glibc 2.35 floor
+          - { key: linux-x64-musl,runner: ubuntu-22.04,   target: x86_64-unknown-linux-musl, tool: zigbuild } # fully static
+          - { key: win32-x64,     runner: windows-latest, target: x86_64-pc-windows-msvc,    tool: cargo }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,8 +186,27 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
+      - name: Cache the pinned model (avoids re-hitting HuggingFace every run)
+        uses: actions/cache@v4
+        with:
+          path: |
+            npm/@xcidos/genesis-memory-model/onnx/model.onnx
+            npm/@xcidos/genesis-memory-model/tokenizer.json
+          key: model-pkg-${{ hashFiles('scripts/fetch-model.mjs') }}
       - name: Fetch + verify the pinned model into the model package
-        run: node scripts/fetch-model.mjs --dest npm/@xcidos/genesis-memory-model
+        shell: bash
+        run: |
+          if [ -f npm/@xcidos/genesis-memory-model/onnx/model.onnx ]; then
+            echo "model restored from cache — skipping download"
+          else
+            # HuggingFace returns 429 under repeated release runs; retry with backoff.
+            ok=""
+            for wait in 0 20 45 90 180; do
+              [ "$wait" = "0" ] || { echo "HF rate-limited; retrying in ${wait}s..."; sleep "$wait"; }
+              if node scripts/fetch-model.mjs --dest npm/@xcidos/genesis-memory-model; then ok=1; break; fi
+            done
+            [ -n "$ok" ] || { echo "model fetch failed after retries"; exit 1; }
+          fi
       - name: Sanity-check the two shipped files exist
         shell: bash
         run: |
