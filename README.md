@@ -105,7 +105,7 @@ The **memory server** is delivered over npm rather than as a committed binary. T
 ## Requirements
 
 - **Claude Code with plugin support** (the `/plugin` marketplace system).
-- **Node.js 18+ on your PATH.** The enforcement hooks run under `node`, and the memory server is launched with `npx` — no Python runtime is required, and the hooks have no third-party runtime dependencies.
+- **Node.js on your PATH.** The enforcement hooks and the `npx` memory-server launcher run on **Node 18+**; the optional **session-copy** feature reads SQLite via the built-in `node:sqlite` and needs **Node 24+**. No Python runtime is required, and the hooks have no third-party runtime dependencies.
 - **For the memory server:** prebuilt native binaries are packaged per OS/arch on npm (macOS, Linux, and Windows on x64 and arm64), and `npx -y @atiqul/genesis-memory-server` resolves the right one for your platform. **The npm packages are not published yet** (pre-release/beta), so until then — or on any unpackaged platform — build it from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release`, fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN` and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
 
 ## Status

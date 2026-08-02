@@ -32,7 +32,7 @@ jobs:
         run: rustup show && rustc --version && cargo --version
 
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 24 }   # node:sqlite (session_copy) is unflagged on Node 24; Node 20 lacks it
 
       - name: Cache the pinned model
         uses: actions/cache@v4
@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 24 }   # node:sqlite (session_copy) is unflagged on Node 24; Node 20 lacks it
 
       - name: Parse-check all JS/MJS (hooks, installer, session-copy, npm launcher, scripts)
         shell: bash
@@ -97,7 +97,7 @@ jobs:
             install/test_bootstrap.js install/test_portability.js \
             session_copy/test_capture.js session_copy/test_store.js \
             npm/@atiqul/genesis-memory-server/test/launcher.test.js; do
-            [ -f "$t" ] && { echo "== $t =="; node "$t"; } || echo "skip (absent): $t"
+            if [ -f "$t" ]; then echo "== $t =="; node "$t"; else echo "skip (absent): $t"; fi
           done
 
       - name: Assert the plugin is Python-free (no runtime .py)
