@@ -7,14 +7,14 @@
 // and how Claude Code itself ships native binaries): at run time we compute the
 // `${platform}-${arch}(-${libc})` key for the current machine, resolve the matching prebuilt
 // native server that npm installed as an optional dependency, point the server at the ONNX
-// model shipped by @atiqul/genesis-memory-model, and spawn it with the MCP stdio stream
+// model shipped by @xcidos/genesis-memory-model, and spawn it with the MCP stdio stream
 // inherited untouched.
 //
 // The one prerequisite is Node.js -- the accepted baseline for the Claude Code + MCP
 // ecosystem. There is no Python, no local Rust build, and no network access at run time.
 //
 // Referenced by .mcp.json as:
-//   { "command": "npx", "args": ["-y", "@atiqul/genesis-memory-server"] }
+//   { "command": "npx", "args": ["-y", "@xcidos/genesis-memory-server"] }
 //
 // Environment overrides (all optional):
 //   GENESIS_MEMORY_BIN   run this locally-built server binary directly (dev/CI override)
@@ -25,8 +25,8 @@ const path = require("path");
 const fs = require("fs");
 const childProcess = require("child_process");
 
-const SERVER_PKG_PREFIX = "@atiqul/genesis-memory-server-";
-const MODEL_PKG = "@atiqul/genesis-memory-model";
+const SERVER_PKG_PREFIX = "@xcidos/genesis-memory-server-";
+const MODEL_PKG = "@xcidos/genesis-memory-model";
 const BIN_STEM = "genesis-memory-server"; // Cargo [[bin]] name
 
 /** A fail-closed launcher condition (unsupported platform, missing package, bad override). */
@@ -128,7 +128,7 @@ function generateBinPath() {
 // The native server locates its embedder via GENESIS_MODEL_DIR (a directory holding
 // onnx/model.onnx + tokenizer.json). We honor an explicit override (dev, or a user who
 // fetched the model elsewhere) -- matching the legacy launcher -- otherwise we point it at
-// the bundled @atiqul/genesis-memory-model package.
+// the bundled @xcidos/genesis-memory-model package.
 function resolveModelDir() {
   const override = process.env.GENESIS_MODEL_DIR;
   if (override) return override;
@@ -140,7 +140,7 @@ function resolveModelDir() {
         MODEL_PKG +
         '".\n' +
         "It is a hard dependency of the launcher and ships onnx/model.onnx + tokenizer.json.\n" +
-        "Reinstall @atiqul/genesis-memory-server, or set GENESIS_MODEL_DIR to a directory that\n" +
+        "Reinstall @xcidos/genesis-memory-server, or set GENESIS_MODEL_DIR to a directory that\n" +
         "contains onnx/model.onnx and tokenizer.json.\n\n" +
         "Underlying resolver error: " +
         (e && e.message ? e.message : String(e))

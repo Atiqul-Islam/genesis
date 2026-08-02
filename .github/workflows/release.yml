@@ -3,7 +3,7 @@ name: release
 # On a version tag (v*), build the self-contained genesis-memory-server for every supported
 # platform, stage each binary into its npm platform package, package the pinned ONNX model,
 # then publish everything to npm with provenance. The plugin's .mcp.json launches the server
-# via `npx -y @atiqul/genesis-memory-server`, which npm resolves to the one matching platform
+# via `npx -y @xcidos/genesis-memory-server`, which npm resolves to the one matching platform
 # package (os/cpu/libc-gated) + the shared model package. No GitHub-Releases assets, no
 # checksum pinning, no Python launcher — that model is retired.
 #
@@ -16,7 +16,7 @@ name: release
 # via server/.cargo/config.toml). So a platform package is exactly one file and needs no sidecar.
 #
 # REQUIRED SECRETS:
-#   NPM_TOKEN            npm automation token with publish rights to the @atiqul scope
+#   NPM_TOKEN            npm automation token with publish rights to the @xcidos scope
 #   (macOS signing, optional — ad-hoc signed if absent, which runs locally but not via Gatekeeper)
 #   APPLE_CERT_P12_BASE64, APPLE_CERT_PASSWORD, APPLE_SIGN_IDENTITY,
 #   APPLE_NOTARY_APPLE_ID, APPLE_NOTARY_TEAM_ID, APPLE_NOTARY_PASSWORD
@@ -153,7 +153,7 @@ jobs:
       - name: Stage into npm platform package
         shell: bash
         run: |
-          dest="npm/@atiqul/genesis-memory-server-${{ matrix.key }}"
+          dest="npm/@xcidos/genesis-memory-server-${{ matrix.key }}"
           test -d "$dest" || { echo "missing package dir: $dest"; exit 1; }
           cp "${{ steps.bin.outputs.src }}" "$dest/${{ steps.bin.outputs.file }}"
           chmod +x "$dest/${{ steps.bin.outputs.file }}" || true
@@ -162,7 +162,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pkgbin-${{ matrix.key }}
-          path: npm/@atiqul/genesis-memory-server-${{ matrix.key }}/${{ steps.bin.outputs.file }}
+          path: npm/@xcidos/genesis-memory-server-${{ matrix.key }}/${{ steps.bin.outputs.file }}
           if-no-files-found: error
           retention-days: 1
 
@@ -177,18 +177,18 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - name: Fetch + verify the pinned model into the model package
-        run: node scripts/fetch-model.mjs --dest npm/@atiqul/genesis-memory-model
+        run: node scripts/fetch-model.mjs --dest npm/@xcidos/genesis-memory-model
       - name: Sanity-check the two shipped files exist
         shell: bash
         run: |
-          test -f npm/@atiqul/genesis-memory-model/onnx/model.onnx
-          test -f npm/@atiqul/genesis-memory-model/tokenizer.json
+          test -f npm/@xcidos/genesis-memory-model/onnx/model.onnx
+          test -f npm/@xcidos/genesis-memory-model/tokenizer.json
       - uses: actions/upload-artifact@v4
         with:
           name: model-files
           path: |
-            npm/@atiqul/genesis-memory-model/onnx/model.onnx
-            npm/@atiqul/genesis-memory-model/tokenizer.json
+            npm/@xcidos/genesis-memory-model/onnx/model.onnx
+            npm/@xcidos/genesis-memory-model/tokenizer.json
           if-no-files-found: error
           retention-days: 1
 
@@ -223,7 +223,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: model-files
-          path: npm/@atiqul/genesis-memory-model
+          path: npm/@xcidos/genesis-memory-model
 
       - name: Reassemble binaries into their package dirs
         shell: bash
@@ -231,7 +231,7 @@ jobs:
           # download-artifact restores each under staging-bins/pkgbin-<key>/<binfile>.
           for d in staging-bins/pkgbin-*; do
             key="${d#staging-bins/pkgbin-}"
-            dest="npm/@atiqul/genesis-memory-server-$key"
+            dest="npm/@xcidos/genesis-memory-server-$key"
             mkdir -p "$dest"
             f="$(ls "$d")"
             cp "$d/$f" "$dest/$f"
@@ -253,12 +253,12 @@ jobs:
               || echo "skip $1 (already published or nothing to publish)"
           }
           # 1) only the platform packages whose binary actually built this run
-          for d in npm/@atiqul/genesis-memory-server-*/; do
+          for d in npm/@xcidos/genesis-memory-server-*/; do
             case "$d" in */genesis-memory-server/) continue;; esac   # skip the launcher dir
             bin="${d}genesis-memory-server"; [ -f "${d}genesis-memory-server.exe" ] && bin="${d}genesis-memory-server.exe"
             if [ -f "$bin" ]; then publish_dir "$d"; else echo "no binary for $d — not built, skipping"; fi
           done
           # 2) the shared model (a hard dependency of the launcher)
-          publish_dir npm/@atiqul/genesis-memory-model
+          publish_dir npm/@xcidos/genesis-memory-model
           # 3) the launcher LAST — its exact-version deps must already resolve on the registry
-          publish_dir npm/@atiqul/genesis-memory-server
+          publish_dir npm/@xcidos/genesis-memory-server

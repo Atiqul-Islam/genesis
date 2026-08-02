@@ -1,5 +1,5 @@
 {
-  "name": "@atiqul/genesis-memory-server",
+  "name": "@xcidos/genesis-memory-server",
   "version": "0.1.0",
   "description": "Genesis MCP memory server — thin cross-platform launcher that resolves and spawns the prebuilt native server for the current platform.",
   "keywords": [
@@ -19,7 +19,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Atiqul-Islam/genesis.git",
-    "directory": "npm/@atiqul/genesis-memory-server"
+    "directory": "npm/@xcidos/genesis-memory-server"
   },
   "type": "commonjs",
   "bin": {
@@ -35,16 +35,16 @@
     "access": "public"
   },
   "optionalDependencies": {
-    "@atiqul/genesis-memory-server-darwin-arm64": "0.1.0",
-    "@atiqul/genesis-memory-server-darwin-x64": "0.1.0",
-    "@atiqul/genesis-memory-server-linux-arm64-gnu": "0.1.0",
-    "@atiqul/genesis-memory-server-linux-arm64-musl": "0.1.0",
-    "@atiqul/genesis-memory-server-linux-x64-gnu": "0.1.0",
-    "@atiqul/genesis-memory-server-linux-x64-musl": "0.1.0",
-    "@atiqul/genesis-memory-server-win32-arm64": "0.1.0",
-    "@atiqul/genesis-memory-server-win32-x64": "0.1.0"
+    "@xcidos/genesis-memory-server-darwin-arm64": "0.1.0",
+    "@xcidos/genesis-memory-server-darwin-x64": "0.1.0",
+    "@xcidos/genesis-memory-server-linux-arm64-gnu": "0.1.0",
+    "@xcidos/genesis-memory-server-linux-arm64-musl": "0.1.0",
+    "@xcidos/genesis-memory-server-linux-x64-gnu": "0.1.0",
+    "@xcidos/genesis-memory-server-linux-x64-musl": "0.1.0",
+    "@xcidos/genesis-memory-server-win32-arm64": "0.1.0",
+    "@xcidos/genesis-memory-server-win32-x64": "0.1.0"
   },
   "dependencies": {
-    "@atiqul/genesis-memory-model": "0.1.0"
+    "@xcidos/genesis-memory-model": "0.1.0"
   }
 }

@@ -1,4 +1,4 @@
-# @atiqul/genesis-memory-model
+# @xcidos/genesis-memory-model
 
 Platform-independent embedding model for the **Genesis MCP memory server**. Shipped as a
 separate package so all eight platform binaries share one copy of the weights instead of
@@ -11,7 +11,7 @@ onnx/model.onnx     # ONNX export of the embedder
 tokenizer.json      # matching fast tokenizer
 ```
 
-The launcher (`@atiqul/genesis-memory-server`) resolves this package's directory and passes
+The launcher (`@xcidos/genesis-memory-server`) resolves this package's directory and passes
 it to the native server as `GENESIS_MODEL_DIR`.
 
 ## Model provenance

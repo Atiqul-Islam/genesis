@@ -44,8 +44,8 @@ session_copy/     Session-copy pipeline (Node): capture.js / embed.js / store.js
                   build_session_agent.js
 server/           Rust MCP memory server (genesis-memory-server)
 npm/              npm packaging for the memory server — the launcher package
-                  (@atiqul/genesis-memory-server) plus per-OS/arch binary packages and
-                  the model package (@atiqul/genesis-memory-model)
+                  (@xcidos/genesis-memory-server) plus per-OS/arch binary packages and
+                  the model package (@xcidos/genesis-memory-model)
 scripts/          Helper scripts (e.g. fetch-model.mjs)
 expertise/        Verified expertise reports the agents read
 docs/             Architecture, workflow, and the publish plan
@@ -105,13 +105,13 @@ This downloads `onnx/model.onnx` and `tokenizer.json` for
 ### How the memory server reaches end users
 
 Maintainers/CI compile the `server/` crate per platform and publish the binaries as npm
-packages: a launcher package (`@atiqul/genesis-memory-server`) with per-OS/arch binary
-packages as `optionalDependencies`, plus a model package (`@atiqul/genesis-memory-model`).
-The plugin's `.mcp.json` launches the server with `npx -y @atiqul/genesis-memory-server`, so
+packages: a launcher package (`@xcidos/genesis-memory-server`) with per-OS/arch binary
+packages as `optionalDependencies`, plus a model package (`@xcidos/genesis-memory-model`).
+The plugin's `.mcp.json` launches the server with `npx -y @xcidos/genesis-memory-server`, so
 end users never build Rust — npm resolves the right prebuilt binary for their platform.
 
 > **Status: pre-release / beta.** These npm packages are **not published to the registry
-> yet**, so `npx @atiqul/genesis-memory-server` will not resolve today. The npm/npx flow above
+> yet**, so `npx @xcidos/genesis-memory-server` will not resolve today. The npm/npx flow above
 > describes the intended distribution mechanism, not a currently-installable path. Build the
 > server locally from `server/` (above) while the packages are in beta.
 
@@ -169,7 +169,7 @@ node hooks/test_session_pointer.js
 
 node install/test_bootstrap.js
 node install/test_portability.js
-node "npm/@atiqul/genesis-memory-server/test/launcher.test.js"
+node "npm/@xcidos/genesis-memory-server/test/launcher.test.js"
 
 node session_copy/test_capture.js
 node session_copy/test_embed.js

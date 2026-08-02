@@ -1,5 +1,5 @@
 {
-  "name": "@atiqul/genesis-memory-server-linux-arm64-gnu",
+  "name": "@xcidos/genesis-memory-server-linux-arm64-gnu",
   "version": "0.1.0",
   "description": "Prebuilt genesis-memory-server native binary for Linux arm64 (glibc).",
   "license": "MIT OR Apache-2.0",
@@ -11,7 +11,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Atiqul-Islam/genesis.git",
-    "directory": "npm/@atiqul/genesis-memory-server-linux-arm64-gnu"
+    "directory": "npm/@xcidos/genesis-memory-server-linux-arm64-gnu"
   },
   "os": [
     "linux"

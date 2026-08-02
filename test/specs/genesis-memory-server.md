@@ -151,7 +151,7 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 - Commit the pinned revision string as a constant, captured at first fetch — see "Bootstrap and calibration items".
 - Commit the pinned SHA-256 digest as a constant, captured at first fetch — see "Bootstrap and calibration items".
 - Make embedding tests fail — never skip — with a message directing the developer to run `node scripts/fetch-model.mjs` when the model file is absent, because the BDD suites use the real model with no mocks (§5 #2).
-- The inference engine (pure-Rust **tract**, via `ort`'s `alternative-backend` + `ort-tract`) never supplies the model: it links no native runtime and downloads nothing at build time. The model weights ship separately — `node scripts/fetch-model.mjs` for dev, the `@atiqul/genesis-memory-model` package at runtime, or `GENESIS_MODEL_DIR`.
+- The inference engine (pure-Rust **tract**, via `ort`'s `alternative-backend` + `ort-tract`) never supplies the model: it links no native runtime and downloads nothing at build time. The model weights ship separately — `node scripts/fetch-model.mjs` for dev, the `@xcidos/genesis-memory-model` package at runtime, or `GENESIS_MODEL_DIR`.
 
 **Consolidation (decay + dedup/merge only)**
 

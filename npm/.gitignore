@@ -3,12 +3,12 @@
 # The package.json manifests (including the generated per-platform ones) ARE committed.
 
 # Prebuilt native server binaries (one per platform package)
-@atiqul/genesis-memory-server-*/genesis-memory-server
-@atiqul/genesis-memory-server-*/genesis-memory-server.exe
+@xcidos/genesis-memory-server-*/genesis-memory-server
+@xcidos/genesis-memory-server-*/genesis-memory-server.exe
 
 # Embedding model weights + tokenizer (model package)
-@atiqul/genesis-memory-model/onnx/
-@atiqul/genesis-memory-model/tokenizer.json
+@xcidos/genesis-memory-model/onnx/
+@xcidos/genesis-memory-model/tokenizer.json
 
 # Local install / pack / test artifacts
 **/node_modules/

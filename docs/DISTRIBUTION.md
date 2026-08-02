@@ -16,27 +16,27 @@ Status: **approved architecture, not yet implemented.** Owner: Atiqul. Author: a
 ## Target layout
 
 ```
-@atiqul/genesis-memory-server            # thin launcher (bin/genesis-memory.js) — resolves + spawns
+@xcidos/genesis-memory-server            # thin launcher (bin/genesis-memory.js) — resolves + spawns
   optionalDependencies (exact versions):
-    @atiqul/genesis-memory-server-darwin-arm64      os:darwin  cpu:arm64
-    @atiqul/genesis-memory-server-darwin-x64        os:darwin  cpu:x64
-    @atiqul/genesis-memory-server-linux-x64-gnu     os:linux   cpu:x64   libc:glibc
-    @atiqul/genesis-memory-server-linux-arm64-gnu   os:linux   cpu:arm64 libc:glibc
-    @atiqul/genesis-memory-server-linux-x64-musl    os:linux   cpu:x64   libc:musl
-    @atiqul/genesis-memory-server-linux-arm64-musl  os:linux   cpu:arm64 libc:musl
-    @atiqul/genesis-memory-server-win32-x64         os:win32   cpu:x64
-    @atiqul/genesis-memory-server-win32-arm64       os:win32   cpu:arm64
+    @xcidos/genesis-memory-server-darwin-arm64      os:darwin  cpu:arm64
+    @xcidos/genesis-memory-server-darwin-x64        os:darwin  cpu:x64
+    @xcidos/genesis-memory-server-linux-x64-gnu     os:linux   cpu:x64   libc:glibc
+    @xcidos/genesis-memory-server-linux-arm64-gnu   os:linux   cpu:arm64 libc:glibc
+    @xcidos/genesis-memory-server-linux-x64-musl    os:linux   cpu:x64   libc:musl
+    @xcidos/genesis-memory-server-linux-arm64-musl  os:linux   cpu:arm64 libc:musl
+    @xcidos/genesis-memory-server-win32-x64         os:win32   cpu:x64
+    @xcidos/genesis-memory-server-win32-arm64       os:win32   cpu:arm64
   dependencies:
-    @atiqul/genesis-memory-model                    # 83 MB ONNX weights + tokenizer, platform-independent, shared once
+    @xcidos/genesis-memory-model                    # 83 MB ONNX weights + tokenizer, platform-independent, shared once
 ```
 
 `bin/genesis-memory.js` = esbuild's `generateBinPath` pattern: build `${platform}-${arch}(-${libc})`,
-`require.resolve('@atiqul/genesis-memory-server-<key>/<exe>')`, `spawn(..., {stdio:'inherit'})`.
+`require.resolve('@xcidos/genesis-memory-server-<key>/<exe>')`, `spawn(..., {stdio:'inherit'})`.
 Backstop: `ldd --version` musl check (biome pattern); `GENESIS_MEMORY_BIN` dev override.
 
 `.mcp.json` (plugin AND generated repo `.genesis`):
 ```json
-{ "mcpServers": { "genesis-memory": { "command": "npx", "args": ["-y", "@atiqul/genesis-memory-server"] } } }
+{ "mcpServers": { "genesis-memory": { "command": "npx", "args": ["-y", "@xcidos/genesis-memory-server"] } } }
 ```
 
 ## Self-contained binary (per platform, one file)
@@ -62,7 +62,7 @@ Backstop: `ldd --version` musl check (biome pattern); `GENESIS_MEMORY_BIN` dev o
 1. 8-row build matrix (all triples), all from the pure-Rust **tract** path: native `cargo` for host-arch
    targets, `cargo-zigbuild` for cross / musl / low-glibc-floor. No ONNX-Runtime prebuilt special-casing.
 2. macOS rows: `codesign --options runtime` → `notarytool submit --wait` (ad-hoc sign if no Apple secrets).
-3. Stage each binary into `npm/@atiqul/genesis-memory-server-<key>/`; `generate-platform-packages.mjs`
+3. Stage each binary into `npm/@xcidos/genesis-memory-server-<key>/`; `generate-platform-packages.mjs`
    syncs versions.
 4. Publish job: `npm publish --provenance --access public` — platform packages first, then model, then the
    launcher last (its exact-version deps must resolve).
@@ -79,19 +79,19 @@ inference runtime (`onnxruntime`/`DirectML`).
 - ✅ Ported **`assemble.py` → `assemble.js`**: emits `node ...` hook commands + braced `${CLAUDE_PROJECT_DIR}`;
   wraps `relpath` in try/catch for cross-drive Windows. (`build_plugin_agents.py` + `install.py` ported too.)
 - ✅ Ported **`bootstrap.py` → `bootstrap.js`**: dropped the "build it first" exit and the binary/model copy;
-  generated repo `.mcp.json` uses `npx -y @atiqul/genesis-memory-server` (no local build).
+  generated repo `.mcp.json` uses `npx -y @xcidos/genesis-memory-server` (no local build).
 - **`server/src/embed.rs`:** gate `use std::os::unix::fs::PermissionsExt` + the mode assertion behind `#[cfg(unix)]`.
 - **`rust-toolchain.toml`** (pin stable) + repo-root **`.gitattributes`** (`* text=auto`, `*.sh`/`*.js` `eol=lf`).
 - ✅ Ported `test_portability.py` → `test_portability.js` (asserts the Node command, not `python3`) and
   `test_bootstrap.py` → `test_bootstrap.js` (asserts the npx `.mcp.json`); added a Node launcher test at
-  `npm/@atiqul/genesis-memory-server/test/launcher.test.js`.
+  `npm/@xcidos/genesis-memory-server/test/launcher.test.js`.
 - Retired the Linux-only `scripts/fetch-model` bash **and** the `scripts/fetch-model.py` Python in
   favour of a single cross-platform Node `scripts/fetch-model.mjs` (Node stdlib only — no curl,
   sha256sum, shell, or Python), so the only runtime a user's machine needs is Node.
 
 ## Needs Atiqul (outward-facing / credentials)
 
-- npm scope `@atiqul` (or chosen) + an npm publish token (CI secret).
+- npm scope `@xcidos` (or chosen) + an npm publish token (CI secret).
 - Apple Developer ID cert + notarization creds (for signed macOS binaries) — or ship macOS later.
 - Decision to publish the packages publicly (this is the real beta publish).
 

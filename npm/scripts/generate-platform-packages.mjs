@@ -16,8 +16,8 @@
 //   node scripts/generate-platform-packages.mjs --check        # verify only; nonzero exit if drift
 //
 // CI (release.yml) runs this after checkout with the release version, THEN stages each
-// platform's native binary into the matching npm/@atiqul/genesis-memory-server-<key>/ dir
-// (and the model into npm/@atiqul/genesis-memory-model/) before `npm publish`.
+// platform's native binary into the matching npm/@xcidos/genesis-memory-server-<key>/ dir
+// (and the model into npm/@xcidos/genesis-memory-model/) before `npm publish`.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -25,10 +25,10 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const NPM_ROOT = resolve(HERE, ".."); // .../genesis/npm
-const SCOPE_DIR = join(NPM_ROOT, "@atiqul");
+const SCOPE_DIR = join(NPM_ROOT, "@xcidos");
 const LAUNCHER_PKG_PATH = join(SCOPE_DIR, "genesis-memory-server", "package.json");
 
-const SCOPE = "@atiqul";
+const SCOPE = "@xcidos";
 const SERVER_PREFIX = "genesis-memory-server-";
 const MODEL_PKG = `${SCOPE}/genesis-memory-model`;
 const BIN_STEM = "genesis-memory-server"; // Cargo [[bin]] name
@@ -67,7 +67,7 @@ function humanFor(t) {
 
 function manifestFor(t, version) {
   const name = `${SCOPE}/${SERVER_PREFIX}${t.key}`;
-  const dir = `npm/@atiqul/${SERVER_PREFIX}${t.key}`;
+  const dir = `npm/@xcidos/${SERVER_PREFIX}${t.key}`;
   // Object key order is significant for a stable diff: keep libc between cpu and files.
   const m = {
     name,
@@ -154,7 +154,7 @@ function main() {
   };
   const launcherStr = JSON.stringify(launcherDesired, null, 2) + "\n";
   if (readFileSync(LAUNCHER_PKG_PATH, "utf8") !== launcherStr) {
-    drift.push("@atiqul/genesis-memory-server/package.json");
+    drift.push("@xcidos/genesis-memory-server/package.json");
     if (!args.check) writeJson(LAUNCHER_PKG_PATH, launcherDesired);
   }
 
@@ -165,7 +165,7 @@ function main() {
     if (model.version !== version) {
       const modelStr = JSON.stringify({ ...model, version }, null, 2) + "\n";
       if (readFileSync(modelPath, "utf8") !== modelStr) {
-        drift.push("@atiqul/genesis-memory-model/package.json");
+        drift.push("@xcidos/genesis-memory-model/package.json");
         if (!args.check) writeFileSync(modelPath, modelStr);
       }
     }

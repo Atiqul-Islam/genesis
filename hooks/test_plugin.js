@@ -148,8 +148,8 @@ function main() {
   // ---- .mcp.json ----
   const mj = JSON.parse(readText(path.join(REPO, ".mcp.json")));
   const gm = mj.mcpServers["genesis-memory"];
-  check(".mcp.json launcher: npx @atiqul/genesis-memory-server",
-        gm.command === "npx" && gm.args.some((arg) => arg.indexOf("@atiqul/genesis-memory-server") !== -1));
+  check(".mcp.json launcher: npx @xcidos/genesis-memory-server",
+        gm.command === "npx" && gm.args.some((arg) => arg.indexOf("@xcidos/genesis-memory-server") !== -1));
 
   // ---- dormancy: NO settings.json agent auto-activation ----
   check("settings.json is absent (no global agent:sensei auto-activation)",

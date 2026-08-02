@@ -4,7 +4,7 @@
    resolve the repo store, and re-run is idempotent (preserves the memory DB).
 
    Faithful Node (CommonJS, stdlib-only) port of test_bootstrap.py, updated for the npm-distributed server:
-   the memory server is delivered by `npx @atiqul/genesis-memory-server` (no committed binary + model copy),
+   the memory server is delivered by `npx @xcidos/genesis-memory-server` (no committed binary + model copy),
    so this test asserts the npx wiring instead of copied artifacts. Fast (no multi-GB copy).
 
    Run:  node install/test_bootstrap.js
@@ -91,8 +91,8 @@ function main() {
     const gm = mcp.mcpServers["genesis-memory"];
     check(".mcp.json command → npx (no python3, no local Rust binary)", gm.command === "npx");
     check(
-      ".mcp.json args launch @atiqul/genesis-memory-server",
-      Array.isArray(gm.args) && gm.args.some((a) => a === "@atiqul/genesis-memory-server")
+      ".mcp.json args launch @xcidos/genesis-memory-server",
+      Array.isArray(gm.args) && gm.args.some((a) => a === "@xcidos/genesis-memory-server")
     );
     check(
       ".mcp.json env → repo-local db + portable export under .genesis/",

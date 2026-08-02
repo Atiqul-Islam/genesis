@@ -100,13 +100,13 @@ Genesis is wired at the plugin level, because a plugin-shipped agent can't carry
 - **PreToolUse (Bash) → `enforce_research.js`** blocks assembling a non-built-in agent unless the expertise-research step ran.
 - **Stop / SubagentStop → `validate.js` + `review.js`** refuse to let an agent finish while a checkable rule is still violated or its expertise declaration isn't credible, and add an independent review pass for the judgment rules a regex can't check.
 
-The **memory server** is delivered over npm rather than as a committed binary. The plugin's `.mcp.json` launches it with `npx -y @atiqul/genesis-memory-server` — a thin launcher package whose per-OS/arch `optionalDependencies` (macOS, Linux, and Windows on x64 and arm64) resolve the prebuilt native `genesis-memory-server` for your platform, alongside the pinned embedding model in `@atiqul/genesis-memory-model`. npm and the launcher pick the right binary for you, and the MCP stream passes through untouched. **These packages are not published to npm yet** (pre-release/beta in progress), so until they are, use the build-from-source path in [Requirements](#requirements).
+The **memory server** is delivered over npm rather than as a committed binary. The plugin's `.mcp.json` launches it with `npx -y @xcidos/genesis-memory-server` — a thin launcher package whose per-OS/arch `optionalDependencies` (macOS, Linux, and Windows on x64 and arm64) resolve the prebuilt native `genesis-memory-server` for your platform, alongside the pinned embedding model in `@xcidos/genesis-memory-model`. npm and the launcher pick the right binary for you, and the MCP stream passes through untouched. **These packages are not published to npm yet** (pre-release/beta in progress), so until they are, use the build-from-source path in [Requirements](#requirements).
 
 ## Requirements
 
 - **Claude Code with plugin support** (the `/plugin` marketplace system).
 - **Node.js on your PATH.** The enforcement hooks and the `npx` memory-server launcher run on **Node 18+**; the optional **session-copy** feature reads SQLite via the built-in `node:sqlite` and needs **Node 24+**. No Python runtime is required, and the hooks have no third-party runtime dependencies.
-- **For the memory server:** prebuilt native binaries are packaged per OS/arch on npm (macOS, Linux, and Windows on x64 and arm64), and `npx -y @atiqul/genesis-memory-server` resolves the right one for your platform. **The npm packages are not published yet** (pre-release/beta), so until then — or on any unpackaged platform — build it from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release`, fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN` and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
+- **For the memory server:** prebuilt native binaries are packaged per OS/arch on npm (macOS, Linux, and Windows on x64 and arm64), and `npx -y @xcidos/genesis-memory-server` resolves the right one for your platform. **The npm packages are not published yet** (pre-release/beta), so until then — or on any unpackaged platform — build it from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release`, fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN` and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
 
 ## Status
 
@@ -114,7 +114,7 @@ Genesis is at **v0.1.0, before its first published release**, and is honest abou
 
 - The two-agent builder, the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (Node hooks/installer/session-copy tests, plus the Rust server suite).
 - The **memory server (v1)** — `store` / `recall` / `consolidate` — is built and tested: 86 unit tests and 17 BDD scenarios pass in release against the real ONNX model, real SQLite, and the real spawned stdio server. Its `consolidate` summarize/evict pass is deferred to v2 (see `server/README.md`).
-- The memory server's **npm distribution** (`npx @atiqul/genesis-memory-server`) activates once the `@atiqul/genesis-memory-server` package and its per-platform binaries are published to npm. Until then, use the build-from-source path above.
+- The memory server's **npm distribution** (`npx @xcidos/genesis-memory-server`) activates once the `@xcidos/genesis-memory-server` package and its per-platform binaries are published to npm. Until then, use the build-from-source path above.
 
 No usage, star, or production-deployment claims are made here because none would be verifiable yet.
 

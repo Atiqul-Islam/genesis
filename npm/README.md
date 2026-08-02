@@ -8,7 +8,7 @@ there is no Python, no local Rust build, and no run-time network access.
 Install/run:
 
 ```json
-{ "mcpServers": { "genesis-memory": { "command": "npx", "args": ["-y", "@atiqul/genesis-memory-server"] } } }
+{ "mcpServers": { "genesis-memory": { "command": "npx", "args": ["-y", "@xcidos/genesis-memory-server"] } } }
 ```
 
 ## Layout
@@ -21,7 +21,7 @@ npm/
 │   └── generate-platform-packages.mjs          ← emits the 8 platform manifests + syncs versions
 ├── templates/
 │   └── platform-package.example.json           ← reference shape of one platform manifest
-└── @atiqul/
+└── @xcidos/
     ├── genesis-memory-server/                  ← LAUNCHER (published bin: `genesis-memory`)
     │   ├── package.json                         ← optionalDependencies (8, exact) + model dep (exact)
     │   ├── bin/genesis-memory.js                ← esbuild generateBinPath: resolve + spawn
@@ -38,14 +38,14 @@ The eight platform keys: `darwin-arm64`, `darwin-x64`, `linux-x64-gnu`, `linux-a
 
 ## How resolution works
 
-`@atiqul/genesis-memory-server` declares each platform package as an **`optionalDependencies`**
+`@xcidos/genesis-memory-server` declares each platform package as an **`optionalDependencies`**
 entry gated on `os`/`cpu`/`libc`, so a normal `npm install` downloads only the one binary that
 matches the machine. At run time `bin/genesis-memory.js`:
 
 1. Builds the key `${platform}-${arch}(-${libc})` (Linux libc via `process.report`, backstopped
    by `ldd --version` — the biome pattern).
-2. `require.resolve('@atiqul/genesis-memory-server-<key>/genesis-memory-server[.exe]')`.
-3. Resolves `@atiqul/genesis-memory-model` and exports its dir as `GENESIS_MODEL_DIR` (the
+2. `require.resolve('@xcidos/genesis-memory-server-<key>/genesis-memory-server[.exe]')`.
+3. Resolves `@xcidos/genesis-memory-model` and exports its dir as `GENESIS_MODEL_DIR` (the
    directory holding `onnx/model.onnx` + `tokenizer.json`, which the server reads).
 4. `spawn(bin, argv, { stdio: 'inherit' })`, forwards termination signals, and exits with the
    child's status.
@@ -81,9 +81,9 @@ node npm/scripts/generate-platform-packages.mjs --check 0.1.0
 Because the launcher pins **exact** versions of its dependencies, every dependency must already
 exist on the registry before the launcher is published. Publish in this order:
 
-1. **All 8 platform packages** — `@atiqul/genesis-memory-server-<key>` (each with its binary staged in).
-2. **The model package** — `@atiqul/genesis-memory-model` (with weights + tokenizer staged in).
-3. **The launcher last** — `@atiqul/genesis-memory-server`.
+1. **All 8 platform packages** — `@xcidos/genesis-memory-server-<key>` (each with its binary staged in).
+2. **The model package** — `@xcidos/genesis-memory-model` (with weights + tokenizer staged in).
+3. **The launcher last** — `@xcidos/genesis-memory-server`.
 
 Each with:
 

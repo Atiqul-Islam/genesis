@@ -14,7 +14,7 @@
 //
 // Used by:
 //   * .github/workflows/release.yml — to fetch + package the model into a release asset.
-//   * the @atiqul/genesis-memory-model npm package — CI packages this model into it; the Node
+//   * the @xcidos/genesis-memory-model npm package — CI packages this model into it; the Node
 //     launcher pulls it from npm, so end users need no runtime model download.
 //
 // Usage:

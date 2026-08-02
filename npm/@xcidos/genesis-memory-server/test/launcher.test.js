@@ -12,7 +12,7 @@
      * fail-closed: a missing override, or no resolvable platform package, exits non-zero with a clear stderr
        message — the launcher never silently continues.
 
-   Run:  node "npm/@atiqul/genesis-memory-server/test/launcher.test.js"
+   Run:  node "npm/@xcidos/genesis-memory-server/test/launcher.test.js"
 */
 "use strict";
 const fs = require("fs");

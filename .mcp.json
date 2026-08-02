@@ -2,7 +2,7 @@
   "mcpServers": {
     "genesis-memory": {
       "command": "npx",
-      "args": ["-y", "@atiqul/genesis-memory-server"]
+      "args": ["-y", "@xcidos/genesis-memory-server"]
     }
   }
 }

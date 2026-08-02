@@ -96,7 +96,7 @@ jobs:
             hooks/test_plugin.js hooks/test_vendored_skills.js \
             install/test_bootstrap.js install/test_portability.js \
             session_copy/test_capture.js session_copy/test_store.js \
-            npm/@atiqul/genesis-memory-server/test/launcher.test.js; do
+            npm/@xcidos/genesis-memory-server/test/launcher.test.js; do
             if [ -f "$t" ]; then echo "== $t =="; node "$t"; else echo "skip (absent): $t"; fi
           done
 

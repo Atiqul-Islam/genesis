@@ -2,7 +2,7 @@
 /* Bootstrap a SELF-CONTAINED, repo-level Genesis workspace at <target_repo>/.genesis/.
 
    Faithful Node (CommonJS, stdlib-only) port of bootstrap.py, updated for the npm-distributed memory server:
-   the generated repo `.mcp.json` launches the server via `npx @atiqul/genesis-memory-server` (Node is the one
+   the generated repo `.mcp.json` launches the server via `npx @xcidos/genesis-memory-server` (Node is the one
    prerequisite) instead of a committed Rust binary — so there is NO local Rust build and NO multi-GB binary +
    model copy. Node is the only runtime a user's machine needs.
 
@@ -15,7 +15,7 @@
         hooks/, skills/ (the team skills build-agent/research-expertise + the spec-forge suite), team/
         (sensei+method personas/behaviors), install/ (assemble/install/bootstrap).
      2. Registers a repo-local `genesis-memory` MCP server in <repo>/.mcp.json (merged, not clobbered) that runs
-        `npx -y @atiqul/genesis-memory-server`, pointing the memory DB + portable JSONL export at <repo>/.genesis/.
+        `npx -y @xcidos/genesis-memory-server`, pointing the memory DB + portable JSONL export at <repo>/.genesis/.
      3. Installs sensei + method into <repo>/.claude/agents/ via the assembler with genesis_home = <repo>/.genesis,
         so their hook commands reference <repo>/.genesis/hooks/*.js and the validate/review hooks resolve the
         store at <repo>/.genesis/expertise/ through their existing HOOK_DIR/../expertise relative logic.
@@ -146,7 +146,7 @@ function main() {
   const memExport = path.join(dest, "memory", "memory.jsonl");
 
   // 3. Register the repo-local memory MCP server in <repo>/.mcp.json (merge; preserve other servers). The
-  //    server is delivered via npx (@atiqul/genesis-memory-server resolves the prebuilt native binary + the
+  //    server is delivered via npx (@xcidos/genesis-memory-server resolves the prebuilt native binary + the
   //    ONNX model package for this platform) — NO local Rust build, and the model dir is provided by the npm
   //    model package, so no GENESIS_MODEL_DIR is set here. The repo-local DB + portable export keep memory
   //    per-repo and travelling with the repo across systems.
@@ -165,7 +165,7 @@ function main() {
   }
   mcp.mcpServers["genesis-memory"] = {
     command: "npx",
-    args: ["-y", "@atiqul/genesis-memory-server"],
+    args: ["-y", "@xcidos/genesis-memory-server"],
     env: {
       GENESIS_MEMORY_DB: memDb,
       // The committed, cross-system-portable mirror. The server snapshots to this after every
@@ -206,7 +206,7 @@ function main() {
         gitignore: path.join(target, ".gitignore"),
         gitignore_warning: gitignoreNote,
         mcp_json: mcpPath,
-        mcp_server: "npx -y @atiqul/genesis-memory-server",
+        mcp_server: "npx -y @xcidos/genesis-memory-server",
         next: "Open Claude Code in the repo; talk to Sensei to build agents (expertise via the research-expertise skill).",
       },
       null,
