@@ -56,7 +56,7 @@ jobs:
         # those platform packages are published.
         include:
           - { key: darwin-arm64,  runner: macos-14,       target: aarch64-apple-darwin,      tool: cargo }
-          - { key: darwin-x64,    runner: macos-13,       target: x86_64-apple-darwin,       tool: cargo }
+          - { key: darwin-x64,    runner: macos-14,       target: x86_64-apple-darwin,       tool: cargo }    # cross-compiled on Apple Silicon — macos-13 Intel runners queue for ages; x64 codegen/SIMD is fine (only ARM64 asm was the problem)
           - { key: linux-x64-gnu, runner: ubuntu-22.04,   target: x86_64-unknown-linux-gnu,  tool: cargo }    # glibc 2.35 floor
           - { key: linux-x64-musl,runner: ubuntu-22.04,   target: x86_64-unknown-linux-musl, tool: zigbuild } # fully static
           - { key: win32-x64,     runner: windows-latest, target: x86_64-pc-windows-msvc,    tool: cargo }
