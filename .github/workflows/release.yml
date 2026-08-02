@@ -42,6 +42,7 @@ jobs:
   build:
     name: build ${{ matrix.key }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60     # bound any single target (e.g. a slow/absent arm64 runner) so it can't hang publish
     strategy:
       fail-fast: false      # keep every platform independent — one target failing never sinks the rest
       matrix:
@@ -56,7 +57,7 @@ jobs:
           - { key: linux-x64-musl,   runner: ubuntu-22.04,   target: x86_64-unknown-linux-musl,  tool: zigbuild } # fully static
           - { key: linux-arm64-musl, runner: ubuntu-22.04,   target: aarch64-unknown-linux-musl, tool: zigbuild } # fully static
           - { key: win32-x64,        runner: windows-latest, target: x86_64-pc-windows-msvc,     tool: cargo }
-          - { key: win32-arm64,      runner: windows-latest, target: aarch64-pc-windows-msvc,    tool: cargo }    # cross-compiled on the x64 runner
+          - { key: win32-arm64,      runner: windows-11-arm, target: aarch64-pc-windows-msvc,    tool: cargo }    # NATIVE arm64 runner: tract-linalg's ARM64 asm can't cross-assemble on an x64 MSVC host (LNK1181)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,11 +70,18 @@ jobs:
           rustup target add "${{ matrix.target }}"
           rustc --version && cargo --version
 
-      - name: Install zigbuild toolchain (cross + glibc-floor + musl)
+      - name: Install zig + cargo-zigbuild (cross + glibc-floor + musl)
         if: matrix.tool == 'zigbuild'
         shell: bash
         run: |
-          pipx install ziglang || pip install ziglang
+          # Pin zig 0.13.0 (the version cargo-zigbuild builds cleanly with; `pip install ziglang`
+          # pulls 0.16.0 AND never exposes a `zig` on PATH -> "Failed to find zig"). Host is x64
+          # ubuntu; zig cross-compiles to the musl/arm targets. Put it on PATH via GITHUB_PATH.
+          ZIG=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG}/zig-linux-x86_64-${ZIG}.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p "$HOME/zig" && tar -xf /tmp/zig.tar.xz -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
+          "$HOME/zig/zig" version
           cargo install --locked cargo-zigbuild
 
       - name: Build (cargo)
@@ -197,6 +205,10 @@ jobs:
     name: publish to npm
     runs-on: ubuntu-22.04
     needs: [build, model]
+    # Publish whatever built: a single straggler target must not block the whole release. Runs as
+    # long as the model built; the publish step skips any platform package whose binary is absent,
+    # and npm treats a missing optionalDependency as non-fatal at install time.
+    if: ${{ always() && needs.model.result == 'success' }}
     steps:
       - uses: actions/checkout@v4
         with:
