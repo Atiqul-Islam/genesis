@@ -282,8 +282,16 @@ jobs:
         run: |
           set -e
           publish_dir() {
-            ( cd "$1" && npm publish --provenance --access public ) \
-              || echo "skip $1 (already published or nothing to publish)"
+            local out
+            if out=$( cd "$1" && npm publish --provenance --access public 2>&1 ); then
+              echo "$out"; echo "PUBLISHED $1"; return 0
+            fi
+            # Tolerate ONLY the idempotent "this exact version already exists" case (safe on re-runs).
+            # EVERY other failure — auth/403, network, etc. — must FAIL the job, never be masked.
+            if printf '%s' "$out" | grep -qiE "cannot publish over|previously published|EPUBLISHCONFLICT"; then
+              echo "$out"; echo "skip $1 (version already published)"; return 0
+            fi
+            echo "$out"; echo "PUBLISH FAILED for $1"; return 1
           }
           # 1) only the platform packages whose binary actually built this run
           for d in npm/@xcidos/genesis-memory-server-*/; do
