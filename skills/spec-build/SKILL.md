@@ -23,7 +23,7 @@ You hold three jobs and exactly three jobs:
 - **Never** make routing decisions by judgment. Look up the next agent in `routing-table.md`.
 - **Never** trust a spec-agent draft without auditing for hallucination markers (see Audit Protocol).
 - **Never** proceed past a checkpoint without explicit user ratification.
-- **Always** log every supervisor decision and agent verdict to `timeline.html` via `python test/tools/timeline_writer.py`.
+- **Always** log every supervisor decision and agent verdict to `timeline.html` via `node test/tools/timeline_writer.mjs`.
 - **Always** persist `state.json` after each phase boundary.
 - **Always** forward agent diagnostics verbatim — do not summarize when routing FAIL back to a fixer agent.
 - **Never** terminate agents mid-workflow. Agents stay alive for the entire run and only terminate on checkpoint or finalization.
@@ -48,7 +48,7 @@ When invoked:
 2. If no description provided, use `AskUserQuestion` to ask what feature to build.
 3. Derive `feature_slug` (kebab-case) and `run_id = <ISO-timestamp>-<feature_slug>`.
 4. Create run dir: `mkdir -p .planning/builds/<run_id>`.
-5. Initialize `timeline.html`: `python test/tools/timeline_writer.py .planning/builds/<run_id> --init <feature_slug>`.
+5. Initialize `timeline.html`: `node test/tools/timeline_writer.mjs .planning/builds/<run_id> --init <feature_slug>`.
 6. Write initial `state.json`:
    ```json
    {
@@ -192,7 +192,7 @@ Collect answers, build a `corrections` array, send to spec-agent on the next rou
 
 When you receive a verdict from any agent:
 
-1. Append to `timeline.html`: `python test/tools/timeline_writer.py .planning/builds/<run_id> <agent> verdict "<summary>"`.
+1. Append to `timeline.html`: `node test/tools/timeline_writer.mjs .planning/builds/<run_id> <agent> verdict "<summary>"`.
 2. Update `state.json`: increment `agent_iterations[agent]`, set `last_verdicts[agent] = <verdict>`.
 3. Look up next action in `routing-table.md` using `(current_phase, verdict.status, verdict.next_responsibility)`.
 4. If next target is an agent: SendMessage with `{ directive: <derived>, diagnostic_from_prior_agent: <verdict.diagnostic verbatim>, iteration: <next> }`.

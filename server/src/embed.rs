@@ -1,16 +1,22 @@
-//! Local ONNX embeddings — `ort` (ONNX Runtime) + `tokenizers`.
+//! Local embeddings — `ort` (pure-Rust **tract** backend) + `tokenizers`.
+//!
+//! `ort` keeps its API, but the inference engine is tract, not ONNX Runtime: the crate is
+//! built with `alternative-backend` and [`ort_tract::api`] is installed via
+//! [`install_tract_backend`] before any session is built. tract loads the SAME
+//! `onnx/model.onnx` + `tokenizer.json` (the model package is unchanged), so this builds for
+//! every target with no prebuilt binary, no cmake, and no sidecar dylib.
 //!
 //! Loads a small sentence model (primary: `all-MiniLM-L6-v2`, 384-dim, **mean** pooling)
 //! and turns text into an L2-normalized vector. Pooling must match the model: MiniLM =
 //! mean pool; if `bge-small-en-v1.5` is chosen instead, switch to CLS pooling
-//! (`pooled[d] = hidden[[0,0,d]]`) and prepend the query instruction. Determinism knobs
-//! for golden-vector tests: `with_deterministic_compute(true)`, `with_intra_threads(1)`.
+//! (`pooled[d] = hidden[[0,0,d]]`) and prepend the query instruction. Determinism is
+//! inherent to the tract backend (pure-Rust, CPU-only, single-threaded inference), so
+//! reproducible golden vectors need no ONNX-Runtime determinism knobs.
 //! See `docs/SPEC_FORGE_RUST_UPDATE.md` §2.3c + §5 best-practice #3.
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use ort::ep::CPU;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::TensorRef;
@@ -19,7 +25,7 @@ use tokenizers::Tokenizer;
 /// Embedding vector dimensionality (all-MiniLM-L6-v2 / bge-small-en-v1.5 = 384).
 pub const EMBED_DIM: usize = 384;
 
-/// Bootstrap item 1: the pinned HF commit, captured by `scripts/fetch-model` at first fetch.
+/// Bootstrap item 1: the pinned HF commit, captured by `scripts/fetch-model.mjs` at first fetch.
 pub const MODEL_REVISION: &str = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf";
 /// Bootstrap item 2: SHA-256 of `onnx/model.onnx` at [`MODEL_REVISION`], captured at first fetch.
 pub const MODEL_SHA256: &str = "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452";
@@ -49,6 +55,12 @@ pub fn model_paths() -> (PathBuf, PathBuf) {
 /// Errors specific to embedding (wrapped into `anyhow::Error` at the API boundary).
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedError {
+    /// The model file is missing or is not a regular file. Guarded BEFORE handing the path to
+    /// tract: tract's failed-`commit_from_file` path frees invalidly and aborts the process
+    /// (`munmap_chunk(): invalid pointer`, SIGABRT) rather than returning a catchable error, so
+    /// the only safe defense is to never call it with a bad path.
+    #[error("model file not found or not a regular file: {0}")]
+    ModelFile(String),
     /// Tokenizer load or encode failure (the `tokenizers` error is not `std::error::Error`).
     #[error("tokenizer error: {0}")]
     Tokenize(String),
@@ -57,7 +69,7 @@ pub enum EmbedError {
     OutputRank(String),
 }
 
-/// A local sentence embedder: an ONNX Runtime session plus its tokenizer.
+/// A local sentence embedder: a tract inference session plus its tokenizer.
 pub struct Embedder {
     session: Session,
     tokenizer: Tokenizer,
@@ -69,6 +81,19 @@ impl std::fmt::Debug for Embedder {
     }
 }
 
+/// Installs the pure-Rust tract backend as `ort`'s inference engine (idempotent).
+///
+/// `ort` is compiled with the `alternative-backend` feature (ONNX Runtime linking disabled),
+/// and tract supplies the `OrtApi` via [`ort_tract::api`]. [`ort::set_api`] uses
+/// `try_insert_with`, so the first call wins and every later call — the embedder loads lazily
+/// and may be constructed more than once across `store`/`recall`/import — is a safe no-op.
+/// Must run before any [`Session`] is built. The model, inputs
+/// (`input_ids`/`attention_mask`/`token_type_ids`) and 384-dim output are unchanged; only the
+/// engine differs from ONNX Runtime.
+fn install_tract_backend() {
+    ort::set_api(ort_tract::api());
+}
+
 /// Converts a non-`Send`/`Sync` `ort::Error` into an `anyhow::Error` by rendering it
 /// to a fresh owned string (anyhow requires `Send + Sync + 'static` error payloads).
 /// Takes the error by value so it composes directly with `Result::map_err`.
@@ -78,26 +103,36 @@ fn ort_anyhow(e: ort::Error) -> anyhow::Error {
 }
 
 impl Embedder {
-    /// Loads the ONNX model and tokenizer from disk with determinism knobs pinned
-    /// (CPU execution provider, single intra-thread, deterministic compute, fixed
-    /// optimization level) so golden-vector comparisons are reproducible (§5 #3).
+    /// Loads the ONNX model and tokenizer from disk on the tract backend, which is CPU-only
+    /// and deterministic by construction, so golden-vector comparisons are reproducible (§5 #3).
     ///
     /// # Errors
     ///
     /// Returns an error if the session or tokenizer fails to load.
     pub fn load(model_path: &str, tokenizer_path: &str) -> Result<Self> {
+        // Fail-closed BEFORE tract sees the path: tract's failed-commit_from_file path aborts
+        // the process (munmap_chunk/SIGABRT) instead of returning an error, so a missing model
+        // must be rejected here rather than handed to tract.
+        if !Path::new(model_path).is_file() {
+            return Err(EmbedError::ModelFile(model_path.to_string()).into());
+        }
         let session = Self::build_session(model_path).map_err(ort_anyhow)?;
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| EmbedError::Tokenize(e.to_string()))?;
         Ok(Self { session, tokenizer })
     }
 
-    /// Builds the ONNX session with the pinned determinism knobs.
+    /// Builds the inference session on the tract backend.
+    ///
+    /// tract implements only a subset of the `OrtApi`: `SetSessionGraphOptimizationLevel` is
+    /// wired, but execution-provider registration, `with_intra_threads`, and
+    /// `with_deterministic_compute` fall through to `ort_sys` stubs and corrupt the heap if
+    /// called (`munmap_chunk(): invalid pointer`). tract is pure-Rust, CPU-only, and
+    /// single-threaded/deterministic by construction, so those ONNX-Runtime knobs are
+    /// unnecessary here — the session is built with only the supported optimization level.
     fn build_session(model_path: &str) -> ort::Result<Session> {
+        install_tract_backend();
         Session::builder()?
-            .with_execution_providers([CPU::default().build()])?
-            .with_intra_threads(1)?
-            .with_deterministic_compute(true)?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .commit_from_file(model_path)
     }
@@ -213,6 +248,7 @@ fn mean_pool_l2(hidden: &ndarray::Array3<f32>, mask: &[i64], seq: usize) -> Vec<
 mod tests {
     use super::{model_paths, Embedder, EMBED_DIM, MODEL_REPO, MODEL_REVISION, MODEL_SHA256};
     use sha2::{Digest, Sha256};
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
@@ -228,13 +264,13 @@ mod tests {
 
     /// Path to the committed model-fetch script.
     fn fetch_model_path() -> PathBuf {
-        repo_root().join("scripts").join("fetch-model")
+        repo_root().join("scripts").join("fetch-model.mjs")
     }
 
-    /// The full text of `scripts/fetch-model` (the source of truth these provenance
+    /// The full text of `scripts/fetch-model.mjs` (the source of truth these provenance
     /// tests inspect).
     fn fetch_model_text() -> String {
-        std::fs::read_to_string(fetch_model_path()).expect("read scripts/fetch-model")
+        std::fs::read_to_string(fetch_model_path()).expect("read scripts/fetch-model.mjs")
     }
 
     // ─── Embeddings ──────────────────────────────────────────────────────────
@@ -252,7 +288,7 @@ mod tests {
         let (model, tok) = model_paths();
         assert!(
             model.exists(),
-            "model missing at {}: run `scripts/fetch-model`",
+            "model missing at {}: run `node scripts/fetch-model.mjs`",
             model.display()
         );
         Embedder::load(
@@ -309,7 +345,7 @@ mod tests {
         let script = fetch_model_text();
         assert!(
             script.contains(MODEL_REPO),
-            "scripts/fetch-model must target {MODEL_REPO}"
+            "scripts/fetch-model.mjs must target {MODEL_REPO}"
         );
         assert!(
             script.contains("all-MiniLM-L6-v2"),
@@ -514,7 +550,42 @@ mod tests {
         );
     }
 
+    /// Backend-agnostic semantic-correctness gate for the tract embedder: independent of any
+    /// frozen fixture, it proves the embeddings still carry meaning after the ONNX-Runtime →
+    /// tract backend swap. A unit-norm 384-dim vector, and a known-SIMILAR sentence pair must
+    /// score a strictly higher cosine similarity than a known-DISSIMILAR pair. This is the
+    /// evidence that had to hold BEFORE the golden vector was regenerated on the tract backend.
+    #[test]
+    fn tract_embeddings_are_semantically_correct() {
+        let mut e = load_embedder();
+        let anchor = e.embed("the cat sat on the mat").expect("embed anchor");
+        assert_eq!(anchor.len(), EMBED_DIM, "384-dim");
+        approx::assert_abs_diff_eq!(l2_norm(&anchor), 1.0, epsilon = 1e-4);
+
+        let similar = e.embed("a cat is sitting on a rug").expect("embed similar");
+        let dissimilar = e
+            .embed("quantum chromodynamics of gluon fields")
+            .expect("embed dissimilar");
+        let sim = cosine(&anchor, &similar);
+        let dis = cosine(&anchor, &dissimilar);
+        assert!(
+            sim > dis,
+            "a semantically similar sentence must be closer than a dissimilar one \
+             (similar cosine {sim} !> dissimilar cosine {dis})"
+        );
+    }
+
     /// Golden-vector fixture (bootstrap item 3): frozen output for a fixed input.
+    ///
+    /// PROVENANCE: this fixture is **tract-backend-generated**. When the engine was swapped
+    /// from ONNX Runtime to the pure-Rust tract backend the vector was regenerated with
+    /// `capture_golden_vector` (tract's fp math differs slightly from ONNX Runtime, so the
+    /// ONNX-Runtime-era vector no longer matched at 1e-4). Semantic correctness was proven
+    /// FIRST by `tract_embeddings_are_semantically_correct` before regenerating. tract is
+    /// deterministic + single-threaded, so tract-vs-tract stays bit-identical and the 1e-4 /
+    /// cosine >= 0.9999 assertion below now pins mean-pool correctness, output[0] =
+    /// last_hidden_state, the token_type_ids input, and reproducibility on the tract engine.
+    /// See also `tests/golden/PROVENANCE.md`.
     const GOLDEN_INPUT: &str = "genesis remembers what matters";
     const GOLDEN_PATH: &str = "tests/golden/all_minilm_l6_v2_golden.json";
 
@@ -531,29 +602,35 @@ mod tests {
 
     // ─── Model provenance ────────────────────────────────────────────────────
 
-    /// Provide `scripts/fetch-model`, which downloads the model and tokenizer into
+    /// Provide `scripts/fetch-model.mjs`, which downloads the model and tokenizer into
     /// `server/models/`.
     #[test]
     fn a_fetch_model_script_is_provided() {
         let path = fetch_model_path();
         assert!(
             path.is_file(),
-            "scripts/fetch-model must exist at {}",
+            "scripts/fetch-model.mjs must exist at {}",
             path.display()
         );
         let script = fetch_model_text();
         assert!(
             script.starts_with("#!"),
-            "scripts/fetch-model must be a script (shebang line)"
+            "scripts/fetch-model.mjs must be a script (shebang line)"
         );
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert!(
-            mode & 0o111 != 0,
-            "scripts/fetch-model must be executable (mode {mode:o})"
-        );
+        // Executable-bit semantics are POSIX-only; on Windows this is meaningless (and mode() is
+        // unavailable), so assert it only on Unix. The portable guarantees (exists + shebang) are
+        // checked above on every platform.
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert!(
+                mode & 0o111 != 0,
+                "scripts/fetch-model.mjs must be executable (mode {mode:o})"
+            );
+        }
         assert!(
             script.contains("server/models"),
-            "scripts/fetch-model must download into server/models/"
+            "scripts/fetch-model.mjs must download into server/models/"
         );
     }
 
@@ -563,11 +640,11 @@ mod tests {
         let script = fetch_model_text();
         assert!(
             script.contains("huggingface.co"),
-            "scripts/fetch-model must fetch from Hugging Face"
+            "scripts/fetch-model.mjs must fetch from Hugging Face"
         );
         assert!(
             script.contains(MODEL_REPO),
-            "scripts/fetch-model must fetch from the {MODEL_REPO} repository"
+            "scripts/fetch-model.mjs must fetch from the {MODEL_REPO} repository"
         );
     }
 
@@ -577,21 +654,21 @@ mod tests {
         let script = fetch_model_text();
         assert!(
             script.contains("onnx/model.onnx"),
-            "scripts/fetch-model must fetch onnx/model.onnx"
+            "scripts/fetch-model.mjs must fetch onnx/model.onnx"
         );
         assert!(
             script.contains("tokenizer.json"),
-            "scripts/fetch-model must fetch tokenizer.json"
+            "scripts/fetch-model.mjs must fetch tokenizer.json"
         );
     }
 
-    /// Pin an explicit repository revision in `scripts/fetch-model`.
+    /// Pin an explicit repository revision in `scripts/fetch-model.mjs`.
     #[test]
     fn fetch_model_pins_an_explicit_repository_revision() {
         let script = fetch_model_text();
         assert!(
             script.contains(MODEL_REVISION),
-            "scripts/fetch-model must pin the explicit revision {MODEL_REVISION}"
+            "scripts/fetch-model.mjs must pin the explicit revision {MODEL_REVISION}"
         );
     }
 
@@ -599,10 +676,10 @@ mod tests {
     #[test]
     fn downloads_come_only_from_the_pinned_revision() {
         let script = fetch_model_text();
-        // Downloads resolve the pinned ${REVISION}, never a floating ref like main/latest.
+        // Downloads resolve the pinned ${revision}, never a floating ref like main/latest.
         assert!(
-            script.contains("resolve/${REVISION}"),
-            "downloads must resolve the pinned ${{REVISION}}"
+            script.contains("resolve/${revision}"),
+            "downloads must resolve the pinned ${{revision}}"
         );
         assert!(
             !script.contains("resolve/main") && !script.contains("resolve/latest"),
@@ -610,7 +687,7 @@ mod tests {
         );
     }
 
-    /// Record in `scripts/fetch-model` that the revision is load-bearing because §6.2 #6
+    /// Record in `scripts/fetch-model.mjs` that the revision is load-bearing because §6.2 #6
     /// states ONNX exports of the same model differ in output shape and in whether
     /// `token_type_ids` is required.
     #[test]
@@ -618,7 +695,7 @@ mod tests {
         let script = fetch_model_text().to_lowercase();
         assert!(
             script.contains("load-bearing"),
-            "scripts/fetch-model must record that the revision is load-bearing"
+            "scripts/fetch-model.mjs must record that the revision is load-bearing"
         );
         assert!(
             script.contains("token_type_ids") && script.contains("last_hidden_state"),
@@ -647,7 +724,7 @@ mod tests {
     #[test]
     fn the_pinned_model_sha256_is_asserted_before_embedding_tests() {
         let (model, _tok) = model_paths();
-        assert!(model.exists(), "model missing: run `scripts/fetch-model`");
+        assert!(model.exists(), "model missing: run `node scripts/fetch-model.mjs`");
         let bytes = std::fs::read(&model).unwrap();
         let digest = hex::encode(Sha256::digest(&bytes));
         assert_eq!(
@@ -671,7 +748,7 @@ mod tests {
         );
         assert!(
             fetch_model_text().contains(MODEL_REVISION),
-            "the committed MODEL_REVISION must match what scripts/fetch-model pins"
+            "the committed MODEL_REVISION must match what scripts/fetch-model.mjs pins"
         );
     }
 
@@ -697,7 +774,7 @@ mod tests {
         let (model, _tok) = model_paths();
         assert!(
             model.exists(),
-            "model missing at {}: run `scripts/fetch-model` (docs/SPEC_FORGE_RUST_UPDATE.md §6.2 #6)",
+            "model missing at {}: run `node scripts/fetch-model.mjs` (docs/SPEC_FORGE_RUST_UPDATE.md §6.2 #6)",
             model.display()
         );
     }

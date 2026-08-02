@@ -1,0 +1,105 @@
+# Genesis distribution spec (beta)
+
+Status: **approved architecture, not yet implemented.** Owner: Atiqul. Author: agent.
+
+## Decision (locked)
+
+- **Distribute the Rust memory server as npm platform-specific packages** (`optionalDependencies`,
+  `os`/`cpu`/`libc`-gated), launched via **`npx`** — the esbuild / `@napi-rs` / biome / sharp model,
+  and how Claude Code itself ships native binaries.
+- **Node.js is the one required prerequisite** (the accepted baseline for the Claude Code + MCP
+  ecosystem; far more standard and cross-platform than the Python the current design wrongly assumes).
+- **Hooks rewritten from Python → Node** so the enforcement layer needs no second runtime.
+- Kills the hand-rolled Python launcher, the `python3` hardcoding, the GitHub-release checksum pin,
+  and the local-Rust-build requirement.
+
+## Target layout
+
+```
+@atiqul/genesis-memory-server            # thin launcher (bin/genesis-memory.js) — resolves + spawns
+  optionalDependencies (exact versions):
+    @atiqul/genesis-memory-server-darwin-arm64      os:darwin  cpu:arm64
+    @atiqul/genesis-memory-server-darwin-x64        os:darwin  cpu:x64
+    @atiqul/genesis-memory-server-linux-x64-gnu     os:linux   cpu:x64   libc:glibc
+    @atiqul/genesis-memory-server-linux-arm64-gnu   os:linux   cpu:arm64 libc:glibc
+    @atiqul/genesis-memory-server-linux-x64-musl    os:linux   cpu:x64   libc:musl
+    @atiqul/genesis-memory-server-linux-arm64-musl  os:linux   cpu:arm64 libc:musl
+    @atiqul/genesis-memory-server-win32-x64         os:win32   cpu:x64
+    @atiqul/genesis-memory-server-win32-arm64       os:win32   cpu:arm64
+  dependencies:
+    @atiqul/genesis-memory-model                    # 83 MB ONNX weights + tokenizer, platform-independent, shared once
+```
+
+`bin/genesis-memory.js` = esbuild's `generateBinPath` pattern: build `${platform}-${arch}(-${libc})`,
+`require.resolve('@atiqul/genesis-memory-server-<key>/<exe>')`, `spawn(..., {stdio:'inherit'})`.
+Backstop: `ldd --version` musl check (biome pattern); `GENESIS_MEMORY_BIN` dev override.
+
+`.mcp.json` (plugin AND generated repo `.genesis`):
+```json
+{ "mcpServers": { "genesis-memory": { "command": "npx", "args": ["-y", "@atiqul/genesis-memory-server"] } } }
+```
+
+## Self-contained binary (per platform, one file)
+
+- **SQLite:** `rusqlite` `bundled` (compiles amalgamation in). ✅ already pinned `=0.39.0` (avoids `cfg_select`).
+- **Inference engine — RESOLVED: pure-Rust tract.** ONNX Runtime was rejected: pyke ships no CPU-static
+  prebuilt for `x86_64-apple-darwin` or the musl targets (verified from `ort-sys` `dist.txt`, feature-set
+  `none`), and its default Windows prebuilt links the DirectML GPU EP the server never uses. The engine is
+  now the pure-Rust **tract** backend (`ort` `alternative-backend` + `ort-tract`): no C++ runtime, no
+  prebuilt matrix, no cmake, no sidecar dylib — every target builds from one `cargo` path and inference is
+  compiled into the single binary. tract loads the same `onnx/model.onnx`; the golden vectors were
+  regenerated on tract with documented provenance (`server/tests/golden/PROVENANCE.md`).
+- **Windows CRT:** `+crt-static` (via `.cargo/config.toml` for `*-pc-windows-msvc`) — removes the
+  `MSVCP140`/`VCRUNTIME140` dependency (verified present today; breaks on a fresh Windows).
+- **Linux:** ship **both** `-gnu` (built on an old-glibc floor: `ubuntu-22.04`/manylinux/`cargo-zigbuild`)
+  **and** `-musl` (fully static).
+- **macOS:** **codesign (Developer ID, hardened runtime) + notarize + staple** — unsigned arm64 is
+  killed by the kernel. No GPU EPs.
+
+## CI (`.github/workflows/release.yml` + `ci.yml`) — ✅ implemented
+
+`release.yml` (on tag `v*`):
+1. 8-row build matrix (all triples), all from the pure-Rust **tract** path: native `cargo` for host-arch
+   targets, `cargo-zigbuild` for cross / musl / low-glibc-floor. No ONNX-Runtime prebuilt special-casing.
+2. macOS rows: `codesign --options runtime` → `notarytool submit --wait` (ad-hoc sign if no Apple secrets).
+3. Stage each binary into `npm/@atiqul/genesis-memory-server-<key>/`; `generate-platform-packages.mjs`
+   syncs versions.
+4. Publish job: `npm publish --provenance --access public` — platform packages first, then model, then the
+   launcher last (its exact-version deps must resolve).
+
+`ci.yml` (on push/PR): `cargo build` + `cargo test` on 3 OSes, Node parse-check + hook/installer/session-copy
+unit tests, and a "no runtime Python" assertion. A regression guard fails if any binary links a dynamic
+inference runtime (`onnxruntime`/`DirectML`).
+
+## Remaining source fixes (fold in)
+
+- **Delete** `bin/genesis-memory` (Python launcher) and the `CHECKSUMS_SHA256`/`PINNED_VERSION` machinery.
+- **Rewrite** the 5 hooks (`inject`, `gate`, `enforce_research`, `validate`, `review`) + `session_pointer`,
+  `agent_ident` from Python → Node; `hooks.json` invokes `node ${CLAUDE_PLUGIN_ROOT}/hooks/<x>.js`.
+- ✅ Ported **`assemble.py` → `assemble.js`**: emits `node ...` hook commands + braced `${CLAUDE_PROJECT_DIR}`;
+  wraps `relpath` in try/catch for cross-drive Windows. (`build_plugin_agents.py` + `install.py` ported too.)
+- ✅ Ported **`bootstrap.py` → `bootstrap.js`**: dropped the "build it first" exit and the binary/model copy;
+  generated repo `.mcp.json` uses `npx -y @atiqul/genesis-memory-server` (no local build).
+- **`server/src/embed.rs`:** gate `use std::os::unix::fs::PermissionsExt` + the mode assertion behind `#[cfg(unix)]`.
+- **`rust-toolchain.toml`** (pin stable) + repo-root **`.gitattributes`** (`* text=auto`, `*.sh`/`*.js` `eol=lf`).
+- ✅ Ported `test_portability.py` → `test_portability.js` (asserts the Node command, not `python3`) and
+  `test_bootstrap.py` → `test_bootstrap.js` (asserts the npx `.mcp.json`); added a Node launcher test at
+  `npm/@atiqul/genesis-memory-server/test/launcher.test.js`.
+- Retired the Linux-only `scripts/fetch-model` bash **and** the `scripts/fetch-model.py` Python in
+  favour of a single cross-platform Node `scripts/fetch-model.mjs` (Node stdlib only — no curl,
+  sha256sum, shell, or Python), so the only runtime a user's machine needs is Node.
+
+## Needs Atiqul (outward-facing / credentials)
+
+- npm scope `@atiqul` (or chosen) + an npm publish token (CI secret).
+- Apple Developer ID cert + notarization creds (for signed macOS binaries) — or ship macOS later.
+- Decision to publish the packages publicly (this is the real beta publish).
+
+## Migration order
+
+1. Node interpreter scheme + hooks→Node + assemble/bootstrap wiring.
+2. Self-contained build (ORT CPU-only/static + `+crt-static` + musl/glibc); embed.rs `#[cfg(unix)]`; `rust-toolchain.toml`.
+3. npm package scaffold (launcher `bin.js` + platform-package template + model package).
+4. Rewrite `release.yml` (matrix, sign, publish `--provenance`) + add `ci.yml`.
+5. First publish → `.mcp.json`/bootstrap point at `npx`; delete the Python launcher.
+6. Verify a clean install (`npx`) on Windows + Linux here; macOS via CI.

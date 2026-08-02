@@ -91,7 +91,7 @@ Exit code 2 is returned when any function has CRAP > 8.
 7. **Invoke the adapter**:
 
    ```bash
-   python test/tools/rust_crap_adapter.py
+   node test/tools/rust_crap_adapter.mjs
    ```
 
    The adapter converts the rust-code-analysis dump (`test-results/rca/*.rs.json`) and the coverage JSON (`test-results/llvm-cov.json`) into the `test-results/radon-cc.json` + `test-results/coverage.json` that `crap.py` consumes, then calls the **unchanged** `test/tools/crap.py` itself. `crap.py` reads both JSON files, joins per-function, computes CRAP, prints a table sorted descending by score plus a summary line, and propagates its exit code (including exit 2).

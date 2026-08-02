@@ -65,7 +65,7 @@ mkdir -p test-results/rca && rust-code-analysis-cli -m -p src/ -O json -o test-r
 
 #### Compute
 ```bash
-python test/tools/rust_crap_adapter.py
+node test/tools/rust_crap_adapter.mjs
 ```
 The adapter converts the rust-code-analysis dump + coverage JSON into the `radon-cc.json` + `coverage.json` that the **unchanged** `test/tools/crap.py` consumes, then calls `crap.py` itself (propagating exit 2). Parse output. Populate `crap_report` block of the verdict. **Thresholds (30/8/4) and exit-2 are unchanged;** rust-code-analysis CC is close but not bit-identical to radon's, so keep the `> 8` line and re-validate its absolute feel once on the real Genesis crate.
 

@@ -75,7 +75,7 @@ radon cc -s --json <scope> > test-results/radon-cc.json
 
 #### Compute
 
-Invoke `python test/tools/crap.py`. It joins both JSON files, computes CRAP per function, prints a table sorted descending by score, and exits 2 if any function has CRAP > 8.
+Invoke `node test/tools/crap.mjs`. It joins both JSON files, computes CRAP per function, prints a table sorted descending by score, and exits 2 if any function has CRAP > 8.
 
 Parse output. Populate `crap_report` block of the verdict.
 

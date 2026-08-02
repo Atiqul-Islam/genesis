@@ -46,7 +46,7 @@ Your three jobs are identical to `/spec-build`'s supervisor:
 1. Parse `$ARGUMENTS`. If `--resume <run-id>`, jump to Resume Protocol.
 2. Derive `feature_slug` and `run_id`.
 3. Create run dir: `mkdir -p .planning/builds/<run_id>` (shared with /spec-build for consistency).
-4. Initialize `timeline.html` via `python test/tools/timeline_writer.py .planning/builds/<run_id> --init <feature_slug>`.
+4. Initialize `timeline.html` via `node test/tools/timeline_writer.mjs .planning/builds/<run_id> --init <feature_slug>`.
 5. Write initial `state.json` with `"mode": "spec-forge"`.
 6. Detect the target language and write it to `state.json.language` (see `language-detection.md`): if a `--lang` flag was passed, use it; else if `Cargo.toml` (or `server/Cargo.toml`) exists → `"rust"`; else if `pyproject.toml` exists → `"python"`; else a default. Genesis is Rust-only, so this resolves to `"rust"`.
 

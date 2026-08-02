@@ -1,0 +1,6 @@
+# Pin the toolchain so every machine + CI runner builds the memory server with an identical
+# compiler. 1.93.0 is verified to build the pinned dependency graph (rusqlite =0.39.0 ->
+# libsqlite3-sys 0.37.0, which avoids the `cfg_select` macro that needs a newer stable).
+[toolchain]
+channel = "1.93.0"
+components = ["rustfmt", "clippy"]

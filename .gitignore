@@ -3,7 +3,7 @@ test-results/
 __pycache__/
 *.pyc
 *.onnx
-# Model artifacts are fetched by scripts/fetch-model, never committed (weights + tokenizer).
+# Model artifacts are fetched by scripts/fetch-model.mjs, never committed (weights + tokenizer).
 server/models/
 .planning/builds/
 .claude/worktrees/

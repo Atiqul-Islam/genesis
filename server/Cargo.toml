@@ -2,7 +2,7 @@
 name = "genesis-memory-server"
 version = "0.1.0"
 edition = "2021"
-description = "Genesis MCP memory server — per-agent semantic memory over SQLite + local ONNX embeddings."
+description = "Genesis MCP memory server — per-agent semantic memory over SQLite + local embeddings (pure-Rust tract backend)."
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -25,11 +25,22 @@ tokio   = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-st
 anyhow  = "1"
 thiserror = "2"
 # vector store
-rusqlite   = { version = "0.40.1", features = ["bundled"] }
+# Pinned to 0.39.0 (-> libsqlite3-sys 0.37.0): 0.40.x pulls libsqlite3-sys >=0.38, whose
+# build.rs uses the `cfg_select!` macro (stabilized after Rust 1.93), breaking the build on
+# stable toolchains older than ~1.95. 0.37.0 is the newest libsqlite3-sys without cfg_select.
+rusqlite   = { version = "=0.39.0", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 bytemuck   = "1"
-# embeddings
-ort        = { version = "=2.0.0-rc.12", features = ["download-binaries", "ndarray", "std"] }
+# embeddings — pure-Rust inference via the tract backend. `ort` keeps its API but the engine
+# is swapped from ONNX Runtime to tract via `alternative-backend` (= ort-sys/disable-linking):
+# NO download-binaries prebuilt, NO cmake, NO sidecar dylib, so the server builds for ALL
+# targets — incl. x86_64-apple-darwin (Intel Mac) and {x86_64,aarch64}-unknown-linux-musl,
+# for which pyke ships no ONNX Runtime prebuilt. tract loads the SAME onnx/model.onnx +
+# tokenizer.json (model package unchanged). ort-tract 0.4.0 pins ort-sys =2.0.0-rc.13, and
+# ort-sys is a single `links` crate, so `ort` is bumped rc.12 -> rc.13 to match; `api-17` is
+# the OrtApi version tract's stub implements (tract's own tested pairing).
+ort        = { version = "=2.0.0-rc.13", default-features = false, features = ["alternative-backend", "ndarray", "std", "api-17"] }
+ort-tract  = "=0.4.0"
 ndarray    = "0.17"
 tokenizers = "0.23.1"
 # logging

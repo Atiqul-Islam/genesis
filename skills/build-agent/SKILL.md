@@ -28,7 +28,7 @@ current Claude Code session — carrying its full conversation history + all mem
 - Run the orchestrator (captures ALL stores, scrubbed, → portable history + summary, and embeds the history
   into the repo's shared memory under `agent_id=<name>`):
   ```
-  python3 <genesis>/session_copy/build_session_agent.py --session current --name <name> --repo <target_repo> \
+  node <genesis>/session_copy/build_session_agent.js --session current --name <name> --repo <target_repo> \
       --genesis-home <target_repo>/.genesis --server-bin <...>/genesis-memory-server \
       --model-dir <...>/models --memory-db <target_repo>/.genesis/memory.db
   ```
@@ -89,7 +89,7 @@ Method writes `persona.md`, `behavior.md`, `skills/`, a `meta.json` (`descriptio
 ## Step 4 — Assemble & install
 For each agent whose tests pass, run the assembler (it enforces tool-level boundaries + wires the hooks):
 ```
-python3 <genesis>/install/assemble.py <source_member_dir> <name> <target_repo> <genesis_home>
+node <genesis>/install/assemble.js <source_member_dir> <name> <target_repo> <genesis_home>
 ```
 This writes `<target_repo>/.claude/agents/<name>.md`.
 

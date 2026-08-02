@@ -1,0 +1,32 @@
+{
+  "name": "@atiqul/genesis-memory-server-linux-x64-gnu",
+  "version": "0.1.0",
+  "description": "Prebuilt genesis-memory-server native binary for Linux x64 (glibc).",
+  "license": "MIT OR Apache-2.0",
+  "author": "Atiqul Islam",
+  "homepage": "https://github.com/Atiqul-Islam/genesis#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Atiqul-Islam/genesis.git",
+    "directory": "npm/@atiqul/genesis-memory-server-linux-x64-gnu"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "files": [
+    "genesis-memory-server"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "preferUnplugged": true,
+  "publishConfig": {
+    "access": "public"
+  }
+}

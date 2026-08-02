@@ -51,7 +51,7 @@ From inside Claude Code, in the repository you want the agents in:
 /reload-plugins
 ```
 
-The first command registers this repository as a plugin marketplace; the second installs the `genesis` plugin from it. See [Requirements](#requirements) below — the builder itself needs only Claude Code and Python 3; the downloadable memory server has a couple of extra notes.
+The first command registers this repository as a plugin marketplace; the second installs the `genesis` plugin from it. See [Requirements](#requirements) below — the builder itself needs only Claude Code and Node.js; the memory server has a couple of extra notes.
 
 ## Build your first agent
 
@@ -77,16 +77,16 @@ Each item below is backed by a file in this repo, named so you can check it.
   *Proof:* `agents/sensei.md`, `agents/method.md`, `skills/build-agent/SKILL.md`.
 
 - **Enforced expertise (fail-closed).** Every agent is required to load named expertise and, before it can end a turn, declare which rules it applied. The declaration is checked against a rule manifest, and the cited evidence is spot-checked against the files the agent produced — a fabricated rule id or made-up evidence blocks the turn.
-  *Proof:* `hooks/validate.py`, `expertise/required.json`, `expertise/manifests/`.
+  *Proof:* `hooks/validate.js`, `expertise/required.json`, `expertise/manifests/`.
 
 - **Deterministic house rules.** A pre-write gate blocks any edit that contains a banned phrase, a credential value, or that exceeds the persona/behavior/`CLAUDE.md` line budget — enforced by regex at the moment of writing, not by trusting the model to remember.
-  *Proof:* `hooks/gate.py`.
+  *Proof:* `hooks/gate.js`.
 
 - **Per-agent semantic memory.** Genesis ships a Rust MCP memory server — SQLite + `sqlite-vec` KNN over local ONNX embeddings, fully offline. Every agent gets its own `store` / `recall` / `consolidate`, scoped by agent id, separate from the transient session context.
   *Proof:* `server/`, `.mcp.json`, `server/README.md`.
 
 - **Research is required before a build.** Before Sensei can assemble a new agent, a hook confirms the `research-expertise` step actually ran this session — you cannot skip choosing (and confirming) what the agent should know.
-  *Proof:* `hooks/enforce_research.py`, `skills/research-expertise/SKILL.md`.
+  *Proof:* `hooks/enforce_research.js`, `skills/research-expertise/SKILL.md`.
 
 - **A spec-driven build workflow, included.** A supervisor-led, test-first (RED → GREEN, one commit per task) multi-agent workflow — the same workflow Genesis used to build its own memory server.
   *Proof:* `skills/spec-forge/SKILL.md`, `skills/spec-build/SKILL.md`, `server/README.md`.
@@ -95,26 +95,26 @@ Each item below is backed by a file in this repo, named so you can check it.
 
 Genesis is wired at the plugin level, because a plugin-shipped agent can't carry its own enforcement hooks. So the hooks live in `hooks/hooks.json` and derive the active agent from each event:
 
-- **SessionStart → `inject.py`** delivers the checkable house rules and pointers to the expertise store into the agent's context (the full expertise reports stay on disk and are read on demand).
-- **PreToolUse (Write/Edit) → `gate.py`** blocks a write that violates a checkable rule, and re-surfaces the governing rules right before the write.
-- **PreToolUse (Bash) → `enforce_research.py`** blocks assembling a non-built-in agent unless the expertise-research step ran.
-- **Stop / SubagentStop → `validate.py` + `review.py`** refuse to let an agent finish while a checkable rule is still violated or its expertise declaration isn't credible, and add an independent review pass for the judgment rules a regex can't check.
+- **SessionStart → `inject.js`** delivers the checkable house rules and pointers to the expertise store into the agent's context (the full expertise reports stay on disk and are read on demand).
+- **PreToolUse (Write/Edit) → `gate.js`** blocks a write that violates a checkable rule, and re-surfaces the governing rules right before the write.
+- **PreToolUse (Bash) → `enforce_research.js`** blocks assembling a non-built-in agent unless the expertise-research step ran.
+- **Stop / SubagentStop → `validate.js` + `review.js`** refuse to let an agent finish while a checkable rule is still violated or its expertise declaration isn't credible, and add an independent review pass for the judgment rules a regex can't check.
 
-The **memory server** is delivered as a downloaded dependency rather than a committed binary. On first run, the small pure-Python launcher (`bin/genesis-memory`) resolves the prebuilt `genesis-memory-server` for your OS/arch plus the pinned embedding model from this repo's **GitHub Releases**, verifies every download against a pinned SHA-256, caches them under your user cache directory, and hands off to the server so the MCP stream passes through untouched. It is **fail-closed**: it never executes a binary it hasn't verified.
+The **memory server** is delivered over npm rather than as a committed binary. The plugin's `.mcp.json` launches it with `npx -y @atiqul/genesis-memory-server` — a thin launcher package whose per-OS/arch `optionalDependencies` (macOS, Linux, and Windows on x64 and arm64) resolve the prebuilt native `genesis-memory-server` for your platform, alongside the pinned embedding model in `@atiqul/genesis-memory-model`. npm and the launcher pick the right binary for you, and the MCP stream passes through untouched. **These packages are not published to npm yet** (pre-release/beta in progress), so until they are, use the build-from-source path in [Requirements](#requirements).
 
 ## Requirements
 
 - **Claude Code with plugin support** (the `/plugin` marketplace system).
-- **Python 3.10+ on your PATH.** The enforcement hooks and the memory-server launcher are pure Python standard library — no third-party runtime dependencies.
-- **For the downloadable memory server:** prebuilt binaries are published for macOS (x64 and arm64), Linux (x64), and Windows (x64). On those platforms, once the first release is published, the launcher fetches and verifies the server automatically. On any other platform — or before the first release — build it from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release`, fetch the model with `scripts/fetch-model`, then point the launcher at them via `GENESIS_MEMORY_BIN` and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
+- **Node.js 18+ on your PATH.** The enforcement hooks run under `node`, and the memory server is launched with `npx` — no Python runtime is required, and the hooks have no third-party runtime dependencies.
+- **For the memory server:** prebuilt native binaries are packaged per OS/arch on npm (macOS, Linux, and Windows on x64 and arm64), and `npx -y @atiqul/genesis-memory-server` resolves the right one for your platform. **The npm packages are not published yet** (pre-release/beta), so until then — or on any unpackaged platform — build it from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release`, fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN` and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
 
 ## Status
 
 Genesis is at **v0.1.0, before its first published release**, and is honest about what that means:
 
-- The two-agent builder, the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (Python hooks/installer/session-copy tests, plus the Rust server suite).
+- The two-agent builder, the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (Node hooks/installer/session-copy tests, plus the Rust server suite).
 - The **memory server (v1)** — `store` / `recall` / `consolidate` — is built and tested: 86 unit tests and 17 BDD scenarios pass in release against the real ONNX model, real SQLite, and the real spawned stdio server. Its `consolidate` summarize/evict pass is deferred to v2 (see `server/README.md`).
-- The launcher's **download-from-Releases** path activates when the first GitHub Release (`v0.1.0`) is published and the launcher is pinned to it. Until then, use the build-from-source path above.
+- The memory server's **npm distribution** (`npx @atiqul/genesis-memory-server`) activates once the `@atiqul/genesis-memory-server` package and its per-platform binaries are published to npm. Until then, use the build-from-source path above.
 
 No usage, star, or production-deployment claims are made here because none would be verifiable yet.
 
@@ -127,7 +127,7 @@ No usage, star, or production-deployment claims are made here because none would
 
 ## Contributing
 
-Contributions are welcome — Genesis holds every change to the same four rules it enforces on the agents it builds (no shortcuts, no speculation, use the docs, production-ready and tested). See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the repository layout, build/test instructions for both the Rust and Python toolchains, and the code style.
+Contributions are welcome — Genesis holds every change to the same four rules it enforces on the agents it builds (no shortcuts, no speculation, use the docs, production-ready and tested). See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the repository layout, build/test instructions for both the Rust and Node toolchains, and the code style.
 
 ## License
 

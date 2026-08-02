@@ -140,18 +140,18 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 
 **Model provenance**
 
-- Provide `scripts/fetch-model`, which downloads the model and tokenizer into `server/models/` (ratified in iteration 2).
+- Provide `scripts/fetch-model.mjs`, which downloads the model and tokenizer into `server/models/` (ratified in iteration 2).
 - Fetch from the Hugging Face repository `sentence-transformers/all-MiniLM-L6-v2` — §2.3c names `all-MiniLM-L6-v2` as the primary model and §6.1 verifies its pooling mode from that repo's `1_Pooling/config.json`.
 - Fetch the files `onnx/model.onnx` and `tokenizer.json` — §2.3c refers to "the raw HF `onnx/model.onnx`".
-- Pin an explicit repository revision in `scripts/fetch-model`.
+- Pin an explicit repository revision in `scripts/fetch-model.mjs`.
 - Download only from that pinned revision.
-- Record in `scripts/fetch-model` that the revision is load-bearing because §6.2 #6 states ONNX exports of the same model differ in output shape (pooled output vs `last_hidden_state`) and in whether `token_type_ids` is required.
+- Record in `scripts/fetch-model.mjs` that the revision is load-bearing because §6.2 #6 states ONNX exports of the same model differ in output shape (pooled output vs `last_hidden_state`) and in whether `token_type_ids` is required.
 - Keep the model artifacts out of git (`.gitignore` already ignores `*.onnx`).
 - Assert the pinned SHA-256 of the fetched model file before running embedding tests.
 - Commit the pinned revision string as a constant, captured at first fetch — see "Bootstrap and calibration items".
 - Commit the pinned SHA-256 digest as a constant, captured at first fetch — see "Bootstrap and calibration items".
-- Make embedding tests fail — never skip — with a message directing the developer to run `scripts/fetch-model` when the model file is absent, because the BDD suites use the real model with no mocks (§5 #2).
-- Do not rely on `ort`'s `download-binaries` feature to supply the model: it fetches ONNX Runtime shared libraries at build time only, never the model weights.
+- Make embedding tests fail — never skip — with a message directing the developer to run `node scripts/fetch-model.mjs` when the model file is absent, because the BDD suites use the real model with no mocks (§5 #2).
+- The inference engine (pure-Rust **tract**, via `ort`'s `alternative-backend` + `ort-tract`) never supplies the model: it links no native runtime and downloads nothing at build time. The model weights ship separately — `node scripts/fetch-model.mjs` for dev, the `@atiqul/genesis-memory-model` package at runtime, or `GENESIS_MODEL_DIR`.
 
 **Consolidation (decay + dedup/merge only)**
 
@@ -200,7 +200,7 @@ implementation. They are not open spec questions; they are values that cannot ex
 the artifact does. Same shape as §1.1's CRAP-threshold calibration caveat.
 
 1. **Model revision string** — the explicit `sentence-transformers/all-MiniLM-L6-v2` revision
-   pinned in `scripts/fetch-model`, read from the repository at first fetch and committed.
+   pinned in `scripts/fetch-model.mjs`, read from the repository at first fetch and committed.
 2. **Model SHA-256 digest** — computed over the `onnx/model.onnx` fetched at that revision
    and committed as the fixture constant the embedding tests assert against.
 3. **Golden embedding vector** — the frozen output of `(model.onnx, tokenizer.json, mean
@@ -263,7 +263,7 @@ ratified criterion, not the server's behavior.) Expected Behavior 12 / Acceptanc
   recency already carried by the `use_count` term.*
 - **D3 — model repo and revision.** Added requirements naming the HF repo
   `sentence-transformers/all-MiniLM-L6-v2` and the files `onnx/model.onnx` + `tokenizer.json`
-  (both traced to §2.3c/§6.1), plus an explicit pinned revision in `scripts/fetch-model` and a
+  (both traced to §2.3c/§6.1), plus an explicit pinned revision in `scripts/fetch-model.mjs` and a
   note that §6.2 #6 is why the revision is load-bearing. *Why: v2 fetched an unnamed artifact
   from an unnamed source, and exports of the same model differ in output shape.*
 - **M1 — SHA-256 digest.** Kept the requirement to pin the digest and moved the literal value

@@ -37,32 +37,44 @@ be sent back regardless of how small it is:
 agents/           Plugin-shipped agents: sensei, method
 team/             Source for the agents (persona.md, behavior.md, skills/)
 skills/           Genesis skills (spec-forge workflow, expertise skills, ...)
-hooks/            Enforcement hooks (Python) + their tests — inject / gate / validate /
-                  review / adherence / enforce_research / session_pointer
-install/          Installer + assembler (Python): install.py, bootstrap.py, assemble.py
-session_copy/     Session-copy pipeline (Python): capture / embed / store / build agent
+hooks/            Enforcement hooks — Node (.js): inject / gate / validate /
+                  review / adherence / enforce_research / session_pointer / agent_ident
+install/          Installer + assembler (Node): install.js, bootstrap.js, assemble.js
+session_copy/     Session-copy pipeline (Node): capture.js / embed.js / store.js /
+                  build_session_agent.js
 server/           Rust MCP memory server (genesis-memory-server)
-scripts/          Helper scripts (e.g. fetch-model)
+npm/              npm packaging for the memory server — the launcher package
+                  (@atiqul/genesis-memory-server) plus per-OS/arch binary packages and
+                  the model package (@atiqul/genesis-memory-model)
+scripts/          Helper scripts (e.g. fetch-model.mjs)
 expertise/        Verified expertise reports the agents read
 docs/             Architecture, workflow, and the publish plan
-test/             Shared test assets: BDD features + the CRAP-gate tooling
+test/             Shared test assets: BDD features + the CRAP-gate tooling (Node .mjs)
 ```
 
-There are two toolchains: **Rust** (the `server/` crate) and **Python 3** (hooks,
-installer, session-copy). There is no build step for the agents/skills/docs themselves —
-they are Markdown and JSON.
+There are two toolchains: **Node.js** — the hooks, the installer/assembler, and the
+session-copy pipeline, which is the only runtime a user's machine needs — and **Rust**, the
+`server/` crate, which maintainers/CI build into the memory-server binary that end users
+receive prebuilt via npm. There is no build step for the agents/skills/docs themselves — they
+are Markdown and JSON.
 
 ---
 
 ## Prerequisites
 
-- **Rust** — `rustc` / `cargo` 1.97 or newer (for `server/`).
-- **Python 3** — 3.10 or newer, standard library only. The Python code has **no
-  third-party runtime dependencies**; tests run against the stdlib.
+**To use Genesis** (end users): **Claude Code** and **Node.js**. That's it — Genesis has no
+Python runtime and requires no Python. The memory server ships as a prebuilt binary delivered
+through npm, so end users don't need Rust either.
+
+**To develop the memory server** (maintainers / CI):
+
+- **Rust** — `rustc` / `cargo` 1.97 or newer (for `server/`). Only needed to *build* the
+  server; end users get the prebuilt binary via npm.
+- **Node.js** — for the hooks, the installer/assembler, the session-copy pipeline, and their
+  tests. These have **no third-party runtime dependencies**; tests run against Node's built-ins.
 - **Windows is a first-class target.** Genesis is expected to work on Windows, macOS, and
-  Linux. Don't introduce POSIX-only assumptions (hard-coded `/` paths, bash-only scripts,
-  `os`-specific calls) without a cross-platform equivalent. Prefer `pathlib` /
-  `os.path.join` over string-concatenated paths.
+  Linux. Don't introduce POSIX-only assumptions (hard-coded `/` paths, bash-only scripts) without
+  a cross-platform equivalent. Prefer `node:path` (`path.join`) over string-concatenated paths.
 
 Optional, only for the server's full quality gate:
 `cargo install cargo-llvm-cov rust-code-analysis-cli`.
@@ -83,16 +95,30 @@ The model weights are **not** committed. To run the server against the real mode
 it first (pinned Hugging Face revision):
 
 ```
-scripts/fetch-model
+node scripts/fetch-model.mjs
 ```
 
 This downloads `onnx/model.onnx` and `tokenizer.json` for
 `sentence-transformers/all-MiniLM-L6-v2` into `server/models/`. See
 [`NOTICE.md`](./NOTICE.md) for the model's license (Apache-2.0).
 
-### Python components
+### How the memory server reaches end users
 
-No build. Hooks, installer, and session-copy run directly under `python3`.
+Maintainers/CI compile the `server/` crate per platform and publish the binaries as npm
+packages: a launcher package (`@atiqul/genesis-memory-server`) with per-OS/arch binary
+packages as `optionalDependencies`, plus a model package (`@atiqul/genesis-memory-model`).
+The plugin's `.mcp.json` launches the server with `npx -y @atiqul/genesis-memory-server`, so
+end users never build Rust — npm resolves the right prebuilt binary for their platform.
+
+> **Status: pre-release / beta.** These npm packages are **not published to the registry
+> yet**, so `npx @atiqul/genesis-memory-server` will not resolve today. The npm/npx flow above
+> describes the intended distribution mechanism, not a currently-installable path. Build the
+> server locally from `server/` (above) while the packages are in beta.
+
+### Node components (hooks, installer, session-copy)
+
+No build. The hooks (`hooks/*.js`), the installer/assembler (`install/*.js`), and the
+session-copy pipeline (`session_copy/*.js`) all run directly under `node`.
 
 ---
 
@@ -121,40 +147,46 @@ cd server
 mkdir -p test-results/rca
 rust-code-analysis-cli -m -p src/ -O json -o test-results/rca/
 cargo llvm-cov --json --release --output-path test-results/llvm-cov.json
-python ../test/tools/rust_crap_adapter.py   # exits non-zero iff CRAP > 8
+node ../test/tools/rust_crap_adapter.mjs   # exits non-zero iff CRAP > 8
 ```
 
-### Python (hooks, installer, session-copy)
+### Node (hooks, installer, session-copy)
+
+The hooks, installer/assembler, and session-copy pipeline are **Node** (`hooks/*.js`,
+`install/*.js`, `session_copy/*.js`), and their tests are Node too.
 
 Each test file is a self-contained script that prints `N passed, M failed` and exits
 non-zero on failure. Run them directly:
 
 ```
-python3 hooks/test_gate.py
-python3 hooks/test_inject.py
-python3 hooks/test_validate.py
-python3 hooks/test_review.py
-python3 hooks/test_adherence.py
-python3 hooks/test_enforce_research.py
-python3 hooks/test_session_pointer.py
+node hooks/test_gate.js
+node hooks/test_inject.js
+node hooks/test_validate.js
+node hooks/test_review.js
+node hooks/test_adherence.js
+node hooks/test_enforce_research.js
+node hooks/test_session_pointer.js
 
-python3 install/test_bootstrap.py
-python3 install/test_portability.py
+node install/test_bootstrap.js
+node install/test_portability.js
+node "npm/@atiqul/genesis-memory-server/test/launcher.test.js"
 
-python3 session_copy/test_capture.py
-python3 session_copy/test_embed.py
-python3 session_copy/test_store.py
-python3 session_copy/test_build_session_agent.py
-python3 session_copy/test_pipeline.py
+node session_copy/test_capture.js
+node session_copy/test_embed.js
+node session_copy/test_store.js
+node session_copy/test_build_session_agent.js
+node session_copy/test_pipeline.js
 
-python3 team/echo/test_echo.py
+node team/echo/test_echo.mjs
 ```
 
 To run them all in one go from the repo root:
 
 ```
-find hooks install session_copy team -name 'test_*.py' -print0 \
-  | xargs -0 -n1 python3
+# Node tests (hooks, installer/assembler, session-copy, team samples, memory-server launcher)
+find hooks install session_copy team npm \
+  \( -name 'test_*.js' -o -name 'test_*.mjs' -o -name '*.test.js' \) -print0 \
+  | xargs -0 -n1 node
 ```
 
 ---
@@ -170,10 +202,10 @@ find hooks install session_copy team -name 'test_*.py' -print0 \
 - Keep the flat `src/` layout (one file per concern) and document public items
   (`missing_docs` is warned).
 
-**Python**
-- Standard library only for runtime code. Don't add third-party dependencies to hooks,
+**Node**
+- Node built-ins only for runtime code. Don't add third-party dependencies to the hooks,
   the installer, or session-copy without discussion.
-- Cross-platform paths (`pathlib` / `os.path`), UTF-8 explicit on file I/O, no reliance on
+- Cross-platform paths (`node:path` — `path.join`), UTF-8 explicit on file I/O, no reliance on
   a POSIX-only shell.
 - Match the existing style of the file you're editing (these modules favor compact,
   dependency-free scripts).
@@ -186,7 +218,8 @@ find hooks install session_copy team -name 'test_*.py' -print0 \
 
 ## Opening issues
 
-- **Bugs:** include the OS, `rustc`/`cargo` and `python3` versions, the exact command you
+- **Bugs:** include the OS, `node` version (and `rustc`/`cargo` if the memory server is
+  involved), the exact command you
   ran, what you expected, and the full output. A minimal reproduction is worth more than a
   description.
 - **Features / changes in behavior:** open an issue describing the problem and the intended
@@ -197,8 +230,9 @@ find hooks install session_copy team -name 'test_*.py' -print0 \
 ## Opening pull requests
 
 1. Branch from the default branch; keep each PR focused on one change.
-2. Make sure the relevant test gate above passes locally — Rust *and* the Python scripts
-   for anything you touched. State in the PR description what you ran and that it passed.
+2. Make sure the relevant test gate above passes locally — the Node suites *and* the Rust
+   server tests for anything you touched. State in the PR description what you ran and that it
+   passed.
 3. Include tests for new behavior and a regression test for any bug fix.
 4. Keep commits clean and messages descriptive (what changed and why). If a change is
    agent-assisted, that's fine and welcome — attribute it honestly (e.g. a

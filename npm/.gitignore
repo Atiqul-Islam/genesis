@@ -1,0 +1,15 @@
+# Native binaries and model weights are produced/fetched by CI at release time and staged
+# into the package directories just before `npm publish`. They must NEVER be committed here.
+# The package.json manifests (including the generated per-platform ones) ARE committed.
+
+# Prebuilt native server binaries (one per platform package)
+@atiqul/genesis-memory-server-*/genesis-memory-server
+@atiqul/genesis-memory-server-*/genesis-memory-server.exe
+
+# Embedding model weights + tokenizer (model package)
+@atiqul/genesis-memory-model/onnx/
+@atiqul/genesis-memory-model/tokenizer.json
+
+# Local install / pack / test artifacts
+**/node_modules/
+*.tgz

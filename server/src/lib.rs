@@ -392,7 +392,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = VectorStore::open(dir.path().join("m.db").to_str().unwrap()).unwrap();
         let (m, t) = model_paths();
-        assert!(m.exists(), "model missing: run `scripts/fetch-model`");
+        assert!(m.exists(), "model missing: run `node scripts/fetch-model.mjs`");
         let embedder = Embedder::load(m.to_str().unwrap(), t.to_str().unwrap()).unwrap();
         (dir, store, embedder)
     }

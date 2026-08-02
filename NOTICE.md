@@ -26,7 +26,7 @@ with / fetches this model's ONNX weights (`onnx/model.onnx`) and tokenizer
 - **Model:** `sentence-transformers/all-MiniLM-L6-v2`
 - **Source:** https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
 - **Pinned revision:** `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`
-  (see `scripts/fetch-model`)
+  (see `scripts/fetch-model.mjs`)
 - **License:** **Apache-2.0** — verified from the model card metadata header
   ("License: apache-2.0") at the source URL above on 2026-07-22.
   Apache License 2.0 full text: https://www.apache.org/licenses/LICENSE-2.0
@@ -36,16 +36,17 @@ and is covered by the same Apache-2.0 license.
 
 ---
 
-## 2. ONNX Runtime (native inference engine)
+## 2. tract (native inference engine, pure Rust)
 
-The memory server runs the model above through **ONNX Runtime**, whose prebuilt
-native libraries are downloaded at build time by the `ort` crate
-(`features = ["download-binaries"]`).
+The memory server runs the model above through **tract**, a pure-Rust ONNX inference
+engine. The `ort` crate provides the API surface, but its backend is swapped from ONNX
+Runtime to tract via `ort`'s `alternative-backend` feature together with the `ort-tract`
+crate. No ONNX Runtime C++ library is downloaded, built, or shipped — so the binary is a
+single self-contained file and builds for every target, including `x86_64-apple-darwin`
+(Intel macOS) and the musl targets, for which no ONNX Runtime prebuilt exists.
 
-- **Project:** ONNX Runtime — https://github.com/microsoft/onnxruntime
-- **License:** **MIT License**, Copyright (c) Microsoft Corporation — verified from
-  the repository `LICENSE` file (https://github.com/microsoft/onnxruntime/blob/main/LICENSE)
-  on 2026-07-22.
+- **tract** — https://github.com/sonos/tract — **MIT OR Apache-2.0**, Copyright (c) Sonos, Inc.
+- **ort-tract** (the tract backend for `ort`) — https://crates.io/crates/ort-tract — **MIT OR Apache-2.0**.
 
 ---
 
@@ -71,11 +72,15 @@ the one resolved in `server/Cargo.lock`). Each crates.io page is reachable at
 | Crate | Version | License (SPDX, as published) | Role |
 |---|---|---|---|
 | `rmcp` | 2.2.0 | Apache-2.0 | Official Rust MCP SDK (stdio server) |
-| `rusqlite` | 0.40.1 | MIT | SQLite bindings (bundled build) |
-| `libsqlite3-sys` | 0.38.1 | MIT | SQLite native bindings (transitive, bundled) |
+| `rusqlite` | 0.39.0 | MIT | SQLite bindings (bundled build) |
+| `libsqlite3-sys` | 0.37.0 | MIT | SQLite native bindings (transitive, bundled) |
 | `sqlite-vec` | 0.1.9 | MIT OR Apache-2.0 | SQLite vector / KNN extension |
-| `ort` | 2.0.0-rc.12 | MIT OR Apache-2.0 | ONNX Runtime Rust bindings |
-| `ort-sys` | 2.0.0-rc.12 | MIT OR Apache-2.0 | ONNX Runtime native sys crate |
+| `ort` | 2.0.0-rc.13 | MIT OR Apache-2.0 | Inference API (tract backend, linking disabled) |
+| `ort-sys` | 2.0.0-rc.13 | MIT OR Apache-2.0 | `ort` sys crate (native linking disabled) |
+| `ort-tract` | 0.4.0+0.23 | MIT OR Apache-2.0 | Pure-Rust tract backend for `ort` |
+| `tract-onnx` | 0.23.4 | MIT OR Apache-2.0 | Pure-Rust ONNX inference (engine) |
+| `tract-core` | 0.23.4 | MIT OR Apache-2.0 | tract inference core |
+| `tract-linalg` | 0.23.4 | MIT OR Apache-2.0 | tract linear-algebra kernels |
 | `tokenizers` | 0.23.1 | Apache-2.0 | Hugging Face tokenizer |
 | `ndarray` | 0.17.2 | MIT OR Apache-2.0 | N-dimensional arrays |
 | `bytemuck` | 1.25.1 | Zlib OR Apache-2.0 OR MIT | Byte-level casting for embeddings |
@@ -99,11 +104,14 @@ from a checkout with a tool such as `cargo-about` or `cargo-license`.
 
 ---
 
-## 5. Python components
+## 5. Node components
 
-Genesis's hooks, installer, and session-copy pipeline are pure Python 3 standard
-library (no third-party runtime dependencies) and are covered by Genesis's own MIT
-license.
+Genesis's enforcement hooks (`hooks/*.js`), installer (`install/`), session-copy
+pipeline (`session_copy/`), and repo test tooling (`test/tools/*.mjs`) are
+implemented in **Node.js** and run on Node's built-in standard library alone —
+including `node:sqlite` for local storage. They declare and require **no third-party
+runtime dependencies** and are covered by Genesis's own MIT license. Running these
+components requires Node.js (alongside Claude Code); they do **not** require Python.
 
 ---
 

@@ -13,7 +13,7 @@ you). Consult your `agent-building` and `agentic-teams` expertise for the judgme
 **repo level** in `<repo>/.genesis/` (never a global store). If the target repo has no `.genesis/` workspace
 yet, run the bootstrap FIRST so the store, hooks, memory DB, and team exist:
 ```
-python3 <genesis>/install/bootstrap.py <target_repo>
+node <genesis>/install/bootstrap.js <target_repo>
 ```
 Then author expertise into `<target_repo>/.genesis/expertise/`.
 

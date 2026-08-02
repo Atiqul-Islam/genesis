@@ -1,5 +1,5 @@
 {
-  "_doc": "Genesis plugin enforcement — DORMANT BY DEFAULT. Genesis must NOT touch a normal Claude Code session; it only acts on its OWN agents (sensei/method) when they actually run, and is entered on demand via the /genesis command. So there is NO SessionStart main-thread injection and NO main-thread Stop enforcement here (those made every session run as Sensei + forced APPLIED-EXPERTISE globally). inject fires only on SubagentStart for sensei/method; validate+review fire only on SubagentStop for sensei/method. gate (PreToolUse Write|Edit) and enforce_research (PreToolUse Bash) fire session-wide because PreToolUse matchers key on the TOOL name, not the agent — so those two SCRIPTS self-guard: they no-op unless the payload's agent_type is a genesis agent (see gate.py / enforce_research.py). Each hook derives the active agent from the payload's `agent_type` (verified: code.claude.com/docs/en/hooks). ${CLAUDE_PLUGIN_ROOT} is the runtime-substituted absolute plugin path (read-only, version-churned ~14 days after update — runtime data is written under the PROJECT's .genesis/, never here). Interpreter is python3, matching the .mcp.json launcher convention.",
+  "_doc": "Genesis plugin enforcement — DORMANT BY DEFAULT. Genesis must NOT touch a normal Claude Code session; it only acts on its OWN agents (sensei/method) when they actually run, and is entered on demand via the /genesis command. So there is NO SessionStart main-thread injection and NO main-thread Stop enforcement here (those made every session run as Sensei + forced APPLIED-EXPERTISE globally). inject fires only on SubagentStart for sensei/method; validate+review fire only on SubagentStop for sensei/method. gate (PreToolUse Write|Edit) and enforce_research (PreToolUse Bash) fire session-wide because PreToolUse matchers key on the TOOL name, not the agent — so those two SCRIPTS self-guard: they no-op unless the payload's agent_type is a genesis agent (see gate.js / enforce_research.js). Each hook derives the active agent from the payload's `agent_type` (verified: code.claude.com/docs/en/hooks). ${CLAUDE_PLUGIN_ROOT} is the runtime-substituted absolute plugin path (read-only, version-churned ~14 days after update — runtime data is written under the PROJECT's .genesis/, never here). Interpreter is node: the hooks are Node (.js). The memory server is launched via `npx -y @atiqul/genesis-memory-server` in .mcp.json — no Python anywhere.",
   "hooks": {
     "SubagentStart": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.py\" \"${CLAUDE_PLUGIN_ROOT}/expertise\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject.js\" \"${CLAUDE_PLUGIN_ROOT}/expertise\""
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.js\""
           }
         ]
       },
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/enforce_research.py\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/enforce_research.js\""
           }
         ]
       }
@@ -38,11 +38,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/validate.py\" ."
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/validate.js\" ."
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/review.py\" ."
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/review.js\" ."
           }
         ]
       }

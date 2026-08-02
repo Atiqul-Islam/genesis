@@ -1,0 +1,22 @@
+# Statically link the MSVC C runtime on Windows so the distributed binary needs no VC++
+# redistributable (verified: the dynamic build imports MSVCP140/VCRUNTIME140, which are absent
+# on a fresh Windows). Applies to both Windows targets.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# musl C-compile shim for the vendored `sqlite-vec.c` (and `sqlite3.c`). Both are compiled by
+# cc-rs; sqlite-vec.c does `typedef u_int8_t uint8_t;` (etc.) guarded only against
+# _WIN32/emscripten/cosmopolitan/wasi — NOT musl. glibc provides the BSD aliases u_int8_t /
+# u_int16_t / u_int64_t via <sys/types.h>, but musl does not, so that typedef fails to compile
+# with "unknown type name 'u_int8_t'". The file already includes <stdint.h>, so the standard
+# uint*_t types exist; mapping the BSD names onto them turns the line into a valid (C11-redundant)
+# `typedef uint8_t uint8_t;`. cc-rs reads these target-scoped CFLAGS_<triple> vars, so this
+# applies ONLY to the two musl targets — glibc/macOS/Windows C compiles are untouched. This is
+# what unblocks the fully-static musl targets (the pure-Rust tract swap removed the ONNX-Runtime
+# blocker; this removes the remaining C one).
+[env]
+CFLAGS_x86_64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
+CFLAGS_aarch64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
