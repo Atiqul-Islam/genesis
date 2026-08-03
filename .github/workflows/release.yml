@@ -46,20 +46,19 @@ jobs:
     strategy:
       fail-fast: false      # keep every platform independent — one target failing never sinks the rest
       matrix:
-        # tract is pure Rust, so target choice is purely about host arch vs. cross/glibc-floor:
-        # native `cargo` when the runner matches the target arch, `cargo-zigbuild` for cross,
-        # musl (fully static), and the low-glibc gnu floor. No ORT-prebuilt gating anywhere.
-        # ALPHA scope: the 5 targets that build cleanly. ARM64-Linux (gnu+musl) and Windows-ARM are
-        # DEFERRED — tract-linalg's hand-written ARM64 SIMD (SVE C + asm) does not cross-compile via
-        # zig or MSVC-on-an-x64-host; they need native ARM runners (a follow-up). The launcher still
-        # lists all 8 in optionalDependencies, so ARM users get a clean "unsupported" message until
-        # those platform packages are published.
+        # All 8 targets. tract's hand-written ARM64 SIMD (SVE C + asm) will NOT cross-compile via
+        # zig or MSVC-on-an-x64-host, so every ARM64 target builds on a NATIVE ARM runner (where the
+        # system compiler/assembler handles the SVE/asm). x64 targets stay on x64 hosts; x64-musl
+        # uses zig cross (which works for x64); arm64-musl uses native arm + musl-tools (see step below).
         include:
-          - { key: darwin-arm64,  runner: macos-14,       target: aarch64-apple-darwin,      tool: cargo }
-          - { key: darwin-x64,    runner: macos-14,       target: x86_64-apple-darwin,       tool: cargo }    # cross-compiled on Apple Silicon — macos-13 Intel runners queue for ages; x64 codegen/SIMD is fine (only ARM64 asm was the problem)
-          - { key: linux-x64-gnu, runner: ubuntu-22.04,   target: x86_64-unknown-linux-gnu,  tool: cargo }    # glibc 2.35 floor
-          - { key: linux-x64-musl,runner: ubuntu-22.04,   target: x86_64-unknown-linux-musl, tool: zigbuild } # fully static
-          - { key: win32-x64,     runner: windows-latest, target: x86_64-pc-windows-msvc,    tool: cargo }
+          - { key: darwin-arm64,     runner: macos-14,        target: aarch64-apple-darwin,       tool: cargo }
+          - { key: darwin-x64,       runner: macos-14,        target: x86_64-apple-darwin,        tool: cargo }    # cross on Apple Silicon (macos-13 Intel queues); x64 codegen/SIMD fine
+          - { key: linux-x64-gnu,    runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu,   tool: cargo }    # glibc 2.35 floor
+          - { key: linux-x64-musl,   runner: ubuntu-22.04,    target: x86_64-unknown-linux-musl,  tool: zigbuild } # fully static (zig cross ok for x64)
+          - { key: win32-x64,        runner: windows-latest,  target: x86_64-pc-windows-msvc,     tool: cargo }
+          - { key: linux-arm64-gnu,  runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu,  tool: cargo }   # NATIVE arm64, glibc 2.35 floor
+          - { key: linux-arm64-musl, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl, tool: cargo }   # NATIVE arm64 + musl-tools (musl step below)
+          - { key: win32-arm64,      runner: windows-11-arm,  target: aarch64-pc-windows-msvc,    tool: cargo }    # NATIVE arm64 Windows
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,6 +84,16 @@ jobs:
           echo "$HOME/zig" >> "$GITHUB_PATH"
           "$HOME/zig/zig" version
           cargo install --locked cargo-zigbuild
+
+      - name: Install musl toolchain (native arm64 musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        shell: bash
+        run: |
+          # Native arm64 host building the musl target: needs a musl C compiler for the vendored C
+          # (sqlite-vec.c / sqlite3.c). musl-tools provides musl-gcc; the u_int8_t CFLAGS shim in
+          # server/.cargo/config.toml already covers musl. Rust links musl statically by default.
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          echo "CC_aarch64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
 
       - name: Build (cargo)
         if: matrix.tool == 'cargo'
@@ -185,7 +194,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 24 }
       - name: Cache the pinned model (avoids re-hitting HuggingFace every run)
         uses: actions/cache@v4
         with:
@@ -236,7 +245,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
 
       - name: Resolve version from tag
