@@ -77,44 +77,46 @@ Each item below is backed by a file in this repo, named so you can check it.
   *Proof:* `agents/sensei.md`, `agents/method.md`, `skills/build-agent/SKILL.md`.
 
 - **Enforced expertise (fail-closed).** Every agent is required to load named expertise and, before it can end a turn, declare which rules it applied. The declaration is checked against a rule manifest, and the cited evidence is spot-checked against the files the agent produced — a fabricated rule id or made-up evidence blocks the turn.
-  *Proof:* `hooks/validate.js`, `expertise/required.json`, `expertise/manifests/`.
+  *Proof:* the `genesis-hook` binary (`validate`), `expertise/required.json`, `expertise/manifests/`.
 
 - **Deterministic house rules.** A pre-write gate blocks any edit that contains a banned phrase, a credential value, or that exceeds the persona/behavior/`CLAUDE.md` line budget — enforced by regex at the moment of writing, not by trusting the model to remember.
-  *Proof:* `hooks/gate.js`.
+  *Proof:* the `genesis-hook` binary (`gate`).
 
 - **Per-agent semantic memory.** Genesis ships a Rust MCP memory server — SQLite + `sqlite-vec` KNN over local ONNX embeddings, fully offline. Every agent gets its own `store` / `recall` / `consolidate`, scoped by agent id, separate from the transient session context.
   *Proof:* `server/`, `.mcp.json`, `server/README.md`.
 
 - **Research is required before a build.** Before Sensei can assemble a new agent, a hook confirms the `research-expertise` step actually ran this session — you cannot skip choosing (and confirming) what the agent should know.
-  *Proof:* `hooks/enforce_research.js`, `skills/research-expertise/SKILL.md`.
+  *Proof:* the `genesis-hook` binary (`enforce-research`), `skills/research-expertise/SKILL.md`.
 
 - **A spec-driven build workflow, included.** A supervisor-led, test-first (RED → GREEN, one commit per task) multi-agent workflow — the same workflow Genesis used to build its own memory server.
   *Proof:* `skills/spec-forge/SKILL.md`, `skills/spec-build/SKILL.md`, `server/README.md`.
 
 ## How it works
 
-Genesis is wired at the plugin level, because a plugin-shipped agent can't carry its own enforcement hooks. So the hooks live in `hooks/hooks.json` and derive the active agent from each event:
+Genesis is wired at the plugin level, because a plugin-shipped agent can't carry its own enforcement hooks. So the hooks live in `hooks/hooks.json` and derive the active agent from each event. The deterministic hooks are a single native Rust binary — **`genesis-hook`** (busybox-style subcommands) — shipped in the same GitHub Release as the memory server, so they run as a ~2–10 ms native spawn instead of a Node process per tool call:
 
-- **SessionStart → `inject.js`** delivers the checkable house rules and pointers to the expertise store into the agent's context (the full expertise reports stay on disk and are read on demand).
-- **PreToolUse (Write/Edit) → `gate.js`** blocks a write that violates a checkable rule, and re-surfaces the governing rules right before the write.
-- **PreToolUse (Bash) → `enforce_research.js`** blocks assembling a non-built-in agent unless the expertise-research step ran.
-- **Stop / SubagentStop → `validate.js` + `review.js`** refuse to let an agent finish while a checkable rule is still violated or its expertise declaration isn't credible, and add an independent review pass for the judgment rules a regex can't check.
+- **SubagentStart → `genesis-hook inject`** delivers the checkable house rules and pointers to the expertise store into the agent's context (the full expertise reports stay on disk and are read on demand).
+- **PreToolUse (Write/Edit) → `genesis-hook gate`** blocks a write that violates a checkable rule, and re-surfaces the governing rules right before the write.
+- **PreToolUse (Bash) → `genesis-hook enforce-research`** blocks assembling a non-built-in agent unless the expertise-research step ran.
+- **SubagentStop → `genesis-hook validate` + a built-in `agent` review hook** refuse to let an agent finish while a checkable rule is still violated or its expertise declaration isn't credible, and add an independent LLM review pass (a fast Haiku model that reads the produced artifacts) for the judgment rules a regex can't check.
 
-The **memory server** is delivered over npm rather than as a committed binary. The plugin's `.mcp.json` launches it with `npx -y @xcidos/genesis-memory-server` — a thin launcher package whose per-OS/arch `optionalDependencies` (macOS, Linux, and Windows on x64 and arm64) resolve the prebuilt native `genesis-memory-server` for your platform, alongside the pinned embedding model in `@xcidos/genesis-memory-model`. npm and the launcher pick the right binary for you, and the MCP stream passes through untouched. **These packages are not published to npm yet** (pre-release/beta in progress), so until they are, use the build-from-source path in [Requirements](#requirements).
+Built agents invoke the binary directly (baked into their frontmatter by the assembler); the plugin's own team resolves it through a tiny cross-platform shim. The launcher + installer that fetch and stage the binaries are Node.
+
+The **native binaries + the embedding model are distributed as GitHub Release assets** — not committed to the repo, and not on any package registry. The plugin's `.mcp.json` runs a small Node launcher (`bin/genesis-memory.js`) that, on first use, downloads the `genesis-memory-server` (and `genesis-hook`) for your OS/arch plus the pinned model from the matching release, **SHA256-verifies each against a published `SHA256SUMS`**, caches them per-user, and execs the server — the MCP stream passing through untouched. The assets are public: **no npm, no registry account, no token.** **The beta release isn't published yet**, so until it is, use the build-from-source path in [Requirements](#requirements).
 
 ## Requirements
 
 - **Claude Code with plugin support** (the `/plugin` marketplace system).
-- **Node.js on your PATH.** The enforcement hooks and the `npx` memory-server launcher run on **Node 18+**; the optional **session-copy** feature reads SQLite via the built-in `node:sqlite` and needs **Node 24+**. No Python runtime is required, and the hooks have no third-party runtime dependencies.
-- **For the memory server:** prebuilt native binaries are packaged per OS/arch on npm (macOS, Linux, and Windows on x64 and arm64), and `npx -y @xcidos/genesis-memory-server` resolves the right one for your platform. **The npm packages are not published yet** (pre-release/beta), so until then — or on any unpackaged platform — build it from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release`, fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN` and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
+- **Node.js on your PATH.** The memory-server launcher (downloads + runs the binaries), the installer, and the plugin's hook resolver run on **Node 18+**; the optional **session-copy** feature reads SQLite via the built-in `node:sqlite` and needs **Node 24+**. The enforcement hooks themselves are a native Rust binary (no per-call runtime); built agents invoke it directly. No Python runtime is required.
+- **For the memory server:** prebuilt native binaries + the model are published as **GitHub Release assets** per OS/arch (macOS, Linux, and Windows on x64 and arm64); the launcher downloads and SHA256-verifies the right ones for your platform. **The beta release isn't published yet**, so until then — or on any unpackaged platform — build from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release` (and `cd hook && cargo build --release`), fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN`, `GENESIS_HOOK_BIN`, and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
 
 ## Status
 
 Genesis is at **v0.1.0, before its first published release**, and is honest about what that means:
 
-- The two-agent builder, the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (Node hooks/installer/session-copy tests, plus the Rust server suite).
+- The two-agent builder, the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (the Rust `genesis-hook` suite, the Rust server suite, and the Node installer/session-copy/plugin tests).
 - The **memory server (v1)** — `store` / `recall` / `consolidate` — is built and tested: 86 unit tests and 17 BDD scenarios pass in release against the real ONNX model, real SQLite, and the real spawned stdio server. Its `consolidate` summarize/evict pass is deferred to v2 (see `server/README.md`).
-- The memory server's **npm distribution** (`npx @xcidos/genesis-memory-server`) activates once the `@xcidos/genesis-memory-server` package and its per-platform binaries are published to npm. Until then, use the build-from-source path above.
+- The memory server's **binary distribution** (GitHub Release assets, downloaded + SHA256-verified by the launcher) activates once the beta release is published. Until then, use the build-from-source path above.
 
 No usage, star, or production-deployment claims are made here because none would be verifiable yet.
 

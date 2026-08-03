@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /* Bootstrap a SELF-CONTAINED, repo-level Genesis workspace at <target_repo>/.genesis/.
 
-   Faithful Node (CommonJS, stdlib-only) port of bootstrap.py, updated for the npm-distributed memory server:
-   the generated repo `.mcp.json` launches the server via `npx @xcidos/genesis-memory-server` (Node is the one
-   prerequisite) instead of a committed Rust binary — so there is NO local Rust build and NO multi-GB binary +
-   model copy. Node is the only runtime a user's machine needs.
+   Faithful Node (CommonJS, stdlib-only) port of bootstrap.py, updated for the GitHub-Releases distribution:
+   the generated repo `.mcp.json` launches the server via a small Node launcher (`.genesis/bin/genesis-memory.js`)
+   that downloads + SHA256-verifies the platform binary + model from the GitHub Release and caches them — so
+   there is NO local Rust build and NO committed multi-GB binary/model. Node is the only runtime a user needs.
 
    Genesis's expertise store, memory, hooks, and team live PER REPOSITORY (never global). When Sensei is asked
    to build an agent in a repo that has no `.genesis/` workspace yet, this creates one in a single deterministic
@@ -12,13 +12,13 @@
 
    What it does (idempotent, cross-platform):
      1. Copies the functional Genesis tree into <repo>/.genesis/: expertise/ (+manifests/, required.json),
-        hooks/, skills/ (the team skills build-agent/research-expertise + the spec-forge suite), team/
-        (sensei+method personas/behaviors), install/ (assemble/install/bootstrap).
+        hooks/ (hooks.json + the run.js resolver), skills/ (team skills + the spec-forge suite), team/,
+        install/, and bin/ (the launcher). Then stages the native genesis-hook binary into <repo>/.genesis/bin.
      2. Registers a repo-local `genesis-memory` MCP server in <repo>/.mcp.json (merged, not clobbered) that runs
-        `npx -y @xcidos/genesis-memory-server`, pointing the memory DB + portable JSONL export at <repo>/.genesis/.
+        `node <repo>/.genesis/bin/genesis-memory.js`, pointing the memory DB + portable JSONL export at <repo>/.genesis/.
      3. Installs sensei + method into <repo>/.claude/agents/ via the assembler with genesis_home = <repo>/.genesis,
-        so their hook commands reference <repo>/.genesis/hooks/*.js and the validate/review hooks resolve the
-        store at <repo>/.genesis/expertise/ through their existing HOOK_DIR/../expertise relative logic.
+        so their hook commands invoke <repo>/.genesis/bin/genesis-hook directly and pass
+        --expertise <repo>/.genesis/expertise.
    Re-running refreshes the copied tree + agents WITHOUT clobbering an existing memory DB.
 
    usage: bootstrap.js <target_repo> [genesis_home]     # genesis_home from $GENESIS_HOME, else this repo root
@@ -130,7 +130,7 @@ function main() {
   // 1. Copy the functional Genesis tree (self-contained). `skills/` holds the team skills (build-agent,
   //    research-expertise) + the spec-forge suite, so it travels too — the assembler wires sensei's skills
   //    from <dest>/skills/ (built-ins) via installNamedSkills.
-  for (const sub of ["expertise", "hooks", "skills", "team", "install"]) {
+  for (const sub of ["expertise", "hooks", "skills", "team", "install", "bin"]) {
     const s = path.join(gh, sub);
     if (!isDir(s)) {
       fail(`genesis home is missing ${sub}/ at ${gh} — is ${gh} a Genesis install?`);
@@ -138,7 +138,28 @@ function main() {
     copyTree(s, path.join(dest, sub));
   }
 
-  // 2. Memory DB lives under .genesis/ (the npx-launched server creates the file on first use). Never clobber
+  // 1b. Stage the native `genesis-hook` binary into <dest>/bin so the enforcement hooks invoke it
+  //     DIRECTLY (no Node in the hot path). The launcher (copied above into <dest>/bin) resolves it:
+  //     GENESIS_HOOK_BIN for dev/CI, else download from the GitHub Release + SHA256-verify. Non-fatal +
+  //     timeout-bounded: if staging fails, run.js + the agents fail-open, so the repo still bootstraps —
+  //     the deterministic checks stay dormant until the binary is present. `<dest>/bin` is machine-local
+  //     + regenerable (covered by the .gitignore).
+  const binDir = path.join(dest, "bin");
+  const launcher = path.join(binDir, "genesis-memory.js");
+  const hookExe = process.platform === "win32" ? "genesis-hook.exe" : "genesis-hook";
+  let hookBinStaged = false;
+  try {
+    fs.mkdirSync(binDir, { recursive: true });
+    const r = spawnSync(process.execPath, [launcher, "--stage-hook", binDir], {
+      encoding: "utf-8",
+      timeout: 300000, // a cold cache may download the binary from the release
+    });
+    hookBinStaged = r.status === 0 && fs.existsSync(path.join(binDir, hookExe));
+  } catch (e) {
+    hookBinStaged = false;
+  }
+
+  // 2. Memory DB lives under .genesis/ (the launched server creates the file on first use). Never clobber
   //    an existing one. The DB is machine-local + regenerable; the PORTABLE, COMMITTED form of memory is the
   //    JSONL export at .genesis/memory/memory.jsonl (see the .gitignore in step 4). On a fresh clone the DB is
   //    absent but the JSONL is present, so the server rebuilds (re-embeds) the memory on first run.
@@ -146,10 +167,10 @@ function main() {
   const memExport = path.join(dest, "memory", "memory.jsonl");
 
   // 3. Register the repo-local memory MCP server in <repo>/.mcp.json (merge; preserve other servers). The
-  //    server is delivered via npx (@xcidos/genesis-memory-server resolves the prebuilt native binary + the
-  //    ONNX model package for this platform) — NO local Rust build, and the model dir is provided by the npm
-  //    model package, so no GENESIS_MODEL_DIR is set here. The repo-local DB + portable export keep memory
-  //    per-repo and travelling with the repo across systems.
+  //    server is launched via the Node launcher staged in step 1 (.genesis/bin/genesis-memory.js), which
+  //    downloads + SHA256-verifies the platform binary + model from the GitHub Release and caches them — NO
+  //    local Rust build, and the launcher points the server at the cached model (no GENESIS_MODEL_DIR here).
+  //    The repo-local DB + portable export keep memory per-repo and travelling with the repo across systems.
   const mcpPath = path.join(target, ".mcp.json");
   let mcp;
   try {
@@ -164,8 +185,8 @@ function main() {
     mcp.mcpServers = {};
   }
   mcp.mcpServers["genesis-memory"] = {
-    command: "npx",
-    args: ["-y", "@xcidos/genesis-memory-server"],
+    command: "node",
+    args: [launcher],
     env: {
       GENESIS_MEMORY_DB: memDb,
       // The committed, cross-system-portable mirror. The server snapshots to this after every
@@ -199,6 +220,8 @@ function main() {
         target_repo: target,
         agents_installed: installed,
         agents_dir: path.join(target, ".claude", "agents"),
+        hook_bin: hookBinStaged ? path.join(binDir, hookExe) : null,
+        hook_bin_staged: hookBinStaged,
         memory_db: memDb,
         memory_db_preexisting: fs.existsSync(memDb),
         memory_export: memExport,
@@ -206,7 +229,7 @@ function main() {
         gitignore: path.join(target, ".gitignore"),
         gitignore_warning: gitignoreNote,
         mcp_json: mcpPath,
-        mcp_server: "npx -y @xcidos/genesis-memory-server",
+        mcp_server: "node " + launcher,
         next: "Open Claude Code in the repo; talk to Sensei to build agents (expertise via the research-expertise skill).",
       },
       null,

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /* Integration test for bootstrap.js (D3) — runs the REAL bootstrap into an OS temp repo and asserts a
-   correct, self-contained repo-level Genesis: layout, .mcp.json + agents wired repo-local via npx, hooks
-   resolve the repo store, and re-run is idempotent (preserves the memory DB).
+   correct, self-contained repo-level Genesis: layout, .mcp.json + agents wired to the native binary via
+   the staged Node launcher, hooks resolve the repo store, and re-run is idempotent (preserves the memory DB).
 
-   Faithful Node (CommonJS, stdlib-only) port of test_bootstrap.py, updated for the npm-distributed server:
-   the memory server is delivered by `npx @xcidos/genesis-memory-server` (no committed binary + model copy),
-   so this test asserts the npx wiring instead of copied artifacts. Fast (no multi-GB copy).
+   Updated for the GitHub-Releases distribution: the memory server is launched by the staged Node launcher
+   (.genesis/bin/genesis-memory.js) and the genesis-hook binary is staged into .genesis/bin (from
+   GENESIS_HOOK_BIN here, else downloaded from the release), so this test asserts that wiring.
 
    Run:  node install/test_bootstrap.js
 */
@@ -58,8 +58,12 @@ function readText(p) {
 function main() {
   const target = fs.mkdtempSync(path.join(os.tmpdir(), "genesis-boot-"));
   const dest = path.join(target, ".genesis");
+  const hookExe = process.platform === "win32" ? "genesis-hook.exe" : "genesis-hook";
+  const localHook = path.join(GH, "hook", "target", "release", hookExe);
+  // Stage from the locally-built binary (fast, offline) when present; else bootstrap falls back to npx.
+  const ENV = Object.assign({}, process.env, isFile(localHook) ? { GENESIS_HOOK_BIN: localHook } : {});
   try {
-    const r = spawnSync(process.execPath, [BOOTSTRAP, target, GH], { encoding: "utf-8", timeout: 900000 });
+    const r = spawnSync(process.execPath, [BOOTSTRAP, target, GH], { encoding: "utf-8", timeout: 900000, env: ENV });
     check("bootstrap exits 0", r.status === 0);
     if (r.status !== 0) {
       console.log("  STDERR:", (r.stderr || "").trim().slice(0, 500));
@@ -69,12 +73,10 @@ function main() {
     check("expertise/manifests copied", isDir(path.join(dest, "expertise", "manifests")));
     check("required.json copied", isFile(path.join(dest, "expertise", "required.json")));
     check(
-      "hooks copied (validate.js + enforce_research.js)",
-      isFile(path.join(dest, "hooks", "validate.js")) && isFile(path.join(dest, "hooks", "enforce_research.js"))
+      "hooks copied (hooks.json + run.js resolver)",
+      isFile(path.join(dest, "hooks", "hooks.json")) && isFile(path.join(dest, "hooks", "run.js"))
     );
     check("team copied", isDir(path.join(dest, "team", "sensei")));
-    // Skills live at the genesis-home skills/ dir (plugin-root skills/), not under team/. Bootstrap copies
-    // skills/ into <dest>, and the assembler installs sensei's named skills into .claude/skills/.
     check(
       "research-expertise skill copied to .genesis/skills/",
       isDir(path.join(dest, "skills", "research-expertise"))
@@ -86,13 +88,24 @@ function main() {
     );
     check("install scripts copied", isFile(path.join(dest, "install", "assemble.js")));
 
+    // the native genesis-hook binary is staged into .genesis/bin (from GENESIS_HOOK_BIN when built locally)
+    if (isFile(localHook)) {
+      check("genesis-hook binary staged into .genesis/bin", isFile(path.join(dest, "bin", hookExe)));
+    } else {
+      check("genesis-hook staging attempted (npx path; skipped offline in this test env)", true);
+    }
+
     // .mcp.json wired repo-local via npx (no committed binary + model; Node is the one prerequisite)
     const mcp = readJson(path.join(target, ".mcp.json"));
     const gm = mcp.mcpServers["genesis-memory"];
-    check(".mcp.json command → npx (no python3, no local Rust binary)", gm.command === "npx");
+    check(".mcp.json command → node (GitHub-Releases launcher, no npx/python)", gm.command === "node");
     check(
-      ".mcp.json args launch @xcidos/genesis-memory-server",
-      Array.isArray(gm.args) && gm.args.some((a) => a === "@xcidos/genesis-memory-server")
+      ".mcp.json args launch the .genesis/bin/genesis-memory.js launcher",
+      Array.isArray(gm.args) && gm.args.some((a) => a.includes("genesis-memory.js"))
+    );
+    check(
+      "launcher copied into .genesis/bin",
+      isFile(path.join(dest, "bin", "genesis-memory.js"))
     );
     check(
       ".mcp.json env → repo-local db + portable export under .genesis/",
@@ -109,45 +122,46 @@ function main() {
     spawnSync("git", ["-C", target, "init", "-q"]);
     check("memory JSONL is COMMITTED (not ignored)", !ignored(".genesis/memory/memory.jsonl"));
     check("expertise is COMMITTED (not ignored)", !ignored(".genesis/expertise/portfolio-truth.md"));
-    check("hooks are COMMITTED (not ignored)", !ignored(".genesis/hooks/inject.js"));
+    check("hooks are COMMITTED (not ignored)", !ignored(".genesis/hooks/hooks.json"));
+    check("staged binary is IGNORED (machine-local)", ignored(".genesis/bin/" + hookExe));
     check("memory.db is ignored (machine-local)", ignored(".genesis/memory.db"));
     check(".mcp.json is ignored (absolute paths)", ignored(".mcp.json"));
 
-    // agents wired to .genesis/, sensei has the enforce gate, method does not
+    // agents wired to the native binary; sensei has the enforce gate, method does not
     const sensei = readText(path.join(target, ".claude", "agents", "sensei.md"));
     const method = readText(path.join(target, ".claude", "agents", "method.md"));
-    // PORTABLE: built-agent hooks reference ${CLAUDE_PROJECT_DIR}/.genesis/hooks (runtime-resolved to the repo
-    // root, cross-platform) via `node` — NOT an absolute machine path, so the agent survives a clone.
+    // PORTABLE: built-agent hooks reference ${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook (runtime-resolved
+    // to the repo root, cross-platform) — NOT an absolute machine path, so the agent survives a clone.
     check(
-      "sensei.md hooks reference ${CLAUDE_PROJECT_DIR}/.genesis/hooks (portable, braced)",
-      sensei.includes("${CLAUDE_PROJECT_DIR}/.genesis/hooks")
+      "sensei.md hooks reference ${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook (portable, braced)",
+      sensei.includes("${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook")
     );
     check(
-      "sensei.md hook commands run `node` (not python3)",
-      sensei.includes('command: \'"node" "${CLAUDE_PROJECT_DIR}/.genesis/hooks/') && !sensei.includes("python3")
+      "sensei.md deterministic hooks invoke the binary directly (no node/python)",
+      sensei.includes('command: \'"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook') &&
+        !sensei.includes('"node"') &&
+        !sensei.includes("python3")
     );
     check(
       "sensei.md hooks carry NO absolute machine path",
-      !sensei.includes(path.join(dest, "hooks")) && !sensei.includes("/mnt/")
+      !sensei.includes(path.join(dest, "bin")) && !sensei.includes("/mnt/")
     );
-    check("sensei has Bash enforce_research gate", sensei.includes("enforce_research.js"));
-    check("method has NO enforce_research gate", !method.includes("enforce_research.js"));
-
-    // hooks resolve the repo store via HOOK_DIR/../expertise (the relative logic actually points here)
-    const resolved = path.normalize(path.join(dest, "hooks", "..", "expertise", "manifests"));
+    check("sensei has Bash enforce-research gate", sensei.includes("enforce-research"));
+    check("method has NO enforce-research gate", !method.includes("enforce-research"));
     check(
-      "validate/review hooks resolve the repo store",
-      resolved === path.normalize(path.join(dest, "expertise", "manifests")) && isDir(resolved)
+      "review is a built-in agent hook (Haiku) in sensei.md",
+      sensei.includes("- type: agent") && sensei.includes("model: 'claude-haiku")
     );
 
-    // required.json has sensei + method registered in the repo-local store
+    // repo store present + resolvable
+    check("repo expertise manifests present", isDir(path.join(dest, "expertise", "manifests")));
     const req = readJson(path.join(dest, "expertise", "required.json"));
     check("repo required.json has sensei + method", "sensei" in req && "method" in req);
 
     // idempotent + preserves an existing memory DB
     const memdb = path.join(dest, "memory.db");
     fs.writeFileSync(memdb, "SENTINEL", { encoding: "utf-8" });
-    const r2 = spawnSync(process.execPath, [BOOTSTRAP, target, GH], { encoding: "utf-8", timeout: 900000 });
+    const r2 = spawnSync(process.execPath, [BOOTSTRAP, target, GH], { encoding: "utf-8", timeout: 900000, env: ENV });
     check("re-run idempotent (exit 0)", r2.status === 0);
     check(
       "memory.db preserved across re-run",

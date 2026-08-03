@@ -16,7 +16,7 @@ const HERE = __dirname;
 const GH = path.dirname(HERE);
 const BIN = path.join(GH, "server", "target", "release", "genesis-memory-server");
 const MODEL = path.join(GH, "server", "models");
-const INJECT = path.join(GH, "hooks", "inject.js");
+const HOOKBIN = path.join(GH, "hook", "target", "release", process.platform === "win32" ? "genesis-hook.exe" : "genesis-hook");
 const SID = "orch-session-0001";
 
 function _recall(agent_id, query, db, k) {
@@ -60,8 +60,8 @@ function _recall(agent_id, query, db, k) {
 }
 
 async function main() {
-  if (!(fs.existsSync(BIN) && fs.existsSync(MODEL) && fs.statSync(MODEL).isDirectory())) {
-    console.log(`  SKIP  memory server not built (${BIN})`);
+  if (!(fs.existsSync(BIN) && fs.existsSync(MODEL) && fs.statSync(MODEL).isDirectory() && fs.existsSync(HOOKBIN))) {
+    console.log(`  SKIP  memory server or genesis-hook binary not built (${BIN} / ${HOOKBIN})`);
     console.log("\n0 passed, 0 failed (skipped)");
     return;
   }
@@ -107,11 +107,11 @@ async function main() {
   const hit = await _recall("nightbot", "does the nightly job run on saturday?", mem_db);
   check("agent recalls carried-over history under its id", hit.includes("weekend") || hit.includes("Mon"));
 
-  // inject.js surfaces the summary for this agent (exp_dir = <genesis_home>/expertise)
+  // the inject hook (genesis-hook inject) surfaces the summary for this agent (exp_dir = <genesis_home>/expertise)
   fs.mkdirSync(path.join(ghome, "expertise"), { recursive: true });
-  const p = spawnSync("node", [INJECT, path.join(ghome, "expertise"), "nightbot"], { input: "{}", encoding: "utf8", cwd: repo, timeout: 20000 });
+  const p = spawnSync(HOOKBIN, ["inject", path.join(ghome, "expertise"), "nightbot"], { input: "{}", encoding: "utf8", cwd: repo, timeout: 20000 });
   const ctx = (JSON.parse((p.stdout || "").trim()).hookSpecificOutput || {}).additionalContext || "";
-  check("inject.js surfaces the session-copy summary at start", ctx.includes("carried-over session memory") && ctx.includes("UTC"));
+  check("inject hook surfaces the session-copy summary at start", ctx.includes("carried-over session memory") && ctx.includes("UTC"));
 
   for (const d of [home, repo]) {
     fs.rmSync(d, { recursive: true, force: true });

@@ -43,33 +43,32 @@ install/          Installer + assembler (Node): install.js, bootstrap.js, assemb
 session_copy/     Session-copy pipeline (Node): capture.js / embed.js / store.js /
                   build_session_agent.js
 server/           Rust MCP memory server (genesis-memory-server)
-npm/              npm packaging for the memory server — the launcher package
-                  (@xcidos/genesis-memory-server) plus per-OS/arch binary packages and
-                  the model package (@xcidos/genesis-memory-model)
+hook/             Rust enforcement-hook binary (genesis-hook): gate/validate/inject/etc.
+bin/              Node launcher (genesis-memory.js) — downloads + runs the release binaries
 scripts/          Helper scripts (e.g. fetch-model.mjs)
 expertise/        Verified expertise reports the agents read
 docs/             Architecture, workflow, and the publish plan
 test/             Shared test assets: BDD features + the CRAP-gate tooling (Node .mjs)
 ```
 
-There are two toolchains: **Node.js** — the hooks, the installer/assembler, and the
-session-copy pipeline, which is the only runtime a user's machine needs — and **Rust**, the
-`server/` crate, which maintainers/CI build into the memory-server binary that end users
-receive prebuilt via npm. There is no build step for the agents/skills/docs themselves — they
-are Markdown and JSON.
+There are two toolchains: **Node.js** — the launcher, the installer/assembler, the plugin's
+hook resolver, and the session-copy pipeline, which is the only runtime a user's machine needs
+— and **Rust**, the `server/` and `hook/` crates, which maintainers/CI build into the
+memory-server + genesis-hook binaries that end users receive prebuilt as GitHub Release assets.
+There is no build step for the agents/skills/docs themselves — they are Markdown and JSON.
 
 ---
 
 ## Prerequisites
 
 **To use Genesis** (end users): **Claude Code** and **Node.js**. That's it — Genesis has no
-Python runtime and requires no Python. The memory server ships as a prebuilt binary delivered
-through npm, so end users don't need Rust either.
+Python runtime and requires no Python. The memory server + hooks ship as prebuilt binaries
+delivered as GitHub Release assets, so end users don't need Rust either.
 
 **To develop the memory server** (maintainers / CI):
 
-- **Rust** — `rustc` / `cargo` 1.97 or newer (for `server/`). Only needed to *build* the
-  server; end users get the prebuilt binary via npm.
+- **Rust** — `rustc` / `cargo` (pinned by `rust-toolchain.toml`) for `server/` and `hook/`.
+  Only needed to *build* them; end users get the prebuilt binaries from the GitHub Release.
 - **Node.js** — for the hooks, the installer/assembler, the session-copy pipeline, and their
   tests. These have **no third-party runtime dependencies**; tests run against Node's built-ins.
 - **Windows is a first-class target.** Genesis is expected to work on Windows, macOS, and
@@ -104,21 +103,23 @@ This downloads `onnx/model.onnx` and `tokenizer.json` for
 
 ### How the memory server reaches end users
 
-Maintainers/CI compile the `server/` crate per platform and publish the binaries as npm
-packages: a launcher package (`@xcidos/genesis-memory-server`) with per-OS/arch binary
-packages as `optionalDependencies`, plus a model package (`@xcidos/genesis-memory-model`).
-The plugin's `.mcp.json` launches the server with `npx -y @xcidos/genesis-memory-server`, so
-end users never build Rust — npm resolves the right prebuilt binary for their platform.
+Maintainers/CI compile the `server/` and `hook/` crates per platform and publish the binaries
+as **GitHub Release assets** for the version tag — `genesis-memory-server-<key>`,
+`genesis-hook-<key>`, the model (`model.onnx` + `tokenizer.json`), and a `SHA256SUMS` manifest —
+using only the auto-provided `GITHUB_TOKEN` (no registry account or token). The plugin's
+`.mcp.json` launches the Node launcher `bin/genesis-memory.js`, which downloads the matching
+assets for the consumer's platform on first use, SHA256-verifies them, caches them per-user, and
+execs the server. End users never build Rust and never touch npm.
 
-> **Status: pre-release / beta.** These npm packages are **not published to the registry
-> yet**, so `npx @xcidos/genesis-memory-server` will not resolve today. The npm/npx flow above
-> describes the intended distribution mechanism, not a currently-installable path. Build the
-> server locally from `server/` (above) while the packages are in beta.
+> **Status: pre-release / beta.** The beta GitHub Release is **not published yet**, so the
+> launcher's download will 404 today. Build `server/` and `hook/` locally (above) and point the
+> launcher at them via `GENESIS_MEMORY_BIN` / `GENESIS_HOOK_BIN` / `GENESIS_MODEL_DIR` while in beta.
 
-### Node components (hooks, installer, session-copy)
+### Node components (launcher, installer, session-copy, hook resolver)
 
-No build. The hooks (`hooks/*.js`), the installer/assembler (`install/*.js`), and the
-session-copy pipeline (`session_copy/*.js`) all run directly under `node`.
+No build. The launcher (`bin/genesis-memory.js`), the plugin's hook resolver (`hooks/run.js`),
+the installer/assembler (`install/*.js`), and the session-copy pipeline (`session_copy/*.js`)
+all run directly under `node`. The enforcement hooks themselves are the Rust `hook/` binary.
 
 ---
 
@@ -159,17 +160,17 @@ Each test file is a self-contained script that prints `N passed, M failed` and e
 non-zero on failure. Run them directly:
 
 ```
-node hooks/test_gate.js
-node hooks/test_inject.js
-node hooks/test_validate.js
-node hooks/test_review.js
-node hooks/test_adherence.js
-node hooks/test_enforce_research.js
-node hooks/test_session_pointer.js
+# Rust: the memory server + the enforcement-hook binary
+( cd server && cargo test --release )
+( cd hook   && cargo test --release )   # 28 unit + 13 CLI end-to-end
 
-node install/test_bootstrap.js
+# Node: plugin scaffold, installer/assembler, launcher, session-copy
+node hooks/test_plugin.js
+node hooks/test_vendored_skills.js
+
+node install/test_bootstrap.js          # set GENESIS_HOOK_BIN to a built hook binary first
 node install/test_portability.js
-node "npm/@xcidos/genesis-memory-server/test/launcher.test.js"
+node test/launcher.test.js
 
 node session_copy/test_capture.js
 node session_copy/test_embed.js
@@ -183,8 +184,8 @@ node team/echo/test_echo.mjs
 To run them all in one go from the repo root:
 
 ```
-# Node tests (hooks, installer/assembler, session-copy, team samples, memory-server launcher)
-find hooks install session_copy team npm \
+# Node tests (plugin, installer/assembler, session-copy, team samples, launcher)
+find hooks install session_copy team test bin \
   \( -name 'test_*.js' -o -name 'test_*.mjs' -o -name '*.test.js' \) -print0 \
   | xargs -0 -n1 node
 ```

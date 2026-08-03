@@ -7,9 +7,11 @@
      * EXPERTISE + house rules delivered and enforced by the inject/gate/validate HOOK triple, wired here into
        each agent's frontmatter (verified YAML shape: event -> matcher -> hooks:[{type,command}]).
 
-   The one prerequisite is Node.js. Hook commands emit `node ...` (resolved via PATH), reference the repo's
-   own `.genesis` via the braced `${CLAUDE_PROJECT_DIR}` (Claude Code substitutes the project root at runtime,
-   Windows + macOS + Linux) — NEVER an absolute machine path — and point at the Node hook siblings (.js).
+   Deterministic hooks (inject/gate/enforce-research/validate) invoke the native `genesis-hook` binary
+   DIRECTLY at ${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook[.exe] (staged per-machine by bootstrap) —
+   NO Node in the hot path. The semantic `review` is a Claude Code built-in `agent` hook (fast Haiku model,
+   tool-capable). Paths reference the repo's own `.genesis` via the braced `${CLAUDE_PROJECT_DIR}` (Claude
+   Code substitutes the project root at runtime, Windows + macOS + Linux) — never an absolute machine path.
 
    usage: assemble.js <source_member_dir> <name> <target_repo> <genesis_home>
    reads:  <source_member_dir>/{persona.md, behavior.md, skills/}
@@ -180,19 +182,35 @@ function q(p) {
   return '"' + p + '"';
 }
 
-function frontmatter(name, meta, home, skills) {
-  // PORTABLE hook paths (cross-platform): reference the repo's own .genesis via ${CLAUDE_PROJECT_DIR}, which
-  // Claude Code substitutes at runtime to the project root (Windows + macOS + Linux) — NEVER an absolute
-  // machine path. So a BUILT agent survives a clone to any machine/OS. `home` is e.g.
-  // "${CLAUDE_PROJECT_DIR}/.genesis". Interpreter is `node` (resolved via PATH), matching the plugin's own
-  // hooks.json rather than baking this machine's interpreter path.
-  const hooksDir = home + "/hooks";
+function reviewPromptText(name, expertise) {
+  // The independent semantic reviewer's instructions, baked into the built-in `agent` hook. Mirrors the
+  // old review.js job: judge whether the produced artifacts EMBODY each expertise's judgment /
+  // non-mechanical checkable rules; the mechanical predicates are enforced deterministically by validate.
+  return (
+    "You are an INDEPENDENT semantic reviewer for the Genesis agent '" + name + "', which just finished. " +
+    "You did NOT write its work; judge it skeptically. Read the artifacts it produced under the current " +
+    "project (files matching *persona.md, *behavior.md, CLAUDE.md, .claude/agents/*.md, *persona.spec.json, " +
+    "*.tests.json); if there are none, respond {\"ok\":true}. Its REQUIRED expertise: " + expertise.join(", ") +
+    ". The expertise store is at .genesis/expertise under the project root. For each required expertise " +
+    "<name>, read .genesis/expertise/manifests/<name>.json and check every rule of type \"judgment\" (and " +
+    "non-mechanical \"checkable\" rules) against the artifacts — SKIP mechanical predicate kinds " +
+    "(regex/line_count/declaration), which are enforced deterministically elsewhere. Be skeptical: if an " +
+    "artifact does not clearly satisfy a rule, treat it as FAIL. Respond with ONLY a JSON object: " +
+    "{\"ok\":true} if every checked rule is satisfied, or {\"ok\":false,\"reason\":\"<name>#<rule-id>: what " +
+    "is missing (one per line)\"}. $ARGUMENTS"
+  );
+}
+
+function frontmatter(name, meta, home, skills, expertise) {
+  // Deterministic hooks run the native `genesis-hook` binary DIRECTLY (no Node in the hot path) at
+  // ${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook[.exe] — staged per-machine by bootstrap. The .exe suffix
+  // is chosen for THIS machine; a clone to another OS re-runs bootstrap (which re-stages the binary + re-
+  // assembles). `home` is e.g. "${CLAUDE_PROJECT_DIR}/.genesis" — a portable base, never an absolute path.
   const expDir = home + "/expertise";
-  const node = "node";
-  const inject = q(node) + " " + q(hooksDir + "/inject.js") + " " + q(expDir) + " " + name;
-  const gate = q(node) + " " + q(hooksDir + "/gate.js");
-  const stop = q(node) + " " + q(hooksDir + "/validate.js") + " . " + name;
-  const review = q(node) + " " + q(hooksDir + "/review.js") + " . " + name;
+  const bin = q(home + "/bin/genesis-hook" + (process.platform === "win32" ? ".exe" : ""));
+  const inject = bin + " inject " + q(expDir) + " " + name;
+  const gate = bin + " gate --expertise " + q(expDir);
+  const stop = bin + " validate . " + name + " --expertise " + q(expDir);
   const skillsLine = skills && skills.length ? "skills: " + skills.join(", ") + "\n" : "";
   // PreToolUse: every agent gets the Write|Edit gate (house rules + rule surfacing). SENSEI additionally
   // gets a Bash gate that blocks assembling a built agent unless the research-expertise skill ran this
@@ -204,12 +222,26 @@ function frontmatter(name, meta, home, skills) {
     "        - type: command\n" +
     yamlCmd(gate);
   if (name === "sensei") {
-    const enforce = q(node) + " " + q(hooksDir + "/enforce_research.js");
+    const enforce = bin + " enforce-research";
     pretooluse +=
       '    - matcher: "Bash"\n' +
       "      hooks:\n" +
       "        - type: command\n" +
       yamlCmd(enforce);
+  }
+  // Stop: deterministic validate (command -> binary) + semantic review (built-in `agent` hook, fast Haiku
+  // model). The review hook is emitted only when the agent has required expertise (nothing to review else).
+  let stopHooks =
+    "  Stop:\n" +
+    "    - hooks:\n" +
+    "        - type: command\n" +
+    yamlCmd(stop);
+  if (expertise && expertise.length) {
+    stopHooks +=
+      "        - type: agent\n" +
+      "          model: 'claude-haiku-4-5-20251001'\n" +
+      "          timeout: 120\n" +
+      "          prompt: '" + reviewPromptText(name, expertise).replace(/'/g, "''") + "'\n";
   }
   // Verified frontmatter-hooks YAML shape (docs db-reader example): event -> [{matcher, hooks:[{type,command}]}].
   return (
@@ -225,12 +257,7 @@ function frontmatter(name, meta, home, skills) {
     "        - type: command\n" +
     yamlCmd(inject) +
     pretooluse +
-    "  Stop:\n" +
-    "    - hooks:\n" +
-    "        - type: command\n" +
-    yamlCmd(stop) +
-    "        - type: command\n" +
-    yamlCmd(review) +
+    stopHooks +
     "---\n"
   );
 }
@@ -291,7 +318,7 @@ function main() {
   } catch (e) {
     home = gh.split(path.sep).join("/");
   }
-  fs.writeFileSync(out, frontmatter(name, meta, home, skills) + "\n" + body + "\n", { encoding: "utf-8" });
+  fs.writeFileSync(out, frontmatter(name, meta, home, skills, expertise) + "\n" + body + "\n", { encoding: "utf-8" });
   console.log(
     JSON.stringify({
       agent: name,

@@ -1,25 +1,15 @@
 name: release
 
-# On a version tag (v*), build the self-contained genesis-memory-server for every supported
-# platform, stage each binary into its npm platform package, package the pinned ONNX model,
-# then publish everything to npm with provenance. The plugin's .mcp.json launches the server
-# via `npx -y @xcidos/genesis-memory-server`, which npm resolves to the one matching platform
-# package (os/cpu/libc-gated) + the shared model package. No GitHub-Releases assets, no
-# checksum pinning, no Python launcher — that model is retired.
+# On a version tag (v*), build the self-contained genesis-memory-server + genesis-hook for every
+# supported platform, fetch the pinned ONNX model, then publish them all as GitHub Release assets with a
+# SHA256SUMS manifest. The plugin launcher (bin/genesis-memory.js) downloads the matching assets for the
+# consumer's platform, SHA256-verifies them, caches them per-user, and runs. NO npm, NO registry token —
+# only the auto-provided GITHUB_TOKEN.
 #
-# The inference engine is the pure-Rust tract backend (ort `alternative-backend` + `ort-tract`),
-# so EVERY target builds from one path with no prebuilt runtime, no cmake, and no sidecar
-# dylib: there is no ONNX-Runtime download-binaries matrix to special-case, and the two targets
-# ONNX Runtime never shipped a prebuilt for — x86_64-apple-darwin and the musl targets — now
-# build like any other. Each binary is SELF-CONTAINED: inference is compiled in (tract, pure
-# Rust), SQLite is compiled in (rusqlite `bundled`), and the Windows CRT is static (+crt-static
-# via server/.cargo/config.toml). So a platform package is exactly one file and needs no sidecar.
-#
-# REQUIRED SECRETS:
-#   NPM_TOKEN            npm automation token with publish rights to the @xcidos scope
-#   (macOS signing, optional — ad-hoc signed if absent, which runs locally but not via Gatekeeper)
-#   APPLE_CERT_P12_BASE64, APPLE_CERT_PASSWORD, APPLE_SIGN_IDENTITY,
-#   APPLE_NOTARY_APPLE_ID, APPLE_NOTARY_TEAM_ID, APPLE_NOTARY_PASSWORD
+# The inference engine is the pure-Rust tract backend (ort `alternative-backend` + `ort-tract`), so EVERY
+# target builds from one path with no prebuilt runtime, no cmake, and no sidecar dylib. Each binary is
+# SELF-CONTAINED: inference compiled in (tract), SQLite compiled in (rusqlite `bundled`), Windows CRT
+# static (+crt-static via server/.cargo/config.toml). genesis-hook is pure Rust (serde_json + regex).
 
 on:
   push:
@@ -27,38 +17,33 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build (e.g. v0.1.0)"
+        description: "Release tag to build (e.g. v0.1.0-beta.1)"
         required: true
 
 permissions:
-  contents: read
-  id-token: write        # npm provenance (Sigstore via GitHub OIDC)
+  contents: write        # create the GitHub Release + upload assets
 
 env:
   BIN_STEM: genesis-memory-server
 
 jobs:
-  # ── One self-contained binary per platform, staged into its npm package dir ────────────
+  # ── Build both self-contained binaries per platform; upload them as platform-named artifacts ──
   build:
     name: build ${{ matrix.key }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60     # bound any single target (e.g. a slow/absent arm64 runner) so it can't hang publish
+    timeout-minutes: 60     # bound any single target so it can't hang the release
     strategy:
-      fail-fast: false      # keep every platform independent — one target failing never sinks the rest
+      fail-fast: false      # one platform failing never sinks the rest
       matrix:
-        # All 8 targets. tract's hand-written ARM64 SIMD (SVE C + asm) will NOT cross-compile via
-        # zig or MSVC-on-an-x64-host, so every ARM64 target builds on a NATIVE ARM runner (where the
-        # system compiler/assembler handles the SVE/asm). x64 targets stay on x64 hosts; x64-musl
-        # uses zig cross (which works for x64); arm64-musl uses native arm + musl-tools (see step below).
         include:
-          - { key: darwin-arm64,     runner: macos-14,        target: aarch64-apple-darwin,       tool: cargo }
-          - { key: darwin-x64,       runner: macos-14,        target: x86_64-apple-darwin,        tool: cargo }    # cross on Apple Silicon (macos-13 Intel queues); x64 codegen/SIMD fine
-          - { key: linux-x64-gnu,    runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu,   tool: cargo }    # glibc 2.35 floor
-          - { key: linux-x64-musl,   runner: ubuntu-22.04,    target: x86_64-unknown-linux-musl,  tool: zigbuild } # fully static (zig cross ok for x64)
-          - { key: win32-x64,        runner: windows-latest,  target: x86_64-pc-windows-msvc,     tool: cargo }
-          - { key: linux-arm64-gnu,  runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu,  tool: cargo }   # NATIVE arm64, glibc 2.35 floor
-          - { key: linux-arm64-musl, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl, tool: cargo }   # NATIVE arm64 + musl-tools (musl step below)
-          - { key: win32-arm64,      runner: windows-11-arm,  target: aarch64-pc-windows-msvc,    tool: cargo }    # NATIVE arm64 Windows
+          - { key: darwin-arm64,     runner: macos-14,         target: aarch64-apple-darwin,       tool: cargo }
+          - { key: darwin-x64,       runner: macos-14,         target: x86_64-apple-darwin,        tool: cargo }
+          - { key: linux-x64-gnu,    runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,   tool: cargo }
+          - { key: linux-x64-musl,   runner: ubuntu-22.04,     target: x86_64-unknown-linux-musl,  tool: zigbuild }
+          - { key: win32-x64,        runner: windows-latest,   target: x86_64-pc-windows-msvc,     tool: cargo }
+          - { key: linux-arm64-gnu,  runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu,  tool: cargo }
+          - { key: linux-arm64-musl, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl, tool: cargo }
+          - { key: win32-arm64,      runner: windows-11-arm,   target: aarch64-pc-windows-msvc,    tool: cargo }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,9 +60,6 @@ jobs:
         if: matrix.tool == 'zigbuild'
         shell: bash
         run: |
-          # Pin zig 0.13.0 (the version cargo-zigbuild builds cleanly with; `pip install ziglang`
-          # pulls 0.16.0 AND never exposes a `zig` on PATH -> "Failed to find zig"). Host is x64
-          # ubuntu; zig cross-compiles to the musl/arm targets. Put it on PATH via GITHUB_PATH.
           ZIG=0.13.0
           curl -fsSL "https://ziglang.org/download/${ZIG}/zig-linux-x86_64-${ZIG}.tar.xz" -o /tmp/zig.tar.xz
           mkdir -p "$HOME/zig" && tar -xf /tmp/zig.tar.xz -C "$HOME/zig" --strip-components=1
@@ -89,55 +71,68 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         shell: bash
         run: |
-          # Native arm64 host building the musl target: needs a musl C compiler for the vendored C
-          # (sqlite-vec.c / sqlite3.c). musl-tools provides musl-gcc; the u_int8_t CFLAGS shim in
-          # server/.cargo/config.toml already covers musl. Rust links musl statically by default.
           sudo apt-get update && sudo apt-get install -y musl-tools
           echo "CC_aarch64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
 
-      - name: Build (cargo)
+      - name: Build server (cargo)
         if: matrix.tool == 'cargo'
         shell: bash
         working-directory: server
         run: cargo build --release --target "${{ matrix.target }}" --bin "$BIN_STEM"
 
-      - name: Build (zigbuild)
+      - name: Build server (zigbuild)
         if: matrix.tool == 'zigbuild'
         shell: bash
         working-directory: server
         run: |
-          # Pin a low glibc floor for the gnu cross target so it runs on old distros;
-          # musl targets are fully static and take no floor suffix.
           case "${{ matrix.target }}" in
             *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
             *)           tgt="${{ matrix.target }}" ;;
           esac
           cargo zigbuild --release --target "$tgt" --bin "$BIN_STEM"
 
-      - name: Locate built binary
-        id: bin
+      - name: Build hook (cargo)
+        if: matrix.tool == 'cargo'
+        shell: bash
+        run: cargo build --release --target "${{ matrix.target }}" --manifest-path hook/Cargo.toml
+
+      - name: Build hook (zigbuild)
+        if: matrix.tool == 'zigbuild'
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
+            *)           tgt="${{ matrix.target }}" ;;
+          esac
+          cargo zigbuild --release --target "$tgt" --manifest-path hook/Cargo.toml
+
+      - name: Collect + rename both binaries to platform-suffixed asset names
+        id: assets
         shell: bash
         run: |
           ext=""; [ "${{ startsWith(matrix.key, 'win32') }}" = "true" ] && ext=".exe"
-          src="server/target/${{ matrix.target }}/release/${BIN_STEM}${ext}"
-          test -f "$src" || { echo "missing built binary: $src"; exit 1; }
-          echo "src=$src"  >> "$GITHUB_OUTPUT"
-          echo "file=${BIN_STEM}${ext}" >> "$GITHUB_OUTPUT"
+          srv="server/target/${{ matrix.target }}/release/${BIN_STEM}${ext}"
+          hk="hook/target/${{ matrix.target }}/release/genesis-hook${ext}"
+          test -f "$srv" || { echo "missing server binary: $srv"; exit 1; }
+          test -f "$hk"  || { echo "missing hook binary: $hk"; exit 1; }
+          mkdir -p dist
+          cp "$srv" "dist/${BIN_STEM}-${{ matrix.key }}${ext}"
+          cp "$hk"  "dist/genesis-hook-${{ matrix.key }}${ext}"
+          chmod +x dist/* || true
+          echo "server=dist/${BIN_STEM}-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
+          echo "hook=dist/genesis-hook-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify self-contained (no inference-runtime sidecar)   # Linux/macOS best-effort
+      - name: Verify server is self-contained (no inference-runtime sidecar)   # Linux/macOS best-effort
         if: startsWith(matrix.key, 'win32') == false
         shell: bash
         run: |
-          # tract is compiled in, so the binary must never link a dynamic inference runtime.
-          # This is a regression guard: it fails if anyone re-enables an ONNX-Runtime/DirectML
-          # linking backend, which would reintroduce the missing-prebuilt targets this swap fixed.
-          f="${{ steps.bin.outputs.src }}"
+          f="${{ steps.assets.outputs.server }}"
           if (otool -L "$f" 2>/dev/null || ldd "$f" 2>/dev/null) | grep -iE "onnxruntime|directml"; then
-            echo "ERROR: binary links a dynamic inference runtime (expected pure-Rust tract)"; exit 1
+            echo "ERROR: server binary links a dynamic inference runtime (expected pure-Rust tract)"; exit 1
           fi
           echo "ok: self-contained (pure-Rust tract inference, no sidecar)"
 
-      - name: Sign + notarize (macOS)
+      - name: Sign + notarize (macOS — both binaries)
         if: startsWith(matrix.key, 'darwin')
         shell: bash
         env:
@@ -148,7 +143,8 @@ jobs:
           NOTARY_TEAM: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
           NOTARY_PW: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
-          f="${{ steps.bin.outputs.src }}"
+          f="${{ steps.assets.outputs.server }}"
+          h="${{ steps.assets.outputs.hook }}"
           if [ -n "$P12" ] && [ -n "$IDENTITY" ]; then
             kc="$RUNNER_TEMP/build.keychain"; kp="ci-$RANDOM"
             security create-keychain -p "$kp" "$kc"
@@ -158,34 +154,28 @@ jobs:
             security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$P12_PW" -T /usr/bin/codesign
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kp" "$kc"
             codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$h"
             if [ -n "$NOTARY_ID" ]; then
               ditto -c -k "$f" "$RUNNER_TEMP/nz.zip"
               xcrun notarytool submit "$RUNNER_TEMP/nz.zip" --apple-id "$NOTARY_ID" \
                 --team-id "$NOTARY_TEAM" --password "$NOTARY_PW" --wait
-              # A bare executable can't be stapled; the notarization ticket is served online.
+              # The hook binary is signed but not separately notarized (invoked locally, not downloaded standalone).
             fi
           else
             echo "No Apple signing secrets — ad-hoc signing (runs locally; not Gatekeeper-cleared)."
             codesign --force --sign - "$f"
+            codesign --force --sign - "$h"
           fi
 
-      - name: Stage into npm platform package
-        shell: bash
-        run: |
-          dest="npm/@xcidos/genesis-memory-server-${{ matrix.key }}"
-          test -d "$dest" || { echo "missing package dir: $dest"; exit 1; }
-          cp "${{ steps.bin.outputs.src }}" "$dest/${{ steps.bin.outputs.file }}"
-          chmod +x "$dest/${{ steps.bin.outputs.file }}" || true
-
-      - name: Upload staged binary
+      - name: Upload platform assets
         uses: actions/upload-artifact@v4
         with:
-          name: pkgbin-${{ matrix.key }}
-          path: npm/@xcidos/genesis-memory-server-${{ matrix.key }}/${{ steps.bin.outputs.file }}
+          name: assets-${{ matrix.key }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 1
 
-  # ── Package the pinned ONNX model once (platform-independent) ──────────────────────────
+  # ── Fetch the pinned ONNX model once (platform-independent) ─────────────────────────────
   model:
     name: package model
     runs-on: ubuntu-22.04
@@ -198,117 +188,83 @@ jobs:
       - name: Cache the pinned model (avoids re-hitting HuggingFace every run)
         uses: actions/cache@v4
         with:
-          path: |
-            npm/@xcidos/genesis-memory-model/onnx/model.onnx
-            npm/@xcidos/genesis-memory-model/tokenizer.json
-          key: model-pkg-${{ hashFiles('scripts/fetch-model.mjs') }}
-      - name: Fetch + verify the pinned model into the model package
+          path: model-dist
+          key: model-rel-${{ hashFiles('scripts/fetch-model.mjs') }}
+      - name: Fetch + verify the pinned model
         shell: bash
         run: |
-          if [ -f npm/@xcidos/genesis-memory-model/onnx/model.onnx ]; then
+          if [ -f model-dist/onnx/model.onnx ]; then
             echo "model restored from cache — skipping download"
           else
-            # HuggingFace returns 429 under repeated release runs; retry with backoff.
             ok=""
             for wait in 0 20 45 90 180; do
               [ "$wait" = "0" ] || { echo "HF rate-limited; retrying in ${wait}s..."; sleep "$wait"; }
-              if node scripts/fetch-model.mjs --dest npm/@xcidos/genesis-memory-model; then ok=1; break; fi
+              if node scripts/fetch-model.mjs --dest model-dist; then ok=1; break; fi
             done
             [ -n "$ok" ] || { echo "model fetch failed after retries"; exit 1; }
           fi
-      - name: Sanity-check the two shipped files exist
+      - name: Flatten to release asset names
         shell: bash
         run: |
-          test -f npm/@xcidos/genesis-memory-model/onnx/model.onnx
-          test -f npm/@xcidos/genesis-memory-model/tokenizer.json
+          test -f model-dist/onnx/model.onnx
+          test -f model-dist/tokenizer.json
+          mkdir -p model-assets
+          cp model-dist/onnx/model.onnx model-assets/model.onnx
+          cp model-dist/tokenizer.json  model-assets/tokenizer.json
       - uses: actions/upload-artifact@v4
         with:
           name: model-files
-          path: |
-            npm/@xcidos/genesis-memory-model/onnx/model.onnx
-            npm/@xcidos/genesis-memory-model/tokenizer.json
+          path: model-assets/*
           if-no-files-found: error
           retention-days: 1
 
-  # ── Collect artifacts, sync versions, publish to npm in dependency order ───────────────
-  publish:
-    name: publish to npm
+  # ── Collect everything, write SHA256SUMS, publish the GitHub Release ────────────────────
+  release:
+    name: publish GitHub Release
     runs-on: ubuntu-22.04
     needs: [build, model]
-    # Publish whatever built: a single straggler target must not block the whole release. Runs as
-    # long as the model built; the publish step skips any platform package whose binary is absent,
-    # and npm treats a missing optionalDependency as non-fatal at install time.
+    # Publish whatever built: a single straggler platform must not block the release. Runs as long as the
+    # model built; the launcher treats a missing platform asset as "build from source" (clear error).
     if: ${{ always() && needs.model.result == 'success' }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Resolve version from tag
-        id: ver
+      - name: Resolve tag
+        id: tag
         shell: bash
-        run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
-      - name: Restore staged platform binaries
+      - name: Download platform assets
         uses: actions/download-artifact@v4
         with:
-          pattern: pkgbin-*
-          path: staging-bins
-
-      - name: Restore model files
+          pattern: assets-*
+          path: staging
+      - name: Download model files
         uses: actions/download-artifact@v4
         with:
           name: model-files
-          path: npm/@xcidos/genesis-memory-model
+          path: staging/model
 
-      - name: Reassemble binaries into their package dirs
+      - name: Assemble release dir + SHA256SUMS
         shell: bash
         run: |
-          # download-artifact restores each under staging-bins/pkgbin-<key>/<binfile>.
-          for d in staging-bins/pkgbin-*; do
-            key="${d#staging-bins/pkgbin-}"
-            dest="npm/@xcidos/genesis-memory-server-$key"
-            mkdir -p "$dest"
-            f="$(ls "$d")"
-            cp "$d/$f" "$dest/$f"
-            chmod +x "$dest/$f" || true
-            echo "staged $dest/$f"
-          done
+          mkdir -p release
+          # Flatten every downloaded artifact (assets-<key>/* and model/*) into release/.
+          find staging -type f -exec cp {} release/ \;
+          ls -la release
+          ( cd release && sha256sum * > ../SHA256SUMS && mv ../SHA256SUMS . )
+          echo "=== SHA256SUMS ==="; cat release/SHA256SUMS
 
-      - name: Sync all package versions to the release version
-        run: node npm/scripts/generate-platform-packages.mjs "${{ steps.ver.outputs.version }}"
-
-      - name: Publish (platform packages first, then model, then launcher)
+      - name: Create / update the GitHub Release
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          set -e
-          publish_dir() {
-            local out
-            if out=$( cd "$1" && npm publish --provenance --access public 2>&1 ); then
-              echo "$out"; echo "PUBLISHED $1"; return 0
-            fi
-            # Tolerate ONLY the idempotent "this exact version already exists" case (safe on re-runs).
-            # EVERY other failure — auth/403, network, etc. — must FAIL the job, never be masked.
-            if printf '%s' "$out" | grep -qiE "cannot publish over|previously published|EPUBLISHCONFLICT"; then
-              echo "$out"; echo "skip $1 (version already published)"; return 0
-            fi
-            echo "$out"; echo "PUBLISH FAILED for $1"; return 1
-          }
-          # 1) only the platform packages whose binary actually built this run
-          for d in npm/@xcidos/genesis-memory-server-*/; do
-            case "$d" in */genesis-memory-server/) continue;; esac   # skip the launcher dir
-            bin="${d}genesis-memory-server"; [ -f "${d}genesis-memory-server.exe" ] && bin="${d}genesis-memory-server.exe"
-            if [ -f "$bin" ]; then publish_dir "$d"; else echo "no binary for $d — not built, skipping"; fi
-          done
-          # 2) the shared model (a hard dependency of the launcher)
-          publish_dir npm/@xcidos/genesis-memory-model
-          # 3) the launcher LAST — its exact-version deps must already resolve on the registry
-          publish_dir npm/@xcidos/genesis-memory-server
+          TAG="${{ steps.tag.outputs.tag }}"
+          case "$TAG" in *-*) PRE="--prerelease" ;; *) PRE="" ;; esac   # alpha/beta -> prerelease
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists — uploading assets with --clobber"
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "$TAG" --notes "Automated release $TAG." $PRE
+          fi
+          echo "published assets to release $TAG"

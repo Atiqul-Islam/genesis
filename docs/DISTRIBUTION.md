@@ -1,19 +1,50 @@
 # Genesis distribution spec (beta)
 
-Status: **approved architecture, not yet implemented.** Owner: Atiqul. Author: agent.
+Status: **implemented; alpha published to npm (`0.1.0-alpha.1`).** Beta (branch `beta`) rewrites the
+enforcement hooks Node → native Rust AND moves binary distribution from npm → **GitHub Release assets**
+(no registry, no token) — see "Beta update" below. Owner: Atiqul. Author: agent.
 
-## Decision (locked)
+## Decision (alpha — partly superseded, see Beta update)
 
-- **Distribute the Rust memory server as npm platform-specific packages** (`optionalDependencies`,
-  `os`/`cpu`/`libc`-gated), launched via **`npx`** — the esbuild / `@napi-rs` / biome / sharp model,
-  and how Claude Code itself ships native binaries.
-- **Node.js is the one required prerequisite** (the accepted baseline for the Claude Code + MCP
-  ecosystem; far more standard and cross-platform than the Python the current design wrongly assumes).
-- **Hooks rewritten from Python → Node** so the enforcement layer needs no second runtime.
-- Kills the hand-rolled Python launcher, the `python3` hardcoding, the GitHub-release checksum pin,
-  and the local-Rust-build requirement.
+- ~~**Distribute the Rust memory server as npm platform-specific packages** (`optionalDependencies`,
+  `os`/`cpu`/`libc`-gated), launched via **`npx`**.~~ **SUPERSEDED in beta** → binaries + model ship as
+  **GitHub Release assets** downloaded by a Node launcher; npm is dropped entirely (no registry account/token).
+- **Node.js is the one required prerequisite** (the accepted baseline for the Claude Code + MCP ecosystem).
+- **Hooks:** Python → Node (alpha) → **native Rust** (beta — see below).
+- Kills the hand-rolled Python launcher, the `python3` hardcoding, and the local-Rust-build requirement.
 
-## Target layout
+### Beta update (branch `beta`) — native-Rust hooks + GitHub-Releases distribution
+
+Two changes supersede the alpha's npm/Node model:
+
+**1. Enforcement hooks → native Rust.** The alpha's Node hooks are replaced by one binary `genesis-hook`
+(crate `hook/`):
+
+- Deterministic hooks — `inject`, `gate`, `enforce-research`, `validate`, `session-pointer` — are
+  busybox-style subcommands. Cold-spawn ~2–10 ms vs the Node hooks' ~65 ms; `validate` no longer walks
+  `node_modules`/`target` (measured **62.5 s → 0.55 s** on a 21k-file tree). Byte-identical decisions to the
+  retired Node hooks (17/17 parity before deletion; deps `serde_json` + `regex`).
+- `review` moved off `claude -p` (×2 per expertise) onto a Claude Code built-in **`agent` hook** (Haiku,
+  tool-capable — reads the artifacts + manifests itself).
+- Built agents call the binary directly (`assemble.js` bakes `${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook`);
+  the plugin's static `hooks.json` resolves it via the cross-platform `hooks/run.js` shim.
+
+**2. Distribution: npm → GitHub Release assets (no registry, no token).**
+
+- `release.yml` builds both binaries per platform + fetches the model, then publishes them as **GitHub
+  Release assets** for the tag (`genesis-memory-server-<key>`, `genesis-hook-<key>`, `model.onnx`,
+  `tokenizer.json`, `SHA256SUMS`) using only the auto-provided `GITHUB_TOKEN`. The npm publish job, the
+  `@xcidos` platform packages, and `generate-platform-packages.mjs` are **deleted**.
+- The launcher `bin/genesis-memory.js` (stdlib-only) downloads the matching assets for the consumer's
+  platform on first use, **SHA256-verifies** them, caches them per-user (`~/.cache/genesis/v<ver>/`), and
+  execs the server. `--stage-hook <dir>` stages the hook binary. The release version is a constant in the
+  launcher, bumped per release. `.mcp.json` (plugin + generated) launches `node <launcher>` instead of `npx`.
+- `bootstrap.js` stages the hook binary via the launcher's `--stage-hook` (download, or `GENESIS_HOOK_BIN`
+  for dev). Consumers need only Node + network on first run; no npm account anywhere.
+- Tests: hook crate 28 unit + 13 CLI; Node `test/launcher.test.js`, `test_bootstrap`, `test_plugin`,
+  `test_portability` updated. `ci.yml` builds/tests both Rust crates + the Node surface.
+
+## Target layout (alpha npm model — superseded; see Beta update)
 
 ```
 @xcidos/genesis-memory-server            # thin launcher (bin/genesis-memory.js) — resolves + spawns
@@ -67,9 +98,10 @@ Backstop: `ldd --version` musl check (biome pattern); `GENESIS_MEMORY_BIN` dev o
 4. Publish job: `npm publish --provenance --access public` — platform packages first, then model, then the
    launcher last (its exact-version deps must resolve).
 
-`ci.yml` (on push/PR): `cargo build` + `cargo test` on 3 OSes, Node parse-check + hook/installer/session-copy
-unit tests, and a "no runtime Python" assertion. A regression guard fails if any binary links a dynamic
-inference runtime (`onnxruntime`/`DirectML`).
+`ci.yml` (on push/PR): the server + `genesis-hook` crates `cargo build`/`cargo test` on 3 OSes (the hook crate
+also `clippy -D warnings` + `fmt --check`), Node parse-check + installer/session-copy/plugin unit tests, and a
+"no runtime Python" assertion. A regression guard fails if the server binary links a dynamic inference runtime
+(`onnxruntime`/`DirectML`).
 
 ## Remaining source fixes (fold in)
 

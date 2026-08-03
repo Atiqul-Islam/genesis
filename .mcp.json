@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "genesis-memory": {
-      "command": "npx",
-      "args": ["-y", "@xcidos/genesis-memory-server"]
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js"]
     }
   }
 }

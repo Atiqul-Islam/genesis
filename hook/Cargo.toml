@@ -1,0 +1,54 @@
+[package]
+name = "genesis-hook"
+version = "0.1.0"
+edition = "2021"
+description = "Genesis enforcement hooks — deterministic PreToolUse/SubagentStart/SubagentStop hooks (Rust, one self-contained binary, multi-call dispatch)."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# One small self-contained binary, dispatched by its first argument (busybox-style). Kept dependency-
+# light (serde_json + regex only) so cold-spawn stays ~2-10 ms — the whole reason it replaces the Node
+# hooks. Shipped in the SAME GitHub Release as genesis-memory-server (one platform key, two binaries).
+[[bin]]
+name = "genesis-hook"
+path = "src/main.rs"
+
+[lib]
+name = "genesis_hook"
+path = "src/lib.rs"
+
+[dependencies]
+# preserve_order so emitted decision JSON is byte-identical to the Node hooks (same key order),
+# not just semantically equal — makes the Rust<->Node parity verifiable exactly.
+serde_json = { version = "1", features = ["preserve_order"] }
+# Content-check regexes (banned phrase / credential shapes / APPLIED-EXPERTISE declaration parsing).
+# Pure-Rust, cross-compiles cleanly for every release target. ASCII classes are spelled out
+# explicitly (e.g. [0-9], [A-Za-z0-9_]) so behavior matches the Node hooks' ASCII regex semantics.
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Mirror the memory-server crate's lint gate verbatim (house style; genesis has no workspace).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "warn"
+module_name_repetitions = "allow"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+doc_markdown = "allow"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"

@@ -106,12 +106,16 @@ from a checkout with a tool such as `cargo-about` or `cargo-license`.
 
 ## 5. Node components
 
-Genesis's enforcement hooks (`hooks/*.js`), installer (`install/`), session-copy
+Genesis's plugin hook resolver (`hooks/run.js`), installer (`install/`), session-copy
 pipeline (`session_copy/`), and repo test tooling (`test/tools/*.mjs`) are
 implemented in **Node.js** and run on Node's built-in standard library alone —
 including `node:sqlite` for local storage. They declare and require **no third-party
 runtime dependencies** and are covered by Genesis's own MIT license. Running these
 components requires Node.js (alongside Claude Code); they do **not** require Python.
+
+The **enforcement hooks themselves** are a native Rust binary (`genesis-hook`, crate at
+`hook/`; deps: `serde_json` + `regex`), shipped prebuilt as GitHub Release assets —
+no runtime is required to invoke it.
 
 ---
 

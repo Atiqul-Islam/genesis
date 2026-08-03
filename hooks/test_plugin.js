@@ -15,7 +15,7 @@ const cp = require("child_process");
 
 const HERE = __dirname;
 const REPO = path.dirname(HERE); // hooks/ -> plugin root
-const agent_ident = require(path.join(HERE, "agent_ident.js"));
+// (agent identity derivation is now the Rust genesis-hook binary — unit-tested in hook/src/agent.rs.)
 
 const SCOPED = ["mcp__plugin_genesis_genesis-memory__store",
                 "mcp__plugin_genesis_genesis-memory__recall",
@@ -120,18 +120,26 @@ function main() {
   }
   check("hooks.json does NOT wire main-thread SessionStart (dormant)", !("SessionStart" in H));
   check("hooks.json does NOT wire main-thread Stop (dormant)", !("Stop" in H));
-  // collect every command string
+  // collect every command string (agent-type hooks carry a `prompt`, not a `command`)
   const cmds = [];
+  const agentHooks = [];
   for (const k of Object.keys(H)) {
     for (const blk of H[k]) {
-      for (const h of (blk.hooks || [])) cmds.push(h.command);
+      for (const h of (blk.hooks || [])) {
+        if (h.command) cmds.push(h.command);
+        if (h.type === "agent") agentHooks.push(h);
+      }
     }
   }
-  check("every hook command uses ${CLAUDE_PLUGIN_ROOT}", cmds.every((c) => c.indexOf("${CLAUDE_PLUGIN_ROOT}") !== -1));
+  check("every command hook uses ${CLAUDE_PLUGIN_ROOT}", cmds.every((c) => c.indexOf("${CLAUDE_PLUGIN_ROOT}") !== -1));
   check("NO --main-agent anywhere (no forced main-thread agent)", !cmds.some((c) => c.indexOf("--main-agent") !== -1));
-  for (const script of ["inject.js", "gate.js", "enforce_research.js", "validate.js", "review.js"]) {
-    check("hooks.json references " + script, cmds.some((c) => c.indexOf(script) !== -1));
+  check("deterministic hooks invoke the genesis-hook binary via the run.js resolver",
+        cmds.length > 0 && cmds.every((c) => c.indexOf("run.js") !== -1));
+  for (const sub of ["inject", "gate", "enforce-research", "validate"]) {
+    check("hooks.json wires the '" + sub + "' subcommand", cmds.some((c) => c.indexOf(" " + sub) !== -1));
   }
+  check("NO legacy Node hook .js referenced (all-Rust deterministic hooks)",
+        !cmds.some((c) => /\/(inject|gate|enforce_research|validate|review|agent_ident|session_pointer|adherence)\.js/.test(c)));
   const pre_matchers = new Set((H.PreToolUse || []).map((blk) => blk.matcher));
   check("PreToolUse matches Write|Edit and Bash", ["Write|Edit", "Bash"].every((m) => pre_matchers.has(m)));
   const start_matchers = (H.SubagentStart || []).map((blk) => blk.matcher || "").join(" ");
@@ -140,16 +148,19 @@ function main() {
   const sub_matchers = (H.SubagentStop || []).map((blk) => blk.matcher || "").join(" ");
   check("SubagentStop enforces on BOTH sensei and method",
         sub_matchers.indexOf("sensei") !== -1 && sub_matchers.indexOf("method") !== -1);
-  const subCmds = [];
-  for (const blk of H.SubagentStop) for (const h of blk.hooks) subCmds.push(h.command);
-  check("SubagentStop runs validate THEN review",
-        subCmds.some((c) => c.indexOf("validate.js") !== -1) && subCmds.some((c) => c.indexOf("review.js") !== -1));
+  const subHooks = [];
+  for (const blk of H.SubagentStop) for (const h of blk.hooks) subHooks.push(h);
+  check("SubagentStop runs validate (command) THEN review (built-in agent hook)",
+        subHooks.some((h) => h.command && h.command.indexOf("validate") !== -1) &&
+        subHooks.some((h) => h.type === "agent"));
+  check("review agent hook uses a fast Haiku model + injects $ARGUMENTS",
+        agentHooks.some((h) => (h.model || "").indexOf("haiku") !== -1 && (h.prompt || "").indexOf("$ARGUMENTS") !== -1));
 
   // ---- .mcp.json ----
   const mj = JSON.parse(readText(path.join(REPO, ".mcp.json")));
   const gm = mj.mcpServers["genesis-memory"];
-  check(".mcp.json launcher: npx @xcidos/genesis-memory-server",
-        gm.command === "npx" && gm.args.some((arg) => arg.indexOf("@xcidos/genesis-memory-server") !== -1));
+  check(".mcp.json launcher: node bin/genesis-memory.js (GitHub-Releases launcher, no npx)",
+        gm.command === "node" && gm.args.some((arg) => arg.indexOf("bin/genesis-memory.js") !== -1));
 
   // ---- dormancy: NO settings.json agent auto-activation ----
   check("settings.json is absent (no global agent:sensei auto-activation)",
@@ -165,22 +176,8 @@ function main() {
     check("commands/new.md passes $ARGUMENTS to the build", ctext.indexOf("$ARGUMENTS") !== -1);
   }
 
-  // ---- agent_ident: payload derivation ----
-  check("normalize strips the plugin scope (genesis:method -> method)",
-        agent_ident.normalize("genesis:method") === "method" && agent_ident.normalize("^genesis:method$") === "method");
-  check("resolve from SubagentStop payload agent_type",
-        agent_ident.resolve_agent({ agent_type: "genesis:method" }) === "method");
-  check("resolve bare agent_type",
-        agent_ident.resolve_agent({ agent_type: "sensei" }) === "sensei");
-  check("argv positional wins over payload",
-        agent_ident.resolve_agent({ agent_type: "method" }, "acme-bot") === "acme-bot");
-  check("main-thread fallback when payload omits agent_type",
-        agent_ident.resolve_agent({}, "", "sensei") === "sensei");
-  check("no identity anywhere -> ''", agent_ident.resolve_agent({}) === "");
-  check("split_args parses . --main-agent sensei",
-        arrEq(agent_ident.split_args([".", "--main-agent", "sensei"]), [".", "", "sensei"]));
-  check("split_args keeps the historical <root> <agent> form",
-        arrEq(agent_ident.split_args([".", "method"]), [".", "method", ""]));
+  // (agent identity derivation — normalize / resolve_agent / split_args — is now the Rust genesis-hook
+  //  binary, covered by hook/src/agent.rs unit tests; the Node port was removed with the other Node hooks.)
 
   // ---- drift: committed agents/*.md == what build_plugin_agents.js regenerates from team/ sources ----
   const before = {}; for (const n of ["sensei", "method"]) before[n] = readText(path.join(REPO, "agents", n + ".md"));
