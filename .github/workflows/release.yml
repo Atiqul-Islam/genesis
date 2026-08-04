@@ -6,6 +6,9 @@ name: release
 # consumer's platform, SHA256-verifies them, caches them per-user, and runs. NO npm, NO registry token —
 # only the auto-provided GITHUB_TOKEN.
 #
+# RELEASE GATE: a release is REFUSED unless the tagged commit is on `main`. The flow is develop on a branch
+# -> merge to `main` -> tag on `main` -> release. A tag on any non-merged branch fails the `gate` job.
+#
 # The inference engine is the pure-Rust tract backend (ort `alternative-backend` + `ort-tract`), so EVERY
 # target builds from one path with no prebuilt runtime, no cmake, and no sidecar dylib. Each binary is
 # SELF-CONTAINED: inference compiled in (tract), SQLite compiled in (rusqlite `bundled`), Windows CRT
@@ -27,9 +30,30 @@ env:
   BIN_STEM: genesis-memory-server
 
 jobs:
+  # ── Gate: a release may only be cut from a commit that is on `main` ────────────────────
+  gate:
+    name: require tag on main
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0        # full history needed for the ancestry check
+      - name: Refuse a release not merged into main
+        shell: bash
+        run: |
+          git fetch -q origin main
+          if git merge-base --is-ancestor HEAD origin/main; then
+            echo "OK: the tagged commit is on main — release allowed."
+          else
+            echo "::error::Release refused — this tag is not on main. Merge to main, then tag on main."
+            exit 1
+          fi
+
   # ── Build both self-contained binaries per platform; upload them as platform-named artifacts ──
   build:
     name: build ${{ matrix.key }}
+    needs: gate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60     # bound any single target so it can't hang the release
     strategy:
@@ -178,6 +202,7 @@ jobs:
   # ── Fetch the pinned ONNX model once (platform-independent) ─────────────────────────────
   model:
     name: package model
+    needs: gate
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
