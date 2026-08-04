@@ -1,10 +1,10 @@
 name: release
 
-# On a version tag (v*), build the self-contained genesis-memory-server + genesis-hook for every
-# supported platform, fetch the pinned ONNX model, then publish them all as GitHub Release assets with a
-# SHA256SUMS manifest. The plugin launcher (bin/genesis-memory.js) downloads the matching assets for the
-# consumer's platform, SHA256-verifies them, caches them per-user, and runs. NO npm, NO registry token —
-# only the auto-provided GITHUB_TOKEN.
+# On a version tag (v*), build the self-contained genesis-memory-server + genesis-hook + genesis-cli for
+# every supported platform, fetch the pinned ONNX model, then publish them all as GitHub Release assets with
+# a SHA256SUMS manifest. The plugin launcher (bin/genesis-memory.js) downloads the matching assets for the
+# consumer's platform, SHA256-verifies them, caches them per-user, and runs (server via default, hook via
+# --run-hook/--stage-hook, cli via --run-cli/--stage-cli). NO npm, NO registry token — only GITHUB_TOKEN.
 #
 # RELEASE GATE: a release is REFUSED unless the tagged commit is on `main`. The flow is develop on a branch
 # -> merge to `main` -> tag on `main` -> release. A tag on any non-merged branch fails the `gate` job.
@@ -130,21 +130,40 @@ jobs:
           esac
           cargo zigbuild --release --target "$tgt" --manifest-path hook/Cargo.toml
 
-      - name: Collect + rename both binaries to platform-suffixed asset names
+      - name: Build cli (cargo)
+        if: matrix.tool == 'cargo'
+        shell: bash
+        run: cargo build --release --target "${{ matrix.target }}" --manifest-path cli/Cargo.toml
+
+      - name: Build cli (zigbuild)
+        if: matrix.tool == 'zigbuild'
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
+            *)           tgt="${{ matrix.target }}" ;;
+          esac
+          cargo zigbuild --release --target "$tgt" --manifest-path cli/Cargo.toml
+
+      - name: Collect + rename all binaries to platform-suffixed asset names
         id: assets
         shell: bash
         run: |
           ext=""; [ "${{ startsWith(matrix.key, 'win32') }}" = "true" ] && ext=".exe"
           srv="server/target/${{ matrix.target }}/release/${BIN_STEM}${ext}"
           hk="hook/target/${{ matrix.target }}/release/genesis-hook${ext}"
+          cli="cli/target/${{ matrix.target }}/release/genesis-cli${ext}"
           test -f "$srv" || { echo "missing server binary: $srv"; exit 1; }
           test -f "$hk"  || { echo "missing hook binary: $hk"; exit 1; }
+          test -f "$cli" || { echo "missing cli binary: $cli"; exit 1; }
           mkdir -p dist
           cp "$srv" "dist/${BIN_STEM}-${{ matrix.key }}${ext}"
           cp "$hk"  "dist/genesis-hook-${{ matrix.key }}${ext}"
+          cp "$cli" "dist/genesis-cli-${{ matrix.key }}${ext}"
           chmod +x dist/* || true
           echo "server=dist/${BIN_STEM}-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
           echo "hook=dist/genesis-hook-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
+          echo "cli=dist/genesis-cli-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
 
       - name: Verify server is self-contained (no inference-runtime sidecar)   # Linux/macOS best-effort
         if: startsWith(matrix.key, 'win32') == false
@@ -169,6 +188,7 @@ jobs:
         run: |
           f="${{ steps.assets.outputs.server }}"
           h="${{ steps.assets.outputs.hook }}"
+          c="${{ steps.assets.outputs.cli }}"
           if [ -n "$P12" ] && [ -n "$IDENTITY" ]; then
             kc="$RUNNER_TEMP/build.keychain"; kp="ci-$RANDOM"
             security create-keychain -p "$kp" "$kc"
@@ -179,16 +199,19 @@ jobs:
             security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kp" "$kc"
             codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
             codesign --force --options runtime --timestamp --sign "$IDENTITY" "$h"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$c"
             if [ -n "$NOTARY_ID" ]; then
               ditto -c -k "$f" "$RUNNER_TEMP/nz.zip"
               xcrun notarytool submit "$RUNNER_TEMP/nz.zip" --apple-id "$NOTARY_ID" \
                 --team-id "$NOTARY_TEAM" --password "$NOTARY_PW" --wait
-              # The hook binary is signed but not separately notarized (invoked locally, not downloaded standalone).
+              # The hook + cli binaries are signed but not separately notarized (invoked locally, not
+              # downloaded standalone).
             fi
           else
             echo "No Apple signing secrets — ad-hoc signing (runs locally; not Gatekeeper-cleared)."
             codesign --force --sign - "$f"
             codesign --force --sign - "$h"
+            codesign --force --sign - "$c"
           fi
 
       - name: Upload platform assets

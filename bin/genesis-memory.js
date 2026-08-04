@@ -4,10 +4,18 @@
 // Genesis launcher — GitHub Releases distribution (no npm, no registry token).
 //
 // It downloads the prebuilt native binaries + the ONNX model from this repo's GitHub Release for the
-// pinned version, caches them per-user, verifies each with SHA256, and then either:
-//   * (default)            execs the memory server over stdio for Claude Code's MCP channel; or
+// pinned version, caches them per-user, verifies each with SHA256, and then does one of:
+//   * (default)            execs the memory server over stdio for Claude Code's MCP channel;
 //   * (--stage-hook <dir>) copies the genesis-hook binary into <dir> (used by bootstrap to populate a
-//                          repo's .genesis/bin so the enforcement hooks run a DIRECT native binary).
+//                          repo's .genesis/bin so the enforcement hooks run a DIRECT native binary);
+//   * (--stage-cli <dir>)  copies the genesis-cli binary into <dir> (the installer/orchestrator);
+//   * (--run-hook <sub>…)  resolves the STAGED genesis-hook binary and execs `<hook> <sub> …`, passing
+//                          stdin/stdout through, fail-OPEN (exit 0 if unresolved). This is the plugin's
+//                          per-OS hook shim — one Node file for the whole toolchain instead of a separate
+//                          run.js. ASSEMBLED agents skip it (their frontmatter names the binary directly);
+//   * (--run-cli <sub>…)   ensures the genesis-cli binary (download+cache) and execs `<cli> <sub> …` — the
+//                          installer/orchestrator entry point (bootstrap/assemble/promote/…). Fail-LOUD
+//                          (exit 1 if the binary can't be resolved) since the user asked for it explicitly.
 //
 // The release assets are PUBLIC, fetched over HTTPS — a consumer needs no credentials. Node.js is the
 // only prerequisite (18+ for global fetch); no third-party runtime dependencies.
@@ -16,7 +24,8 @@
 //
 // Environment overrides (all optional):
 //   GENESIS_MEMORY_BIN   run this locally-built server binary directly (dev/CI — skips download)
-//   GENESIS_HOOK_BIN     use this locally-built genesis-hook binary for --stage-hook (dev/CI)
+//   GENESIS_HOOK_BIN     use this locally-built genesis-hook binary for --stage-hook / --run-hook (dev/CI)
+//   GENESIS_CLI_BIN      use this locally-built genesis-cli binary for --stage-cli (dev/CI)
 //   GENESIS_MODEL_DIR    use this model directory as-is (must hold onnx/model.onnx + tokenizer.json)
 //   GENESIS_CACHE_DIR    override the per-user cache root
 
@@ -28,10 +37,11 @@ const childProcess = require("child_process");
 
 // The GitHub Release tag (minus the leading "v") to fetch, and the repo. BUMP RELEASE_VERSION per
 // release (same commit as the git tag). This is the single source of truth for which assets to pull.
-const RELEASE_VERSION = "0.1.0-beta.1";
+const RELEASE_VERSION = "0.1.0-beta.2";
 const REPO = "Atiqul-Islam/genesis";
 const SERVER_STEM = "genesis-memory-server";
 const HOOK_STEM = "genesis-hook";
+const CLI_STEM = "genesis-cli";
 
 /** A fail-closed launcher condition (unsupported platform, bad download/checksum, bad override). */
 class LauncherError extends Error {}
@@ -175,6 +185,16 @@ async function ensureHookBin() {
   return ensureAsset(asset, path.join(versionDir(), HOOK_STEM + exeSuffix()), true);
 }
 
+async function ensureCliBin() {
+  const override = process.env.GENESIS_CLI_BIN;
+  if (override) {
+    if (!fs.existsSync(override)) throw new LauncherError("GENESIS_CLI_BIN is set but is not a file: " + override);
+    return override;
+  }
+  const asset = CLI_STEM + "-" + platformKey() + exeSuffix();
+  return ensureAsset(asset, path.join(versionDir(), CLI_STEM + exeSuffix()), true);
+}
+
 async function ensureModelDir() {
   const override = process.env.GENESIS_MODEL_DIR;
   if (override) return override;
@@ -184,11 +204,11 @@ async function ensureModelDir() {
   return dir;
 }
 
-// --stage-hook <dest>: ensure the hook binary is cached, then copy it into <dest>.
-async function stageHook(dest) {
-  const bin = await ensureHookBin();
+// Ensure <bin> (already resolved) is copied into <dest> as <stem>[.exe], executable. Shared by
+// --stage-hook / --stage-cli.
+function stageInto(bin, dest, stem) {
   fs.mkdirSync(dest, { recursive: true });
-  const out = path.join(dest, HOOK_STEM + exeSuffix());
+  const out = path.join(dest, stem + exeSuffix());
   fs.copyFileSync(bin, out);
   try {
     fs.chmodSync(out, 0o755);
@@ -196,6 +216,74 @@ async function stageHook(dest) {
     // non-POSIX filesystem — ignore
   }
   return out;
+}
+
+// --stage-hook <dest>: ensure the hook binary is cached, then copy it into <dest>.
+async function stageHook(dest) {
+  return stageInto(await ensureHookBin(), dest, HOOK_STEM);
+}
+
+// --stage-cli <dest>: ensure the genesis-cli binary is cached, then copy it into <dest>.
+async function stageCli(dest) {
+  return stageInto(await ensureCliBin(), dest, CLI_STEM);
+}
+
+// --run-hook <sub> [args…]: resolve the STAGED genesis-hook binary (GENESIS_HOOK_BIN, else
+// <project>/.genesis/bin/genesis-hook[.exe]) and exec `<hook> <sub> …`, inheriting stdin/stdout so the
+// hook event JSON and the decision JSON pass through untouched. FAIL-OPEN: a missing/unspawnable binary
+// exits 0 so it can never break a session (the deterministic checks simply don't run until staged).
+function resolveStagedHook() {
+  const override = process.env.GENESIS_HOOK_BIN;
+  if (override && fs.existsSync(override)) return override;
+  const proj = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const staged = path.join(proj, ".genesis", "bin", HOOK_STEM + exeSuffix());
+  return fs.existsSync(staged) ? staged : null;
+}
+
+// Spawn <bin> with <args>, inheriting stdio, forwarding the child's exit code / signal as ours.
+function execPassthrough(bin, args, onSpawnError) {
+  const child = childProcess.spawn(bin, args, { stdio: "inherit" });
+  child.on("error", onSpawnError);
+  child.on("exit", function (code, signal) {
+    if (signal) {
+      try {
+        process.kill(process.pid, signal);
+        return;
+      } catch (_e) {
+        process.exit(1);
+        return;
+      }
+    }
+    process.exit(code === null ? 0 : code);
+  });
+}
+
+function runHook(hookArgs) {
+  const bin = resolveStagedHook();
+  if (!bin) {
+    process.exit(0); // fail-open: a missing hook binary must never break the session
+    return;
+  }
+  // fail-OPEN on spawn error too — a broken hook binary must never break a session.
+  execPassthrough(bin, hookArgs, function () {
+    process.exit(0);
+  });
+}
+
+// --run-cli <sub> [args…]: ensure the genesis-cli binary (download+cache, or GENESIS_CLI_BIN) and exec it.
+// FAIL-LOUD: unlike the hook shim, the user asked for this explicitly, so a missing binary is exit 1.
+function runCli(cliArgs) {
+  ensureCliBin()
+    .then(function (bin) {
+      execPassthrough(bin, cliArgs, function (err) {
+        log("ERROR: failed to launch genesis-cli: " + err.message);
+        process.exit(1);
+      });
+    })
+    .catch(function (e) {
+      log("ERROR: " + (e instanceof LauncherError ? e.message : e && e.stack ? e.stack : String(e)));
+      process.exit(1);
+    });
 }
 
 function execServer(binPath, modelDir) {
@@ -246,17 +334,30 @@ function execServer(binPath, modelDir) {
 async function main() {
   const argv = process.argv.slice(2);
 
-  // Staging mode: download/resolve the hook binary and copy it into <dest>, then exit.
-  if (argv[0] === "--stage-hook") {
+  // Hook shim: resolve the staged genesis-hook and exec it (fail-open). Must run BEFORE any download.
+  if (argv[0] === "--run-hook") {
+    runHook(argv.slice(1));
+    return;
+  }
+
+  // Orchestrator: ensure the genesis-cli binary (download+cache) and exec it (fail-loud).
+  if (argv[0] === "--run-cli") {
+    runCli(argv.slice(1));
+    return;
+  }
+
+  // Staging modes: download/resolve a binary and copy it into <dest>, then exit.
+  if (argv[0] === "--stage-hook" || argv[0] === "--stage-cli") {
+    const mode = argv[0];
     const dest = argv[1];
     if (!dest) {
-      log("ERROR: --stage-hook requires a destination directory");
+      log("ERROR: " + mode + " requires a destination directory");
       process.exit(1);
       return;
     }
     try {
-      const out = await stageHook(dest);
-      log("staged genesis-hook -> " + out);
+      const out = mode === "--stage-cli" ? await stageCli(dest) : await stageHook(dest);
+      log("staged " + (mode === "--stage-cli" ? CLI_STEM : HOOK_STEM) + " -> " + out);
       process.exit(0);
     } catch (e) {
       log("ERROR: " + (e instanceof LauncherError ? e.message : e && e.stack ? e.stack : String(e)));

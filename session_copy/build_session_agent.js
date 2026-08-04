@@ -82,7 +82,7 @@ async function build(session_id, name, repo, genesis_home, server_bin, model_dir
     summary: path.join(bundle, "summary.md"),
     by_source: cap.by_source,
     next:
-      "Sensei: author the agent's specialized persona (Method), then assemble.js — the agent will " +
+      "Sensei: author the agent's specialized persona (Method), then genesis-cli assemble — the agent will " +
       "recall this history via its memory tools and load summary.md at start.",
   };
   fs.writeFileSync(path.join(bundle, "session_copy_manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");

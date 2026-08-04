@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 /* Node tests for the PLUGIN scaffold + the payload agent-derivation (the plugin re-architecture, items A + B).
 
-   Faithful port of test_plugin.py. Proves the shipped plugin artifacts obey the verified plugin constraints
-   (no self-verification of a live install — that is a manual gate; here we prove the STATIC artifacts are
-   correct), exercises agent_ident.js's payload derivation, and runs build_plugin_agents.js for the drift
-   check. Mirrors the Python contract + case count (45 cases).
+   Proves the shipped plugin artifacts obey the verified plugin constraints (no self-verification of a live
+   install — that is a manual gate; here we prove the STATIC artifacts are correct: agents/*.md frontmatter,
+   hooks.json wiring, .mcp.json, commands). Agent-identity derivation is the Rust genesis-hook binary
+   (hook/src/agent.rs); the committed-agents drift check is a Rust integration test (cli/tests/).
 
    Run:  node hooks/test_plugin.js
 */
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const cp = require("child_process");
 
 const HERE = __dirname;
 const REPO = path.dirname(HERE); // hooks/ -> plugin root
@@ -133,8 +132,10 @@ function main() {
   }
   check("every command hook uses ${CLAUDE_PLUGIN_ROOT}", cmds.every((c) => c.indexOf("${CLAUDE_PLUGIN_ROOT}") !== -1));
   check("NO --main-agent anywhere (no forced main-thread agent)", !cmds.some((c) => c.indexOf("--main-agent") !== -1));
-  check("deterministic hooks invoke the genesis-hook binary via the run.js resolver",
-        cmds.length > 0 && cmds.every((c) => c.indexOf("run.js") !== -1));
+  check("deterministic hooks invoke genesis-hook via the launcher's --run-hook shim",
+        cmds.length > 0 && cmds.every((c) => c.indexOf("--run-hook") !== -1 && c.indexOf("bin/genesis-memory.js") !== -1));
+  check("no legacy run.js resolver referenced (absorbed into the launcher)",
+        !cmds.some((c) => c.indexOf("run.js") !== -1));
   for (const sub of ["inject", "gate", "enforce-research", "validate"]) {
     check("hooks.json wires the '" + sub + "' subcommand", cmds.some((c) => c.indexOf(" " + sub) !== -1));
   }
@@ -178,15 +179,8 @@ function main() {
 
   // (agent identity derivation — normalize / resolve_agent / split_args — is now the Rust genesis-hook
   //  binary, covered by hook/src/agent.rs unit tests; the Node port was removed with the other Node hooks.)
-
-  // ---- drift: committed agents/*.md == what build_plugin_agents.js regenerates from team/ sources ----
-  const before = {}; for (const n of ["sensei", "method"]) before[n] = readText(path.join(REPO, "agents", n + ".md"));
-  const r = cp.spawnSync(process.execPath, [path.join(REPO, "install", "build_plugin_agents.js"), REPO],
-                         { encoding: "utf8" });
-  const after = {}; for (const n of ["sensei", "method"]) after[n] = readText(path.join(REPO, "agents", n + ".md"));
-  check("build_plugin_agents.js regenerates cleanly", r.status === 0);
-  check("committed plugin agents match the team sources (no drift)",
-        before.sensei === after.sensei && before.method === after.method);
+  // (drift: committed agents/*.md == genesis-cli build-plugin-agents output — now a Rust integration test
+  //  in cli/tests/, since the generator is the native genesis-cli binary.)
 
   console.log("\n" + passed + " passed, " + failed + " failed");
   process.exit(failed ? 1 : 0);

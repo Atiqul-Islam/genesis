@@ -2,13 +2,16 @@
 /* Tests for bin/genesis-memory.js — the GitHub-Releases launcher (no npm, no token).
 
    Node (CommonJS, stdlib-only), NO NETWORK. The launcher downloads the platform binaries + model from
-   this repo's GitHub Release, SHA256-verifies, caches, and execs the server (default) or stages the
-   genesis-hook binary (--stage-hook). The download path needs a real published release, so it isn't
-   exercised here; these tests drive the REAL launcher via the dev OVERRIDES (GENESIS_MEMORY_BIN /
-   GENESIS_HOOK_BIN / GENESIS_MODEL_DIR), which is exactly the offline dev/CI path:
+   this repo's GitHub Release, SHA256-verifies, caches, and execs the server (default), stages a binary
+   (--stage-hook / --stage-cli), or execs a resolved binary (--run-hook / --run-cli). The download path
+   needs a real published release, so it isn't exercised here; these tests drive the REAL launcher via the
+   dev OVERRIDES (GENESIS_MEMORY_BIN / GENESIS_HOOK_BIN / GENESIS_CLI_BIN / GENESIS_MODEL_DIR), the offline
+   dev/CI path:
      * transparent exec: argv + GENESIS_MODEL_DIR forwarded, stdin/stdout pass through, STDOUT pristine,
        child exit status propagated;
-     * --stage-hook copies the resolved hook binary into <dest>;
+     * --stage-hook / --stage-cli copy the resolved binary into <dest>;
+     * --run-hook execs the staged hook, propagating exit code, FAIL-OPEN (exit 0) when unresolved;
+     * --run-cli execs the resolved cli, propagating exit code, FAIL-LOUD (exit 1) when unresolved;
      * fail-closed: a missing override exits non-zero with a clear stderr message.
 
    Run:  node test/launcher.test.js
@@ -52,6 +55,10 @@ const FAKE_SERVER = [
 ].join("\n");
 
 const FAKE_EXIT3 = ["'use strict';", "process.stdout.write('bye\\n');", "process.exit(3);", ""].join("\n");
+
+// Fake child "binary" for --run-hook / --run-cli: prints a marker to stdout, then exits 2. Run as the
+// resolved binary's argument via GENESIS_*_BIN=NODE (offline, cross-platform — no shebang needed).
+const FAKE_CHILD = ["'use strict';", "process.stdout.write('CHILDRAN\\n');", "process.exit(2);", ""].join("\n");
 
 function withTempDir(fn) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "genesis-launcher-"));
@@ -162,12 +169,92 @@ function testStageHook() {
   });
 }
 
+// ── --stage-cli copies the resolved cli binary into <dest> (via GENESIS_CLI_BIN, offline) ──
+function testStageCli() {
+  withTempDir((td) => {
+    const fakeCli = path.join(td, "genesis-cli-src");
+    fs.writeFileSync(fakeCli, "cli-binary-bytes");
+    const dest = path.join(td, "bin");
+    const proc = spawnSync(NODE, [LAUNCHER, "--stage-cli", dest], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_CLI_BIN: fakeCli }),
+    });
+    check("--stage-cli exits 0 (GENESIS_CLI_BIN override)", proc.status === 0);
+    const staged = path.join(dest, process.platform === "win32" ? "genesis-cli.exe" : "genesis-cli");
+    check(
+      "--stage-cli copies the cli binary into <dest>",
+      fs.existsSync(staged) && fs.readFileSync(staged, "utf8") === "cli-binary-bytes"
+    );
+    const p2 = spawnSync(NODE, [LAUNCHER, "--stage-cli", dest], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_CLI_BIN: path.join(td, "missing") }),
+    });
+    check("--stage-cli with a missing GENESIS_CLI_BIN → exit 1 (fail-closed)", p2.status === 1);
+  });
+}
+
+// ── --run-hook: exec the resolved hook (exit-code passthrough) + FAIL-OPEN when unresolved ──
+function testRunHook() {
+  withTempDir((td) => {
+    const child = path.join(td, "fake_hook_child.js");
+    fs.writeFileSync(child, FAKE_CHILD, { encoding: "utf-8" });
+    // GENESIS_HOOK_BIN=NODE, so `--run-hook <child.js>` execs `node <child.js>`.
+    const proc = spawnSync(NODE, [LAUNCHER, "--run-hook", child], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_HOOK_BIN: NODE }),
+    });
+    check("--run-hook execs the resolved hook + propagates its exit code (2)", proc.status === 2);
+    check("--run-hook passes the child's stdout through", (proc.stdout || "").includes("CHILDRAN"));
+
+    // Unresolved (no override, empty project dir) → fail-OPEN (exit 0), never break a session.
+    const p2 = spawnSync(NODE, [LAUNCHER, "--run-hook", "gate"], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ CLAUDE_PROJECT_DIR: td }),
+    });
+    check("--run-hook with no resolvable binary → exit 0 (fail-open)", p2.status === 0);
+  });
+}
+
+// ── --run-cli: exec the resolved cli (exit-code passthrough) + FAIL-LOUD when unresolved ──
+function testRunCli() {
+  withTempDir((td) => {
+    const child = path.join(td, "fake_cli_child.js");
+    fs.writeFileSync(child, FAKE_CHILD, { encoding: "utf-8" });
+    const proc = spawnSync(NODE, [LAUNCHER, "--run-cli", child], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_CLI_BIN: NODE }),
+    });
+    check("--run-cli execs the resolved cli + propagates its exit code (2)", proc.status === 2);
+    check("--run-cli passes the child's stdout through", (proc.stdout || "").includes("CHILDRAN"));
+
+    // Missing override → fail-LOUD (exit 1) with a clear message, no network attempted.
+    const p2 = spawnSync(NODE, [LAUNCHER, "--run-cli", "assemble"], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_CLI_BIN: path.join(td, "missing") }),
+    });
+    check("--run-cli with a missing GENESIS_CLI_BIN → exit 1 (fail-loud)", p2.status === 1);
+    check(
+      "--run-cli fail-loud carries a clear stderr message",
+      (p2.stderr || "").includes("GENESIS_CLI_BIN is set but is not a file")
+    );
+  });
+}
+
 function main() {
   check("launcher file exists", fs.existsSync(LAUNCHER));
   testTransparentExec();
   testExitPropagation();
   testMissingServerOverride();
   testStageHook();
+  testStageCli();
+  testRunHook();
+  testRunCli();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

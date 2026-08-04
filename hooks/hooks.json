@@ -1,5 +1,5 @@
 {
-  "_doc": "Genesis plugin enforcement — DORMANT BY DEFAULT. Genesis must NOT touch a normal Claude Code session; it only acts on its OWN agents (sensei/method) when they actually run, and is entered on demand via the /genesis command. The deterministic hooks (inject/gate/enforce-research/validate) are a single native Rust binary `genesis-hook` (busybox-style subcommand dispatch) — ~2-10ms cold-spawn vs the old Node hooks' ~65ms, and validate no longer walks node_modules/target. The plugin's static config can't name a per-OS binary (`genesis-hook` vs `.exe`), so it invokes the binary through the tiny cross-platform resolver `run.js` (resolves GENESIS_HOOK_BIN -> the @xcidos platform package -> <cwd>/.genesis/bin). ASSEMBLED agents skip run.js — assemble.js bakes the direct binary path into their frontmatter (no Node in the hot path). gate (Write|Edit) and enforce-research (Bash) fire session-wide because PreToolUse matchers key on the TOOL name, not the agent — so those two SELF-GUARD: the binary no-ops unless the payload's agent_type is a genesis agent. The semantic `review` is now a built-in `agent` hook (a fast Claude model, tool-capable so it reads the produced artifacts + expertise manifests itself) instead of shelling `claude -p` twice per expertise. inject fires on SubagentStart; validate + review on SubagentStop; both sensei/method-scoped. ${CLAUDE_PLUGIN_ROOT} is the runtime-substituted absolute plugin path (read-only); runtime data is written under the PROJECT's .genesis/.",
+  "_doc": "Genesis plugin enforcement — DORMANT BY DEFAULT. Genesis must NOT touch a normal Claude Code session; it only acts on its OWN agents (sensei/method) when they actually run, and is entered on demand via the /genesis command. The deterministic hooks (inject/gate/enforce-research/validate) are a single native Rust binary `genesis-hook` (busybox-style subcommand dispatch) — ~2-10ms cold-spawn vs the old Node hooks' ~65ms, and validate no longer walks node_modules/target. The plugin's static config can't name a per-OS binary (`genesis-hook` vs `.exe`), so it invokes the binary through the launcher's `--run-hook` mode (`bin/genesis-memory.js` — the SAME one Node file used for MCP + staging; resolves GENESIS_HOOK_BIN -> <project>/.genesis/bin/genesis-hook[.exe], fail-open). ASSEMBLED agents skip the shim — genesis-cli bakes the direct binary path into their frontmatter (no Node in the hot path). gate (Write|Edit) and enforce-research (Bash) fire session-wide because PreToolUse matchers key on the TOOL name, not the agent — so those two SELF-GUARD: the binary no-ops unless the payload's agent_type is a genesis agent. The semantic `review` is now a built-in `agent` hook (a fast Claude model, tool-capable so it reads the produced artifacts + expertise manifests itself) instead of shelling `claude -p` twice per expertise. inject fires on SubagentStart; validate + review on SubagentStop; both sensei/method-scoped. ${CLAUDE_PLUGIN_ROOT} is the runtime-substituted absolute plugin path (read-only); runtime data is written under the PROJECT's .genesis/.",
   "hooks": {
     "SubagentStart": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.js\" inject \"${CLAUDE_PLUGIN_ROOT}/expertise\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" --run-hook inject \"${CLAUDE_PLUGIN_ROOT}/expertise\""
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.js\" gate --expertise \"${CLAUDE_PLUGIN_ROOT}/expertise\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" --run-hook gate --expertise \"${CLAUDE_PLUGIN_ROOT}/expertise\""
           }
         ]
       },
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.js\" enforce-research"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" --run-hook enforce-research"
           }
         ]
       }
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.js\" validate . --expertise \"${CLAUDE_PLUGIN_ROOT}/expertise\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" --run-hook validate . --expertise \"${CLAUDE_PLUGIN_ROOT}/expertise\""
           },
           {
             "type": "agent",

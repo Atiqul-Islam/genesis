@@ -26,23 +26,33 @@ Two changes supersede the alpha's npm/Node model:
   retired Node hooks (17/17 parity before deletion; deps `serde_json` + `regex`).
 - `review` moved off `claude -p` (×2 per expertise) onto a Claude Code built-in **`agent` hook** (Haiku,
   tool-capable — reads the artifacts + manifests itself).
-- Built agents call the binary directly (`assemble.js` bakes `${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook`);
-  the plugin's static `hooks.json` resolves it via the cross-platform `hooks/run.js` shim.
+- Built agents call the binary directly (`genesis-cli assemble` bakes
+  `${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook`); the plugin's static `hooks.json` invokes it via the
+  launcher's cross-platform `--run-hook` shim (per-OS binary resolution, fail-open).
+
+**1b. Installer/orchestrator: Node → Rust (`genesis-cli`).** The whole install layer — `assemble`,
+`bootstrap`, `promote`, `install`, `build-plugin-agents` — is now the native `genesis-cli` binary (busybox
+subcommands; deps `serde_json` + `tempfile`), byte-identical to the retired Node installer (verified via diff:
+build-plugin-agents == committed agents; assemble subagent/main == Node). The ONLY Node file that remains is
+the fetch-launcher (the irreducible bootstrap: something registry-free must download the first binary). The
+launcher gained `--stage-cli` (stage the binary) and `--run-cli` (download+cache then exec) so a bare plugin
+install can run the orchestrator with no prebuilt binary on disk.
 
 **2. Distribution: npm → GitHub Release assets (no registry, no token).**
 
-- `release.yml` builds both binaries per platform + fetches the model, then publishes them as **GitHub
-  Release assets** for the tag (`genesis-memory-server-<key>`, `genesis-hook-<key>`, `model.onnx`,
-  `tokenizer.json`, `SHA256SUMS`) using only the auto-provided `GITHUB_TOKEN`. The npm publish job, the
-  `@xcidos` platform packages, and `generate-platform-packages.mjs` are **deleted**.
+- `release.yml` builds all three binaries per platform + fetches the model, then publishes them as **GitHub
+  Release assets** for the tag (`genesis-memory-server-<key>`, `genesis-hook-<key>`, `genesis-cli-<key>`,
+  `model.onnx`, `tokenizer.json`, `SHA256SUMS`) using only the auto-provided `GITHUB_TOKEN`. The npm publish
+  job, the `@xcidos` platform packages, and `generate-platform-packages.mjs` are **deleted**.
 - The launcher `bin/genesis-memory.js` (stdlib-only) downloads the matching assets for the consumer's
   platform on first use, **SHA256-verifies** them, caches them per-user (`~/.cache/genesis/v<ver>/`), and
-  execs the server. `--stage-hook <dir>` stages the hook binary. The release version is a constant in the
-  launcher, bumped per release. `.mcp.json` (plugin + generated) launches `node <launcher>` instead of `npx`.
-- `bootstrap.js` stages the hook binary via the launcher's `--stage-hook` (download, or `GENESIS_HOOK_BIN`
-  for dev). Consumers need only Node + network on first run; no npm account anywhere.
-- Tests: hook crate 28 unit + 13 CLI; Node `test/launcher.test.js`, `test_bootstrap`, `test_plugin`,
-  `test_portability` updated. `ci.yml` builds/tests both Rust crates + the Node surface.
+  execs the server (default) / hook (`--run-hook`, `--stage-hook`) / cli (`--run-cli`, `--stage-cli`). The
+  release version is a constant in the launcher, bumped per release. `.mcp.json` launches `node <launcher>`.
+- `genesis-cli bootstrap` stages the hook + cli binaries via the launcher's `--stage-*` (download, or the
+  `GENESIS_*_BIN` dev overrides). Consumers need only Node + network on first run; no npm account anywhere.
+- Tests: hook crate 28 unit + 15 CLI; cli crate 8 unit + 7 integration (assemble/promote/bootstrap/
+  build-plugin-agents/portability/drift); Node `test/launcher.test.js` (22, incl. the new modes) +
+  `test_plugin`. `ci.yml` builds/tests all three Rust crates + the remaining Node surface.
 
 ## Target layout (alpha npm model — superseded; see Beta update)
 

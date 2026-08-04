@@ -17,11 +17,13 @@ const CAP: usize = 9500; // additionalContext (and all hook output) is capped at
 
 /// Entry point for `genesis-hook gate [--expertise <root>]`.
 pub fn run(args: &[String]) {
-    let (expertise, _rest) = cli::take_option(args, "--expertise");
+    let (expertise, rest) = cli::take_option(args, "--expertise");
+    // --main-agent lets the gate fire for a PROMOTED main thread (which carries no payload agent_type).
+    let (main_agent, _rest) = cli::take_option(&rest, "--main-agent");
     let ev = io::parse_event(&io::read_stdin());
 
-    // DORMANCY GUARD: no-op unless a genesis agent is active (payload agent_type).
-    if agent::resolve_agent(&ev, "", "").is_empty() {
+    // DORMANCY GUARD: no-op unless a genesis agent is active (payload agent_type, or the --main-agent fallback).
+    if agent::resolve_agent(&ev, "", main_agent.as_deref().unwrap_or("")).is_empty() {
         std::process::exit(0);
     }
 

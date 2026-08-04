@@ -13,8 +13,10 @@ you). Consult your `agent-building` and `agentic-teams` expertise for the judgme
 **repo level** in `<repo>/.genesis/` (never a global store). If the target repo has no `.genesis/` workspace
 yet, run the bootstrap FIRST so the store, hooks, memory DB, and team exist:
 ```
-node <genesis>/install/bootstrap.js <target_repo>
+node <plugin>/bin/genesis-memory.js --run-cli bootstrap <target_repo> <genesis_home>
 ```
+(`--run-cli` downloads/caches the native `genesis-cli` binary, then runs `bootstrap`. Once a repo is
+bootstrapped, the binary is also staged at `<target_repo>/.genesis/bin/genesis-cli` for direct/offline use.)
 Then author expertise into `<target_repo>/.genesis/expertise/`.
 
 ## The procedure — six steps, in order

@@ -1,0 +1,50 @@
+[package]
+name = "genesis-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Genesis installer/orchestrator (Rust): assemble / bootstrap / promote / install / build-plugin-agents — the one-time build+wire layer, run after the Node fetch-launcher has staged the binaries."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Second lean Rust binary alongside genesis-hook + genesis-memory-server. Runs ONCE at build/install time
+# (not per tool call), so it carries the heavier orchestration logic without touching the hot-path hook
+# binary. Shipped in the same GitHub Release; the Node fetch-launcher downloads it too.
+[[bin]]
+name = "genesis-cli"
+path = "src/main.rs"
+
+[lib]
+name = "genesis_cli"
+path = "src/lib.rs"
+
+[dependencies]
+# preserve_order so generated JSON (settings.json / .mcp.json / required.json) keeps insertion order,
+# matching the Node installer's JSON.stringify output.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Mirror the house lint gate (genesis has no workspace; each crate carries its own).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "warn"
+module_name_repetitions = "allow"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+doc_markdown = "allow"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"

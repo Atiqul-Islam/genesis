@@ -37,14 +37,16 @@ be sent back regardless of how small it is:
 agents/           Plugin-shipped agents: sensei, method
 team/             Source for the agents (persona.md, behavior.md, skills/)
 skills/           Genesis skills (spec-forge workflow, expertise skills, ...)
-hooks/            Enforcement hooks — Node (.js): inject / gate / validate /
-                  review / adherence / enforce_research / session_pointer / agent_ident
-install/          Installer + assembler (Node): install.js, bootstrap.js, assemble.js
+hooks/            Plugin hook config (hooks.json — invokes genesis-hook via the launcher's
+                  --run-hook) + the plugin/scaffold tests
 session_copy/     Session-copy pipeline (Node): capture.js / embed.js / store.js /
                   build_session_agent.js
 server/           Rust MCP memory server (genesis-memory-server)
-hook/             Rust enforcement-hook binary (genesis-hook): gate/validate/inject/etc.
-bin/              Node launcher (genesis-memory.js) — downloads + runs the release binaries
+hook/             Rust enforcement-hook binary (genesis-hook): inject/gate/enforce-research/validate
+cli/              Rust installer/orchestrator (genesis-cli): assemble/bootstrap/promote/install/
+                  build-plugin-agents
+bin/              Node launcher (genesis-memory.js) — downloads/runs the release binaries; also
+                  --stage-hook/--stage-cli (stage a binary) and --run-hook/--run-cli (exec one)
 scripts/          Helper scripts (e.g. fetch-model.mjs)
 expertise/        Verified expertise reports the agents read
 docs/             Architecture, workflow, and the publish plan
@@ -115,11 +117,23 @@ execs the server. End users never build Rust and never touch npm.
 > launcher's download will 404 today. Build `server/` and `hook/` locally (above) and point the
 > launcher at them via `GENESIS_MEMORY_BIN` / `GENESIS_HOOK_BIN` / `GENESIS_MODEL_DIR` while in beta.
 
-### Node components (launcher, installer, session-copy, hook resolver)
+### Rust installer/orchestrator (`cli/` → genesis-cli)
 
-No build. The launcher (`bin/genesis-memory.js`), the plugin's hook resolver (`hooks/run.js`),
-the installer/assembler (`install/*.js`), and the session-copy pipeline (`session_copy/*.js`)
-all run directly under `node`. The enforcement hooks themselves are the Rust `hook/` binary.
+```
+cd cli
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --release      # unit + integration (assemble/promote/bootstrap/build-plugin-agents/drift)
+```
+
+The integration tests stage the native binaries via the launcher; set `GENESIS_HOOK_BIN` and
+`GENESIS_CLI_BIN` to your built binaries first (see below) to exercise the real staging path.
+
+### Node components (launcher + session-copy)
+
+No build. The launcher (`bin/genesis-memory.js`) and the session-copy pipeline (`session_copy/*.js`)
+run directly under `node`. Everything else — the enforcement hooks and the installer/orchestrator —
+is the Rust `hook/` and `cli/` binaries; the launcher execs them via `--run-hook` / `--run-cli`.
 
 ---
 
@@ -151,25 +165,25 @@ cargo llvm-cov --json --release --output-path test-results/llvm-cov.json
 node ../test/tools/rust_crap_adapter.mjs   # exits non-zero iff CRAP > 8
 ```
 
-### Node (hooks, installer, session-copy)
+### Node (plugin scaffold, launcher, session-copy)
 
-The hooks, installer/assembler, and session-copy pipeline are **Node** (`hooks/*.js`,
-`install/*.js`, `session_copy/*.js`), and their tests are Node too.
+The enforcement hooks and the installer/orchestrator are Rust (`hook/`, `cli/`). What remains in
+**Node** is the fetch-launcher (`bin/genesis-memory.js`), the plugin/scaffold checks (`hooks/*.js`),
+and the session-copy pipeline (`session_copy/*.js`); their tests are Node too.
 
 Each test file is a self-contained script that prints `N passed, M failed` and exits
 non-zero on failure. Run them directly:
 
 ```
-# Rust: the memory server + the enforcement-hook binary
+# Rust: the memory server + the enforcement-hook binary + the installer/orchestrator
 ( cd server && cargo test --release )
-( cd hook   && cargo test --release )   # 28 unit + 13 CLI end-to-end
+( cd hook   && cargo test --release )   # 28 unit + 15 CLI end-to-end
+( cd cli    && cargo test --release )   # 8 unit + 7 integration (assemble/promote/bootstrap/drift)
 
-# Node: plugin scaffold, installer/assembler, launcher, session-copy
+# Node: plugin scaffold, launcher, session-copy
 node hooks/test_plugin.js
 node hooks/test_vendored_skills.js
 
-node install/test_bootstrap.js          # set GENESIS_HOOK_BIN to a built hook binary first
-node install/test_portability.js
 node test/launcher.test.js
 
 node session_copy/test_capture.js

@@ -8,3 +8,5 @@ server/models/
 .planning/builds/
 .claude/worktrees/
 .genesis/
+# Local runtime memory DB (the launched genesis-memory server creates it on use; never committed).
+*.db

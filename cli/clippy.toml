@@ -1,0 +1,4 @@
+# Keep the crate-level unwrap_used/expect_used/panic = "deny" gate for src/, but allow the ergonomic
+# unwrap/expect inside #[cfg(test)] modules and integration tests (parity with the other crates).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

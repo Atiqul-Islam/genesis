@@ -12,6 +12,9 @@ agent-building expertise for the judgment calls. You (Sensei) never author perso
 - Gather the full spec: goal, done-criteria, constraints, tools the agent needs, escalation triggers.
 - Restate every requirement back to the user. Proceed only on confirmed facts.
 - Ask the user: single agent, or a supervisor-led team? The user decides.
+- Ask the user WHERE it installs: a **subagent** (default — a named agent under `.claude/agents/`), or the
+  folder's **main Claude** (its persona becomes the folder's `CLAUDE.md` + main-thread enforcement hooks).
+  The user decides. Either way the agent keeps its FULL Genesis enforcement.
 - Resolve every contradiction with the user before proceeding.
 
 ## Step 2 — Plan
@@ -87,11 +90,25 @@ Method writes `persona.md`, `behavior.md`, `skills/`, a `meta.json` (`descriptio
   repeated failure, or any irreversible/high-impact action. State the assumption; never act on a guess.
 
 ## Step 4 — Assemble & install
-For each agent whose tests pass, run the assembler (it enforces tool-level boundaries + wires the hooks):
+For each agent whose tests pass, run the assembler (the native `genesis-cli` binary — it enforces tool-level
+boundaries + wires the hooks). Install it as the user chose in Step 1 — a subagent (default) or the folder's
+main Claude (add `--main`):
 ```
-node <genesis>/install/assemble.js <source_member_dir> <name> <target_repo> <genesis_home>
+<genesis>/bin/genesis-cli assemble <source_member_dir> <name> <target_repo> <genesis_home>          # subagent
+<genesis>/bin/genesis-cli assemble <source_member_dir> <name> <target_repo> <genesis_home> --main   # main Claude
 ```
-This writes `<target_repo>/.claude/agents/<name>.md`.
+(From a bare plugin install, run it through the launcher instead: `node <plugin>/bin/genesis-memory.js
+--run-cli assemble …` — same arguments; the launcher downloads/caches the binary first.)
+- **Subagent** → writes `<target_repo>/.claude/agents/<name>.md`.
+- **Main Claude** → merges the persona into `<target_repo>/CLAUDE.md` (a managed block) and wires the main-thread
+  enforcement hooks into `<target_repo>/.claude/settings.json` (each carrying `--main-agent <name>`),
+  non-destructively + idempotently. The agent keeps its full enforcement.
+
+### Promote an EXISTING built agent to the folder's main Claude
+To turn an already-built subagent into the folder's main Claude (same managed-block + main-thread-hooks result):
+```
+<genesis>/bin/genesis-cli promote <name> [target_repo] [genesis_home]
+```
 
 ## Step 5 — Wire memory (only what the user confirmed)
 - Register the memory server for the built agents, using exactly the memory setup the user specified.

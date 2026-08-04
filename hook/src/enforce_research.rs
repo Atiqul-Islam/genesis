@@ -10,7 +10,7 @@
 //!   * transcript shows a `research-expertise` Skill tool_use      -> allow
 //!   * otherwise (incl. transcript missing/unreadable)            -> DENY (fail-closed)
 
-use crate::{agent, io};
+use crate::{agent, cli, io};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -18,11 +18,13 @@ const SKILL_NAME: &str = "research-expertise";
 const ASSEMBLER: &str = "assemble.js"; // the assembler script basename the enforcer keys on
 
 /// Entry point for `genesis-hook enforce-research`.
-pub fn run(_args: &[String]) {
+pub fn run(args: &[String]) {
+    // --main-agent lets the gate fire for a promoted main thread (which carries no payload agent_type).
+    let (main_agent, _rest) = cli::take_option(args, "--main-agent");
     let ev = io::parse_event(&io::read_stdin());
 
-    // DORMANCY GUARD: no-op unless a genesis agent is active.
-    if agent::resolve_agent(&ev, "", "").is_empty() {
+    // DORMANCY GUARD: no-op unless a genesis agent is active (payload agent_type, or --main-agent fallback).
+    if agent::resolve_agent(&ev, "", main_agent.as_deref().unwrap_or("")).is_empty() {
         std::process::exit(0);
     }
 

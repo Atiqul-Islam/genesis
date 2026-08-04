@@ -84,6 +84,18 @@ fn gate_is_dormant_without_a_genesis_agent() {
     assert_eq!(run(&["gate", "--expertise", EXP], &ev.to_string()), ""); // no agent_type -> silent no-op
 }
 
+#[test]
+fn gate_fires_for_promoted_main_via_main_agent() {
+    // A promoted main thread carries NO payload agent_type; --main-agent makes the gate treat it as that agent.
+    let ev =
+        json!({"tool_input":{"file_path":"a/persona.md","content":"uses chain-of-thought here"}});
+    let v = parse(&run(
+        &["gate", "--expertise", EXP, "--main-agent", "method"],
+        &ev.to_string(),
+    ));
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
 // ---- enforce-research ----
 
 #[test]
@@ -102,6 +114,17 @@ fn enforce_allows_builtin_assemble() {
 fn enforce_denies_nonbuiltin_without_research_skill() {
     let ev = json!({"agent_type":"sensei","tool_input":{"command":"node install/assemble.js src mybot /r /g"},"transcript_path":""});
     let v = parse(&run(&["enforce-research"], &ev.to_string()));
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn enforce_fires_for_promoted_main_via_main_agent() {
+    // no payload agent_type, but --main-agent set -> enforce still evaluates the assembler command
+    let ev = json!({"tool_input":{"command":"node install/assemble.js src mybot /r /g"},"transcript_path":""});
+    let v = parse(&run(
+        &["enforce-research", "--main-agent", "sensei"],
+        &ev.to_string(),
+    ));
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 

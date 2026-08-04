@@ -1,10 +1,11 @@
 name: ci
 
 # Build + test on every push/PR (tags are handled by release.yml). Nothing is published here.
-# Three gates: the Rust memory server compiles + its suite passes on all three primary OSes; the
-# Rust `genesis-hook` binary (the enforcement hooks) compiles, passes its suite, and is clippy/fmt
-# clean; and the Node plugin surface (installer, session-copy, launcher, plugin scaffold) parses
-# + its unit tests pass. This is the guard that catches cross-platform defects before a release.
+# Gates: the Rust memory server compiles + its suite passes on all three primary OSes; the Rust
+# `genesis-hook` binary (the enforcement hooks) and the Rust `genesis-cli` binary (the installer/
+# orchestrator) each compile, pass their suites, and are clippy/fmt clean; and the Node surface that
+# remains (session-copy, the fetch-launcher, the plugin scaffold) parses + its unit tests pass. This
+# is the guard that catches cross-platform defects before a release.
 
 on:
   push:
@@ -71,7 +72,25 @@ jobs:
           cargo clippy --manifest-path hook/Cargo.toml --all-targets -- -D warnings
           cargo fmt --manifest-path hook/Cargo.toml --check
 
-      - name: Node integration tests against the built binaries (session-copy + bootstrap)
+      - name: Build genesis-cli binary
+        shell: bash
+        run: cargo build --release --manifest-path cli/Cargo.toml
+
+      - name: Test genesis-cli (unit + integration; real staging via the built binaries)
+        shell: bash
+        run: |
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          export GENESIS_HOOK_BIN="$PWD/hook/target/release/genesis-hook$ext"
+          export GENESIS_CLI_BIN="$PWD/cli/target/release/genesis-cli$ext"
+          cargo test --release --manifest-path cli/Cargo.toml
+
+      - name: genesis-cli lint gate (clippy -D warnings + fmt)
+        shell: bash
+        run: |
+          cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path cli/Cargo.toml --check
+
+      - name: Node integration tests against the built binaries (session-copy)
         shell: bash
         env:
           GENESIS_MODEL_DIR: ${{ github.workspace }}/server/models
@@ -79,8 +98,7 @@ jobs:
           ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
           export GENESIS_MEMORY_BIN="$PWD/server/target/release/genesis-memory-server$ext"
           export GENESIS_HOOK_BIN="$PWD/hook/target/release/genesis-hook$ext"
-          for t in session_copy/test_embed.js session_copy/test_pipeline.js session_copy/test_build_session_agent.js \
-                   install/test_bootstrap.js; do
+          for t in session_copy/test_embed.js session_copy/test_pipeline.js session_copy/test_build_session_agent.js; do
             echo "== $t =="; node "$t"
           done
 
@@ -108,7 +126,6 @@ jobs:
           set -e
           for t in \
             hooks/test_plugin.js hooks/test_vendored_skills.js \
-            install/test_portability.js \
             session_copy/test_capture.js session_copy/test_store.js \
             test/launcher.test.js; do
             if [ -f "$t" ]; then echo "== $t =="; node "$t"; else echo "skip (absent): $t"; fi
