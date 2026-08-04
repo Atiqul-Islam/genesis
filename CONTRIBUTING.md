@@ -39,12 +39,10 @@ team/             Source for the agents (persona.md, behavior.md, skills/)
 skills/           Genesis skills (spec-forge workflow, expertise skills, ...)
 hooks/            Plugin hook config (hooks.json — invokes genesis-hook via the launcher's
                   --run-hook) + the plugin/scaffold tests
-session_copy/     Session-copy pipeline (Node): capture.js / embed.js / store.js /
-                  build_session_agent.js
 server/           Rust MCP memory server (genesis-memory-server)
 hook/             Rust enforcement-hook binary (genesis-hook): inject/gate/enforce-research/validate
 cli/              Rust installer/orchestrator (genesis-cli): assemble/bootstrap/promote/install/
-                  build-plugin-agents
+                  build-plugin-agents + the session-copy pipeline (capture/store/embed/build-session-agent)
 bin/              Node launcher (genesis-memory.js) — downloads/runs the release binaries; also
                   --stage-hook/--stage-cli (stage a binary) and --run-hook/--run-cli (exec one)
 scripts/          Helper scripts (e.g. fetch-model.mjs)
@@ -129,11 +127,12 @@ cargo test --release      # unit + integration (assemble/promote/bootstrap/build
 The integration tests stage the native binaries via the launcher; set `GENESIS_HOOK_BIN` and
 `GENESIS_CLI_BIN` to your built binaries first (see below) to exercise the real staging path.
 
-### Node components (launcher + session-copy)
+### Node component (the launcher only)
 
-No build. The launcher (`bin/genesis-memory.js`) and the session-copy pipeline (`session_copy/*.js`)
-run directly under `node`. Everything else — the enforcement hooks and the installer/orchestrator —
-is the Rust `hook/` and `cli/` binaries; the launcher execs them via `--run-hook` / `--run-cli`.
+No build. The launcher (`bin/genesis-memory.js`) runs directly under `node` — it is the one irreducible
+Node file (registry-free bootstrap: something must download the first binary). Everything else — the
+enforcement hooks, the installer/orchestrator, AND the session-copy pipeline — is the Rust `hook/` and
+`cli/` binaries; the launcher execs them via `--run-hook` / `--run-cli`.
 
 ---
 
@@ -165,11 +164,11 @@ cargo llvm-cov --json --release --output-path test-results/llvm-cov.json
 node ../test/tools/rust_crap_adapter.mjs   # exits non-zero iff CRAP > 8
 ```
 
-### Node (plugin scaffold, launcher, session-copy)
+### Node (plugin scaffold + launcher)
 
-The enforcement hooks and the installer/orchestrator are Rust (`hook/`, `cli/`). What remains in
-**Node** is the fetch-launcher (`bin/genesis-memory.js`), the plugin/scaffold checks (`hooks/*.js`),
-and the session-copy pipeline (`session_copy/*.js`); their tests are Node too.
+The enforcement hooks, the installer/orchestrator, AND the session-copy pipeline are all Rust
+(`hook/`, `cli/`). What remains in **Node** is the fetch-launcher (`bin/genesis-memory.js`) and the
+plugin/scaffold checks (`hooks/*.js`); their tests are Node too.
 
 Each test file is a self-contained script that prints `N passed, M failed` and exits
 non-zero on failure. Run them directly:
@@ -178,19 +177,13 @@ non-zero on failure. Run them directly:
 # Rust: the memory server + the enforcement-hook binary + the installer/orchestrator
 ( cd server && cargo test --release )
 ( cd hook   && cargo test --release )   # 28 unit + 15 CLI end-to-end
-( cd cli    && cargo test --release )   # 8 unit + 7 integration (assemble/promote/bootstrap/drift)
+( cd cli    && cargo test --release )   # unit + integration (assemble/promote/bootstrap/drift +
+                                        #   session-copy: capture/store/embed/pipeline)
 
-# Node: plugin scaffold, launcher, session-copy
+# Node: plugin scaffold + launcher
 node hooks/test_plugin.js
 node hooks/test_vendored_skills.js
-
 node test/launcher.test.js
-
-node session_copy/test_capture.js
-node session_copy/test_embed.js
-node session_copy/test_store.js
-node session_copy/test_build_session_agent.js
-node session_copy/test_pipeline.js
 
 node team/echo/test_echo.mjs
 ```
@@ -198,11 +191,14 @@ node team/echo/test_echo.mjs
 To run them all in one go from the repo root:
 
 ```
-# Node tests (plugin, installer/assembler, session-copy, team samples, launcher)
-find hooks install session_copy team test bin \
+# Node tests (plugin scaffold, team samples, launcher)
+find hooks team test bin \
   \( -name 'test_*.js' -o -name 'test_*.mjs' -o -name '*.test.js' \) -print0 \
   | xargs -0 -n1 node
 ```
+
+The session-copy pipeline's full round-trip (capture→store→embed) is a `cli` integration test that
+auto-runs when the server binary + model are built (`server/target/release` + `server/models`).
 
 ---
 

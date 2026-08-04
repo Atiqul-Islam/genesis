@@ -1,6 +1,7 @@
 //! genesis-cli — Genesis installer/orchestrator, busybox-style subcommand dispatch.
 //!
-//! `genesis-cli <assemble|bootstrap|promote|install|build-plugin-agents> [args...]`.
+//! `genesis-cli <assemble|bootstrap|promote|install|build-plugin-agents|capture|store|embed|
+//! build-session-agent> [args...]`.
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -12,10 +13,15 @@ fn main() {
         "install" => genesis_cli::install::run(&rest),
         "bootstrap" => genesis_cli::bootstrap::run(&rest),
         "build-plugin-agents" => genesis_cli::build_plugin_agents::run(&rest),
+        // session-copy pipeline
+        "capture" => genesis_cli::capture::run(&rest),
+        "store" => genesis_cli::store::run(&rest),
+        "embed" => genesis_cli::embed::run(&rest),
+        "build-session-agent" => genesis_cli::build_session_agent::run(&rest),
         _ => {
             eprintln!(
-                "genesis-cli: unknown subcommand {sub:?} \
-                 (expected assemble|bootstrap|promote|install|build-plugin-agents)"
+                "genesis-cli: unknown subcommand {sub:?} (expected assemble|bootstrap|promote|install|\
+                 build-plugin-agents|capture|store|embed|build-session-agent)"
             );
             2
         }

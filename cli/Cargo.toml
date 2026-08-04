@@ -2,7 +2,7 @@
 name = "genesis-cli"
 version = "0.1.0"
 edition = "2021"
-description = "Genesis installer/orchestrator (Rust): assemble / bootstrap / promote / install / build-plugin-agents — the one-time build+wire layer, run after the Node fetch-launcher has staged the binaries."
+description = "Genesis installer/orchestrator (Rust): assemble / bootstrap / promote / install / build-plugin-agents + the session-copy pipeline (capture / store / embed / build-session-agent) — the one-time build+wire layer, run after the Node fetch-launcher has staged the binaries."
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -21,6 +21,11 @@ path = "src/lib.rs"
 # preserve_order so generated JSON (settings.json / .mcp.json / required.json) keeps insertion order,
 # matching the Node installer's JSON.stringify output.
 serde_json = { version = "1", features = ["preserve_order"] }
+# Credential scrubbing in the session-copy capture step (same ASCII regex semantics as the hooks).
+regex = "1"
+# node:sqlite parity for the session-copy pipeline: read context-mode / genesis DBs, write history.sqlite.
+# Pinned to the SAME version the memory server bundles so one SQLite compiles across the workspace.
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

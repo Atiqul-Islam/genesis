@@ -31,14 +31,15 @@ current Claude Code session — carrying its full conversation history + all mem
 - Run the orchestrator (captures ALL stores, scrubbed, → portable history + summary, and embeds the history
   into the repo's shared memory under `agent_id=<name>`):
   ```
-  node <genesis>/session_copy/build_session_agent.js --session current --name <name> --repo <target_repo> \
+  <genesis>/bin/genesis-cli build-session-agent --session current --name <name> --repo <target_repo> \
       --genesis-home <target_repo>/.genesis --server-bin <...>/genesis-memory-server \
       --model-dir <...>/models --memory-db <target_repo>/.genesis/memory.db
   ```
+  (From a bare plugin install: `node <plugin>/bin/genesis-memory.js --run-cli build-session-agent …` — same args.)
 - Then continue the NORMAL build (Step 3): Method authors the agent's specialized persona (the "custom" part);
   the assembler wires it. At runtime the agent recalls its carried-over history via its memory tools and loads
-  its `summary.md` digest at start (inject.py). The bundle lives at `<target_repo>/.genesis/agents/<name>/` and
-  travels with a git clone (portable — no `~/.claude` dependency).
+  its `summary.md` digest at start (the inject hook). The bundle lives at `<target_repo>/.genesis/agents/<name>/`
+  and travels with a git clone (portable — no `~/.claude` dependency).
 - Credentials are never copied; pass any known secret values via `--known-secret` for guaranteed removal.
 - SCOPE NOTE: session-copy is single-agent only; the result is a separate named agent (not auto-mounted).
 
