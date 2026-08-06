@@ -7,12 +7,19 @@
 //! Decision:
 //!   * command is not an `assemble.js <src> <name> ...` invocation -> allow (not our concern)
 //!   * the assembled agent name is a built-in (sensei/method)      -> allow
-//!   * transcript shows a `research-expertise` Skill tool_use      -> allow
-//!   * otherwise (incl. transcript missing/unreadable)            -> DENY (fail-closed)
+//!   * a durable per-agent research marker exists in `.genesis/`  -> allow (RESUME-SAFE)
+//!   * the current OR any sibling transcript shows the skill      -> allow (+persist the marker)
+//!   * otherwise                                                  -> DENY (fail-closed)
+//!
+//! RESUME SAFETY: a resume/compact rotates the active transcript file, which would otherwise hide
+//! research done before the session change and wrongly re-block an in-progress build. We defend two ways:
+//! scan every transcript in the session's project dir (the prior one stays a sibling), and once research
+//! is confirmed write a durable marker under `.genesis/` so a later session change, compaction, or
+//! transcript pruning can never undo it.
 
 use crate::{agent, cli, io};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const SKILL_NAME: &str = "research-expertise";
 const ASSEMBLER: &str = "assemble.js"; // the assembler script basename the enforcer keys on
@@ -29,7 +36,8 @@ pub fn run(args: &[String]) {
     }
 
     let cwd = std::env::current_dir().unwrap_or_default();
-    let log = agent::runtime_dir(&cwd).join("hook-decisions.log");
+    let runtime = agent::runtime_dir(&cwd);
+    let log = runtime.join("hook-decisions.log");
 
     let command = ev
         .get("tool_input")
@@ -49,22 +57,29 @@ pub fn run(args: &[String]) {
             ),
         ),
         Some(name) => {
+            // RESUME-SAFE: a durable marker survives session changes/compaction, so an in-progress
+            // build is never re-blocked once its research has been confirmed once.
+            let marker = research_marker(&runtime, &name);
+            if marker.is_file() {
+                allow(&log, &name, "research confirmed (persisted marker)");
+            }
             let transcript = ev
                 .get("transcript_path")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            match research_skill_used(transcript) {
-                Some(true) => allow(&log, &name, "research-expertise skill confirmed"),
-                _ => deny(
-                    &log,
-                    &name,
-                    &format!(
-                        "You must run the `research-expertise` skill to select and research \
-                         '{name}'s expertise (with the user) BEFORE assembling it. Invoke the \
-                         research-expertise skill, complete the process, then assemble again."
-                    ),
-                ),
+            if research_skill_used(transcript) {
+                write_marker(&marker); // remember it so a later resume/compact can't undo it
+                allow(&log, &name, "research-expertise skill confirmed");
             }
+            deny(
+                &log,
+                &name,
+                &format!(
+                    "You must run the `research-expertise` skill to select and research \
+                     '{name}'s expertise (with the user) BEFORE assembling it. Invoke the \
+                     research-expertise skill, complete the process, then assemble again."
+                ),
+            );
         }
     }
 }
@@ -88,13 +103,36 @@ fn assembled_agent_name(command: &str) -> Option<String> {
     None
 }
 
-/// `Some(true)`/`Some(false)` if the transcript shows / doesn't show a `research-expertise` Skill
-/// tool_use; `None` if the path was given but unreadable (a real error -> fail closed).
-fn research_skill_used(transcript_path: &str) -> Option<bool> {
-    if transcript_path.is_empty() || !Path::new(transcript_path).is_file() {
-        return Some(false);
+/// True if the `research-expertise` Skill tool_use appears in the current transcript OR any sibling
+/// transcript in the same project directory. Scanning siblings is what makes this RESUME-SAFE: a
+/// resume/compact rotates the active transcript file but leaves the prior one — which holds the skill
+/// invocation — in the same `~/.claude/projects/<enc>/` dir.
+fn research_skill_used(transcript_path: &str) -> bool {
+    if transcript_path.is_empty() {
+        return false;
     }
-    let text = std::fs::read_to_string(transcript_path).ok()?;
+    let cur = Path::new(transcript_path);
+    let mut files: Vec<PathBuf> = Vec::new();
+    if cur.is_file() {
+        files.push(cur.to_path_buf());
+    }
+    if let Some(dir) = cur.parent() {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.as_path() != cur && p.extension().and_then(|x| x.to_str()) == Some("jsonl") {
+                    files.push(p);
+                }
+            }
+        }
+    }
+    files
+        .iter()
+        .any(|f| std::fs::read_to_string(f).is_ok_and(|t| transcript_has_research(&t)))
+}
+
+/// Does one transcript's text contain a `research-expertise` Skill tool_use?
+fn transcript_has_research(text: &str) -> bool {
     for line in text.split('\n') {
         let line = line.trim_end_matches('\r');
         let Ok(ev) = serde_json::from_str::<Value>(line) else {
@@ -117,12 +155,36 @@ fn research_skill_used(transcript_path: &str) -> Option<bool> {
                 let inp = b.get("input").cloned().unwrap_or(Value::Null);
                 let skill_matches = inp.get("skill").and_then(Value::as_str) == Some(SKILL_NAME);
                 if skill_matches || inp.to_string().contains(SKILL_NAME) {
-                    return Some(true);
+                    return true;
                 }
             }
         }
     }
-    Some(false)
+    false
+}
+
+/// Durable per-agent "research confirmed" marker under the repo's `.genesis` runtime dir. The agent
+/// name is sanitized to a safe filename (no path separators / traversal).
+fn research_marker(runtime: &Path, name: &str) -> PathBuf {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    runtime.join("research-done").join(safe)
+}
+
+/// Best-effort persist of the research marker (non-fatal — the transcript scan is the fallback).
+fn write_marker(marker: &Path) {
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(marker, b"research-expertise confirmed\n");
 }
 
 /// POSIX-mode shlex split. `Err(())` on an unbalanced quote (parity with Python raising, which the
@@ -295,5 +357,61 @@ mod tests {
             assembled_agent_name(r#"node "install/assemble.js" 'src dir' worker /r /g"#),
             Some("worker".to_string())
         );
+    }
+
+    fn assistant_skill_line(skill: &str) -> String {
+        json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "name": "Skill", "input": {"skill": skill}}]}
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn transcript_has_research_detects_the_skill() {
+        assert!(transcript_has_research(&assistant_skill_line(
+            "research-expertise"
+        )));
+        assert!(!transcript_has_research(&assistant_skill_line(
+            "some-other-skill"
+        )));
+        assert!(!transcript_has_research("not json\n{}"));
+    }
+
+    #[test]
+    fn research_marker_sanitizes_the_agent_name() {
+        let m = research_marker(Path::new("/repo/.genesis"), "../evil/name");
+        assert_eq!(m, Path::new("/repo/.genesis/research-done/___evil_name"));
+        assert!(!m.to_string_lossy().contains(".."));
+    }
+
+    // The core fix: research recorded in a PRIOR (sibling) transcript is still found after a resume
+    // rotates the active transcript file.
+    #[test]
+    fn research_found_in_sibling_transcript_survives_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        // the "old" (pre-resume) transcript holds the research-expertise invocation
+        std::fs::write(
+            dir.path().join("old-session.jsonl"),
+            assistant_skill_line("research-expertise"),
+        )
+        .unwrap();
+        // the "current" (post-resume) transcript is fresh and does NOT contain it
+        let current = dir.path().join("new-session.jsonl");
+        std::fs::write(&current, assistant_skill_line("something-else")).unwrap();
+
+        assert!(
+            research_skill_used(current.to_str().unwrap()),
+            "research in a sibling transcript must still count after a resume"
+        );
+    }
+
+    #[test]
+    fn research_absent_everywhere_is_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("s.jsonl");
+        std::fs::write(&current, assistant_skill_line("nope")).unwrap();
+        assert!(!research_skill_used(current.to_str().unwrap()));
+        assert!(!research_skill_used(""));
     }
 }
