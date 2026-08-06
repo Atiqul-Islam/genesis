@@ -50,6 +50,20 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse a release whose versions don't match the tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          WANT="${TAG#v}"                                   # strip leading v
+          PLUGIN="$(node -e "process.stdout.write(require('./.claude-plugin/plugin.json').version)")"
+          LAUNCHER="$(node -e "const s=require('fs').readFileSync('bin/genesis-memory.js','utf8');process.stdout.write((s.match(/RELEASE_VERSION = \"([^\"]+)\"/)||[])[1]||'')")"
+          echo "tag=$WANT  plugin.json=$PLUGIN  launcher=$LAUNCHER"
+          if [ "$PLUGIN" != "$WANT" ] || [ "$LAUNCHER" != "$WANT" ]; then
+            echo "::error::Version mismatch — run \`node scripts/bump-version.mjs $WANT\`, commit, then re-tag. (plugin.json=$PLUGIN launcher=$LAUNCHER tag=$WANT)"
+            exit 1
+          fi
+          echo "OK: plugin.json + launcher RELEASE_VERSION both match the tag."
+
   # ── Build both self-contained binaries per platform; upload them as platform-named artifacts ──
   build:
     name: build ${{ matrix.key }}

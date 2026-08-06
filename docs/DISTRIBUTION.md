@@ -48,6 +48,13 @@ install can run the orchestrator with no prebuilt binary on disk.
   platform on first use, **SHA256-verifies** them, caches them per-user (`~/.cache/genesis/v<ver>/`), and
   execs the server (default) / hook (`--run-hook`, `--stage-hook`) / cli (`--run-cli`, `--stage-cli`). The
   release version is a constant in the launcher, bumped per release. `.mcp.json` launches `node <launcher>`.
+- **Version tracking + auto-sync (so `/plugin update` actually propagates).** `scripts/bump-version.mjs`
+  sets `.claude-plugin/plugin.json` `version` AND the launcher `RELEASE_VERSION` in lockstep, and the release
+  `gate` job REFUSES a tag whose versions don't match — so the plugin version can't silently drift (the bug
+  that made `/plugin update` a no-op). The launcher's `--sync <genesis-home>` refreshes a repo's staged
+  `.genesis/bin` binaries + launcher copy to the plugin version when a `.staged-version` stamp shows they're
+  stale (a one-file-read no-op otherwise); the plugin's `SubagentStart` hook runs it, so a `/plugin update`
+  reaches already-bootstrapped repos with no manual staging.
 - `genesis-cli bootstrap` stages the hook + cli binaries via the launcher's `--stage-*` (download, or the
   `GENESIS_*_BIN` dev overrides). Consumers need only Node + network on first run; no npm account anywhere.
 - Tests: hook crate 28 unit + 15 CLI; cli crate 8 unit + 7 integration (assemble/promote/bootstrap/

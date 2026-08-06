@@ -7,6 +7,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" --sync \"${CLAUDE_PROJECT_DIR}/.genesis\""
+          },
+          {
+            "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" --run-hook inject \"${CLAUDE_PLUGIN_ROOT}/expertise\""
           }
         ]

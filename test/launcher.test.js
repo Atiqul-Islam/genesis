@@ -246,6 +246,46 @@ function testRunCli() {
   });
 }
 
+// ── --sync refreshes an existing repo's staged binaries to this launcher's version (offline) ──
+function testSync() {
+  withTempDir((td) => {
+    const fakeHook = path.join(td, "hook-src");
+    fs.writeFileSync(fakeHook, "HOOK-NEW");
+    const fakeCli = path.join(td, "cli-src");
+    fs.writeFileSync(fakeCli, "CLI-NEW");
+    const gh = path.join(td, "repo", ".genesis");
+    fs.mkdirSync(gh, { recursive: true }); // an EXISTING workspace
+    const env = baseEnv({ GENESIS_HOOK_BIN: fakeHook, GENESIS_CLI_BIN: fakeCli });
+    const exe = process.platform === "win32" ? ".exe" : "";
+    const hookExe = path.join(gh, "bin", "genesis-hook" + exe);
+    const stamp = path.join(gh, "bin", ".staged-version");
+
+    // 1. stale (no stamp) -> stages both binaries + writes the stamp
+    const p1 = spawnSync(NODE, [LAUNCHER, "--sync", gh], { encoding: "utf-8", timeout: 60000, env });
+    check("--sync exits 0", p1.status === 0);
+    check(
+      "--sync stages the hook binary",
+      fs.existsSync(hookExe) && fs.readFileSync(hookExe, "utf8") === "HOOK-NEW"
+    );
+    check("--sync stages the cli binary", fs.existsSync(path.join(gh, "bin", "genesis-cli" + exe)));
+    check("--sync writes the version stamp", fs.existsSync(stamp));
+
+    // 2. current stamp -> no-op (prove by tampering the staged file; a no-op leaves it untouched)
+    fs.writeFileSync(hookExe, "TAMPERED");
+    const p2 = spawnSync(NODE, [LAUNCHER, "--sync", gh], { encoding: "utf-8", timeout: 60000, env });
+    check("--sync is a no-op when the stamp is current (exit 0)", p2.status === 0);
+    check("--sync does NOT re-stage when already current", fs.readFileSync(hookExe, "utf8") === "TAMPERED");
+
+    // 3. non-existent workspace -> fail-open no-op (never break session start)
+    const p3 = spawnSync(NODE, [LAUNCHER, "--sync", path.join(td, "nope", ".genesis")], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env,
+    });
+    check("--sync on a missing workspace is a no-op (exit 0)", p3.status === 0);
+  });
+}
+
 function main() {
   check("launcher file exists", fs.existsSync(LAUNCHER));
   testTransparentExec();
@@ -255,6 +295,7 @@ function main() {
   testStageCli();
   testRunHook();
   testRunCli();
+  testSync();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

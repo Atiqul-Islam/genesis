@@ -131,9 +131,15 @@ function main() {
     }
   }
   check("every command hook uses ${CLAUDE_PLUGIN_ROOT}", cmds.every((c) => c.indexOf("${CLAUDE_PLUGIN_ROOT}") !== -1));
+  check("every command hook goes through the launcher (bin/genesis-memory.js)",
+        cmds.length > 0 && cmds.every((c) => c.indexOf("bin/genesis-memory.js") !== -1));
   check("NO --main-agent anywhere (no forced main-thread agent)", !cmds.some((c) => c.indexOf("--main-agent") !== -1));
+  // the ENFORCEMENT hooks (all but the version-sync helper) run genesis-hook via --run-hook
+  const hookCmds = cmds.filter((c) => c.indexOf("--sync") === -1);
   check("deterministic hooks invoke genesis-hook via the launcher's --run-hook shim",
-        cmds.length > 0 && cmds.every((c) => c.indexOf("--run-hook") !== -1 && c.indexOf("bin/genesis-memory.js") !== -1));
+        hookCmds.length > 0 && hookCmds.every((c) => c.indexOf("--run-hook") !== -1));
+  check("SubagentStart runs --sync to keep the repo's staged binaries current with the plugin",
+        cmds.some((c) => c.indexOf("--sync") !== -1 && c.indexOf("${CLAUDE_PROJECT_DIR}/.genesis") !== -1));
   check("no legacy run.js resolver referenced (absorbed into the launcher)",
         !cmds.some((c) => c.indexOf("run.js") !== -1));
   for (const sub of ["inject", "gate", "enforce-research", "validate"]) {

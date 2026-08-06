@@ -44,7 +44,8 @@ hook/             Rust enforcement-hook binary (genesis-hook): inject/gate/enfor
 cli/              Rust installer/orchestrator (genesis-cli): assemble/bootstrap/promote/install/
                   build-plugin-agents + the session-copy pipeline (capture/store/embed/build-session-agent)
 bin/              Node launcher (genesis-memory.js) — downloads/runs the release binaries; also
-                  --stage-hook/--stage-cli (stage a binary) and --run-hook/--run-cli (exec one)
+                  --stage-hook/--stage-cli (stage a binary), --run-hook/--run-cli (exec one),
+                  --sync (refresh a repo's staged binaries to the plugin version)
 scripts/          Helper scripts (e.g. fetch-model.mjs)
 expertise/        Verified expertise reports the agents read
 docs/             Architecture, workflow, and the publish plan

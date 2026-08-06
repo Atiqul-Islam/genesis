@@ -15,7 +15,12 @@
 //                          run.js. ASSEMBLED agents skip it (their frontmatter names the binary directly);
 //   * (--run-cli <sub>…)   ensures the genesis-cli binary (download+cache) and execs `<cli> <sub> …` — the
 //                          installer/orchestrator entry point (bootstrap/assemble/promote/…). Fail-LOUD
-//                          (exit 1 if the binary can't be resolved) since the user asked for it explicitly.
+//                          (exit 1 if the binary can't be resolved) since the user asked for it explicitly;
+//   * (--sync <dir>)       refresh an EXISTING repo workspace's `.genesis/bin` (binaries + launcher copy) to
+//                          THIS launcher's RELEASE_VERSION when a version stamp shows they're stale — a
+//                          one-file-read no-op otherwise. Fail-OPEN. This is how a `/plugin update` reaches
+//                          already-bootstrapped repos: the plugin's SubagentStart hook runs it, so a repo's
+//                          staged hook binary tracks the plugin with no manual staging.
 //
 // The release assets are PUBLIC, fetched over HTTPS — a consumer needs no credentials. Node.js is the
 // only prerequisite (18+ for global fetch); no third-party runtime dependencies.
@@ -37,7 +42,7 @@ const childProcess = require("child_process");
 
 // The GitHub Release tag (minus the leading "v") to fetch, and the repo. BUMP RELEASE_VERSION per
 // release (same commit as the git tag). This is the single source of truth for which assets to pull.
-const RELEASE_VERSION = "0.1.0-beta.4";
+const RELEASE_VERSION = "0.1.0-beta.5";
 const REPO = "Atiqul-Islam/genesis";
 const SERVER_STEM = "genesis-memory-server";
 const HOOK_STEM = "genesis-hook";
@@ -286,6 +291,39 @@ function runCli(cliArgs) {
     });
 }
 
+// --sync <genesis_home>: keep an EXISTING repo workspace's staged binaries + launcher current with THIS
+// launcher's RELEASE_VERSION. A version stamp makes the common case a single file read (no work), so it is
+// safe to run at (sub)agent start. FAIL-OPEN: any error is logged to stderr and swallowed — a stale binary
+// or an offline machine must never break session start.
+async function syncRepo(genesisHome) {
+  try {
+    if (!fs.existsSync(genesisHome)) return; // not a workspace — bootstrap CREATES; --sync only REFRESHES
+    const binDir = path.join(genesisHome, "bin");
+    const stamp = path.join(binDir, ".staged-version");
+    let current = "";
+    try {
+      current = fs.readFileSync(stamp, "utf8").trim();
+    } catch (_e) {
+      // no stamp yet (first sync, or pre-stamp install) -> fall through and stage
+    }
+    if (current === RELEASE_VERSION) return; // already current — nothing to do
+    log("syncing " + genesisHome + " to v" + RELEASE_VERSION + " (was " + (current || "unstamped") + ") ...");
+    await stageHook(binDir);
+    await stageCli(binDir);
+    // refresh the repo's own launcher copy so its RELEASE_VERSION matches (harmless self-copy if same file)
+    try {
+      const selfCopy = path.join(binDir, "genesis-memory.js");
+      if (path.resolve(selfCopy) !== path.resolve(__filename)) fs.copyFileSync(__filename, selfCopy);
+    } catch (_e) {
+      // ignore — the binaries are what matter
+    }
+    fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
+    log("synced " + genesisHome + " -> v" + RELEASE_VERSION);
+  } catch (e) {
+    log("sync skipped (non-fatal): " + (e && e.message ? e.message : String(e)));
+  }
+}
+
 function execServer(binPath, modelDir) {
   const env = Object.assign({}, process.env, { GENESIS_MODEL_DIR: modelDir });
   const child = childProcess.spawn(binPath, process.argv.slice(2), { stdio: "inherit", env });
@@ -343,6 +381,14 @@ async function main() {
   // Orchestrator: ensure the genesis-cli binary (download+cache) and exec it (fail-loud).
   if (argv[0] === "--run-cli") {
     runCli(argv.slice(1));
+    return;
+  }
+
+  // Version-sync: refresh a repo workspace's staged binaries to this launcher's version (fail-open).
+  if (argv[0] === "--sync") {
+    const dest = argv[1];
+    if (dest) await syncRepo(dest);
+    process.exit(0);
     return;
   }
 
