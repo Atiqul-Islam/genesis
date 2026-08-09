@@ -11,6 +11,7 @@ pub mod bootstrap;
 pub mod build_plugin_agents;
 pub mod build_session_agent;
 pub mod capture;
+pub mod demote;
 pub mod embed;
 pub mod fsx;
 pub mod install;

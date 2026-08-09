@@ -193,6 +193,15 @@ function main() {
     check("commands/promote.md passes $ARGUMENTS (the agent name)", pt.indexOf("$ARGUMENTS") !== -1);
   }
 
+  // ---- /genesis:demote gesture (inverse of promote; no agent-name arg) ----
+  const demoteCmd = path.join(REPO, "commands", "demote.md");
+  check("commands/demote.md exists (the /genesis:demote gesture)", isFile(demoteCmd));
+  if (isFile(demoteCmd)) {
+    const dt = readText(demoteCmd);
+    check("commands/demote.md runs genesis-cli demote via the launcher (--run-cli demote)",
+          dt.indexOf("--run-cli demote") !== -1);
+  }
+
   // (agent identity derivation — normalize / resolve_agent / split_args — is now the Rust genesis-hook
   //  binary, covered by hook/src/agent.rs unit tests; the Node port was removed with the other Node hooks.)
   // (drift: committed agents/*.md == genesis-cli build-plugin-agents output — now a Rust integration test

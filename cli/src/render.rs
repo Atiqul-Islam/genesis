@@ -401,6 +401,103 @@ pub fn install_as_main(
     )
 }
 
+/// Remove any genesis managed persona block from `<target>/CLAUDE.md` (name-agnostic — matched by the
+/// sentinels, since only one agent is ever main). Returns the demoted agent's name if a block was present.
+/// All other CLAUDE.md content is preserved.
+#[must_use]
+pub fn demote_claude_md(target: &Path) -> Option<String> {
+    let p = target.join("CLAUDE.md");
+    let existing = fsx::read_text(&p)?;
+    let start_prefix = "# >>> genesis agent: ";
+    let end_prefix = "# <<< genesis agent: ";
+    let si = existing.find(start_prefix)?;
+    let ei_start = si + existing[si..].find(end_prefix)?;
+    let end_line_end = existing[ei_start..]
+        .find('\n')
+        .map_or(existing.len(), |n| ei_start + n + 1);
+    // pull the name out of the start sentinel line (after the prefix, up to " (")
+    let start_line_end = existing[si..].find('\n').map_or(existing.len(), |n| si + n);
+    let name = existing[si..start_line_end]
+        .strip_prefix(start_prefix)
+        .and_then(|s| s.split(" (").next())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let pre_t = existing[..si].trim_end_matches('\n');
+    let post_t = existing[end_line_end..].trim_start_matches('\n');
+    let merged = if pre_t.is_empty() {
+        post_t.to_string()
+    } else if post_t.is_empty() {
+        format!("{pre_t}\n")
+    } else {
+        format!("{pre_t}\n\n{post_t}")
+    };
+    let _ = fsx::write_text(&p, &merged);
+    Some(name)
+}
+
+/// True if a hook block is a genesis main-thread entry (carries `--main-agent`, or the review agent's prompt).
+fn is_genesis_main_block(blk: &Value) -> bool {
+    blk.get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|hs| {
+            hs.iter().any(|h| {
+                h.get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| c.contains("--main-agent"))
+                    || (h.get("type").and_then(Value::as_str) == Some("agent")
+                        && h.get("prompt")
+                            .and_then(Value::as_str)
+                            .is_some_and(|pr| pr.contains("reviewer for the Genesis agent")))
+            })
+        })
+}
+
+/// Remove genesis main-thread hook entries from `<target>/.claude/settings.json`, preserving the user's own
+/// hooks. Hook events emptied by the removal are dropped; an emptied `hooks` object is dropped too.
+pub fn demote_settings(target: &Path) {
+    let p = target.join(".claude").join("settings.json");
+    let Some(mut s) = fsx::read_json(&p).filter(Value::is_object) else {
+        return;
+    };
+    if let Some(hooks) = s.get_mut("hooks").and_then(Value::as_object_mut) {
+        let events: Vec<String> = hooks.keys().cloned().collect();
+        for ev in events {
+            let kept: Option<Vec<Value>> = hooks.get(&ev).and_then(Value::as_array).map(|arr| {
+                arr.iter()
+                    .filter(|b| !is_genesis_main_block(b))
+                    .cloned()
+                    .collect()
+            });
+            if let Some(kept) = kept {
+                if kept.is_empty() {
+                    hooks.remove(&ev);
+                } else {
+                    hooks.insert(ev, json!(kept));
+                }
+            }
+        }
+    }
+    if s.get("hooks")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        if let Some(o) = s.as_object_mut() {
+            o.remove("hooks");
+        }
+    }
+    let _ = fsx::write_text(&p, &fsx::json_pretty(&s));
+}
+
+/// Un-install the folder's MAIN Claude (inverse of `install_as_main`): strip the CLAUDE.md managed block +
+/// the main-thread hooks. Returns the demoted agent name if one was promoted. The agent stays a subagent.
+#[must_use]
+pub fn uninstall_main(target: &Path) -> Option<String> {
+    let name = demote_claude_md(target);
+    demote_settings(target);
+    name
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +585,48 @@ mod tests {
     fn json_dump_ascii_escapes_nonascii() {
         let v = json!({"_doc": "em—dash"});
         assert!(json_dump_ascii(&v).contains("em\\u2014dash"));
+    }
+
+    // demote is the exact inverse of install-as-main: it removes ONLY genesis's block + main-thread hooks,
+    // preserving the user's CLAUDE.md content and their own hooks.
+    #[test]
+    fn demote_reverses_install_as_main_and_preserves_user_content() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join(".claude")).unwrap();
+        std::fs::write(td.path().join("CLAUDE.md"), "# Mine\n\nkeep me\n").unwrap();
+        std::fs::write(
+            td.path().join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"user-hook"}]}]}}"#,
+        )
+        .unwrap();
+        let _ = install_as_main(
+            td.path(),
+            "bot",
+            "${CLAUDE_PROJECT_DIR}/.genesis",
+            &["persona-creation".to_string()],
+            "PERSONA",
+        );
+
+        let demoted = uninstall_main(td.path());
+        assert_eq!(demoted.as_deref(), Some("bot"));
+
+        let md = std::fs::read_to_string(td.path().join("CLAUDE.md")).unwrap();
+        assert!(md.contains("keep me"), "user CLAUDE.md content preserved");
+        assert!(!md.contains("genesis agent: bot"), "managed block removed");
+        assert!(!md.contains("PERSONA"), "persona removed");
+
+        let s: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let flat = s["hooks"].to_string();
+        assert!(flat.contains("user-hook"), "user hook preserved");
+        assert!(!flat.contains("--main-agent"), "main-thread hooks removed");
+        // SessionStart/Stop existed ONLY for genesis -> those events are dropped entirely
+        assert!(s["hooks"].get("SessionStart").is_none());
+        assert!(s["hooks"].get("Stop").is_none());
+
+        // idempotent + safe when nothing is promoted
+        assert_eq!(uninstall_main(td.path()), None);
     }
 }

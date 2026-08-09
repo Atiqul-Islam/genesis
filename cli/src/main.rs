@@ -1,6 +1,6 @@
 //! genesis-cli — Genesis installer/orchestrator, busybox-style subcommand dispatch.
 //!
-//! `genesis-cli <assemble|bootstrap|promote|install|build-plugin-agents|capture|store|embed|
+//! `genesis-cli <assemble|bootstrap|promote|demote|install|build-plugin-agents|capture|store|embed|
 //! build-session-agent> [args...]`.
 
 fn main() {
@@ -10,6 +10,7 @@ fn main() {
     let code = match sub {
         "assemble" => genesis_cli::assemble::run(&rest),
         "promote" => genesis_cli::promote::run(&rest),
+        "demote" => genesis_cli::demote::run(&rest),
         "install" => genesis_cli::install::run(&rest),
         "bootstrap" => genesis_cli::bootstrap::run(&rest),
         "build-plugin-agents" => genesis_cli::build_plugin_agents::run(&rest),
@@ -20,7 +21,7 @@ fn main() {
         "build-session-agent" => genesis_cli::build_session_agent::run(&rest),
         _ => {
             eprintln!(
-                "genesis-cli: unknown subcommand {sub:?} (expected assemble|bootstrap|promote|install|\
+                "genesis-cli: unknown subcommand {sub:?} (expected assemble|bootstrap|promote|demote|install|\
                  build-plugin-agents|capture|store|embed|build-session-agent)"
             );
             2

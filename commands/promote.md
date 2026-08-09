@@ -9,7 +9,7 @@ You are running **`/genesis:promote`** — turn an existing Genesis-built agent 
 
 **Do this now:**
 
-1. If `$ARGUMENTS` is empty, list the built agents (`.claude/agents/*.md`), ask the user which one to promote, and stop until they answer. Only one agent is the main Claude at a time — promoting a different agent just replaces the managed block, so there is no separate "demote".
+1. If `$ARGUMENTS` is empty, list the built agents (`.claude/agents/*.md`), ask the user which one to promote, and stop until they answer. Only one agent is the main Claude at a time — promoting a different agent just replaces the managed block. To remove the main agent entirely (back to a plain folder), use `/genesis:demote`.
 
 2. Promote it via the plugin launcher (it resolves the native `genesis-cli`; no manual staging needed):
    ```
