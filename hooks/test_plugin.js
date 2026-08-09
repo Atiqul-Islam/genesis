@@ -183,6 +183,16 @@ function main() {
     check("commands/new.md passes $ARGUMENTS to the build", ctext.indexOf("$ARGUMENTS") !== -1);
   }
 
+  // ---- /genesis:promote gesture ----
+  const promoteCmd = path.join(REPO, "commands", "promote.md");
+  check("commands/promote.md exists (the /genesis:promote gesture)", isFile(promoteCmd));
+  if (isFile(promoteCmd)) {
+    const pt = readText(promoteCmd);
+    check("commands/promote.md runs genesis-cli promote via the launcher (--run-cli promote)",
+          pt.indexOf("--run-cli promote") !== -1);
+    check("commands/promote.md passes $ARGUMENTS (the agent name)", pt.indexOf("$ARGUMENTS") !== -1);
+  }
+
   // (agent identity derivation — normalize / resolve_agent / split_args — is now the Rust genesis-hook
   //  binary, covered by hook/src/agent.rs unit tests; the Node port was removed with the other Node hooks.)
   // (drift: committed agents/*.md == genesis-cli build-plugin-agents output — now a Rust integration test
