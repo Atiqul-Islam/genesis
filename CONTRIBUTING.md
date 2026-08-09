@@ -177,9 +177,9 @@ non-zero on failure. Run them directly:
 ```
 # Rust: the memory server + the enforcement-hook binary + the installer/orchestrator
 ( cd server && cargo test --release )
-( cd hook   && cargo test --release )   # 28 unit + 15 CLI end-to-end
-( cd cli    && cargo test --release )   # unit + integration (assemble/promote/bootstrap/drift +
-                                        #   session-copy: capture/store/embed/pipeline)
+( cd hook   && cargo test --release )   # unit + CLI end-to-end
+( cd cli    && cargo test --release )   # unit (render/scrub/install-as-main/demote) + integration
+                                        #   (assemble/promote/bootstrap/drift + session-copy pipeline)
 
 # Node: plugin scaffold + launcher
 node hooks/test_plugin.js

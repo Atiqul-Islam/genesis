@@ -57,9 +57,11 @@ install can run the orchestrator with no prebuilt binary on disk.
   reaches already-bootstrapped repos with no manual staging.
 - `genesis-cli bootstrap` stages the hook + cli binaries via the launcher's `--stage-*` (download, or the
   `GENESIS_*_BIN` dev overrides). Consumers need only Node + network on first run; no npm account anywhere.
-- Tests: hook crate 28 unit + 15 CLI; cli crate 8 unit + 7 integration (assemble/promote/bootstrap/
-  build-plugin-agents/portability/drift); Node `test/launcher.test.js` (22, incl. the new modes) +
-  `test_plugin`. `ci.yml` builds/tests all three Rust crates + the remaining Node surface.
+- Tests (described, not counted — the numbers drift as suites grow; `cargo test` is the source of truth):
+  hook crate = unit + CLI end-to-end; cli crate = unit (render / scrub / install-as-main + demote round-trip)
+  + integration (assemble / promote / bootstrap / build-plugin-agents / portability / drift, plus the
+  session-copy pipeline: capture / store / embed / round-trip); Node `test/launcher.test.js` (server exec +
+  --stage/--run/--sync modes) + `test_plugin`. `ci.yml` builds/tests all three Rust crates + the Node surface.
 
 ## Target layout (alpha npm model — superseded; see Beta update)
 
