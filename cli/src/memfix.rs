@@ -152,6 +152,82 @@ pub fn os_home() -> Option<PathBuf> {
     None
 }
 
+/// Whether this process is running under WSL. In WSL the OS home (`$HOME`, e.g. `/home/atiqul`) is the LINUX
+/// home, but the user's repos usually live on the mounted Windows drive (`/mnt/c/Users/<name>`), so "user
+/// scope" must cover the Windows profile too. Detected from the OS itself (kernel string / interop env),
+/// never from a repo path.
+#[must_use]
+pub fn is_wsl() -> bool {
+    if std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        return true;
+    }
+    for p in ["/proc/sys/kernel/osrelease", "/proc/version"] {
+        if let Ok(s) = std::fs::read_to_string(p) {
+            let s = s.to_ascii_lowercase();
+            if s.contains("microsoft") || s.contains("wsl") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Under WSL, the Windows user profile as a WSL path (e.g. `/mnt/c/Users/iatiq`). Resolved from the OS —
+/// the `USERPROFILE` value (env if shared, else asked of `cmd.exe`), converted with `wslpath` (falling back
+/// to a manual `<drive>:\…` → `/mnt/<drive>/…` mapping). Never derived from a repo path. `None` if it can't
+/// be determined or the resolved path doesn't exist.
+#[must_use]
+pub fn wsl_windows_home() -> Option<PathBuf> {
+    let winpath = std::env::var("USERPROFILE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::process::Command::new("cmd.exe")
+                .args(["/C", "echo %USERPROFILE%"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|s| !s.is_empty() && s != "%USERPROFILE%")
+        })?;
+    let home = wsl_to_unix(&winpath)?;
+    home.is_dir().then_some(home)
+}
+
+/// Convert a Windows path (`C:\Users\iatiq`) to its WSL path, preferring the `wslpath` tool (which respects
+/// custom mount roots) and falling back to a manual `<drive>:\…` → `/mnt/<drive>/…` mapping.
+fn wsl_to_unix(winpath: &str) -> Option<PathBuf> {
+    if let Ok(o) = std::process::Command::new("wslpath")
+        .args(["-u", winpath])
+        .output()
+    {
+        if o.status.success() {
+            let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !p.is_empty() {
+                return Some(PathBuf::from(p));
+            }
+        }
+    }
+    win_to_wsl_manual(winpath)
+}
+
+/// Pure `<drive>:\rest` → `/mnt/<drive>/rest` mapping (the `wslpath` fallback). `None` if it isn't a
+/// drive-letter path.
+fn win_to_wsl_manual(winpath: &str) -> Option<PathBuf> {
+    let b = winpath.as_bytes();
+    if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        let drive = b[0].to_ascii_lowercase() as char;
+        let rest = winpath[2..].replace('\\', "/");
+        let rest = rest.trim_start_matches('/');
+        return Some(if rest.is_empty() {
+            PathBuf::from(format!("/mnt/{drive}"))
+        } else {
+            PathBuf::from(format!("/mnt/{drive}/{rest}"))
+        });
+    }
+    None
+}
+
 /// Every filesystem root on this machine: the existing drive letters on Windows, `/` on Unix.
 #[must_use]
 pub fn filesystem_roots() -> Vec<PathBuf> {
@@ -188,17 +264,27 @@ pub fn resolve_scan_roots(
 ) -> Result<Vec<PathBuf>, String> {
     let mut roots: Vec<PathBuf> = explicit.to_vec();
     match scope {
-        Some(Scope::User) => match os_home() {
-            Some(home) => roots.push(home),
-            None if explicit.is_empty() => {
+        Some(Scope::User) => {
+            let mut found = false;
+            if let Some(home) = os_home() {
+                roots.push(home);
+                found = true;
+            }
+            // Under WSL, also scan the Windows user profile — that's where the repos actually live.
+            if is_wsl() {
+                if let Some(win) = wsl_windows_home() {
+                    roots.push(win);
+                    found = true;
+                }
+            }
+            if !found && explicit.is_empty() {
                 return Err(
                     "could not determine your user directory (USERPROFILE/HOME not set); \
                             re-run with --root <path>"
                         .to_string(),
                 );
             }
-            None => {}
-        },
+        }
         Some(Scope::System) => roots.extend(filesystem_roots()),
         None => {}
     }
@@ -551,6 +637,21 @@ mod tests {
         assert_eq!(Scope::parse("system"), Some(Scope::System));
         assert_eq!(Scope::parse("home"), None);
         assert_eq!(Scope::parse(""), None);
+    }
+
+    #[test]
+    fn win_to_wsl_manual_maps_drive_letters() {
+        assert_eq!(
+            win_to_wsl_manual(r"C:\Users\iatiq"),
+            Some(PathBuf::from("/mnt/c/Users/iatiq"))
+        );
+        assert_eq!(
+            win_to_wsl_manual(r"D:\Repositories\x"),
+            Some(PathBuf::from("/mnt/d/Repositories/x"))
+        );
+        assert_eq!(win_to_wsl_manual(r"C:\"), Some(PathBuf::from("/mnt/c")));
+        assert_eq!(win_to_wsl_manual("/home/atiqul"), None); // not a drive path
+        assert_eq!(win_to_wsl_manual("%USERPROFILE%"), None);
     }
 
     #[test]

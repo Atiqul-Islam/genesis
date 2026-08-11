@@ -19,9 +19,10 @@ start. See the **memory-sync** skill for the model.
    - **System** — the entire machine (every drive). Thorough but slow.
 
 3. Build the scope argument (same as doctor):
-   - **User** → resolve the OS home (`%USERPROFILE%` on Windows, `$HOME` on macOS/Linux) and pass
-     `--root "<that home dir>"`.
+   - **User** → pass `--scope user`. The CLI resolves the OS user directory itself — and under WSL it also
+     covers the Windows profile (`/mnt/c/Users/<name>`), where the repos actually live.
    - **System** → pass `--scope system`.
+   (An explicit `--root "<dir>"` also works if the user names a specific folder.)
 
 4. Consolidate via the plugin launcher:
    ```

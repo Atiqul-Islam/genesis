@@ -16,10 +16,10 @@ that hold **this repo's own agents** (the memory `/genesis:fix` would recover). 
    Wait for their answer.
 
 2. Build the scope argument:
-   - **User** → determine the user's home directory for their OS (the standard home: `%USERPROFILE%` on
-     Windows, `$HOME` on macOS/Linux — resolve it, e.g. via a quick shell `echo`) and pass it as
-     `--root "<that home dir>"`.
+   - **User** → pass `--scope user`. The CLI resolves the OS user directory itself — and when running under
+     WSL it also covers the Windows profile (`/mnt/c/Users/<name>`), where the repos actually live.
    - **System** → pass `--scope system` (the CLI enumerates every filesystem root itself).
+   (You can still pass an explicit `--root "<dir>"` instead, e.g. if the user names a specific folder.)
 
 3. Run the diagnosis via the plugin launcher (it resolves the native `genesis-cli`):
    ```

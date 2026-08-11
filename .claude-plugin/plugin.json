@@ -1,7 +1,7 @@
 {
   "name": "genesis",
   "description": "An agent-builder for Claude Code: a two-agent team (Sensei + Method) that builds, tests, and installs specialized Claude Code agents with enforced expertise and per-agent semantic memory.",
-  "version": "0.1.0-beta.12",
+  "version": "0.1.0-beta.13",
   "author": {
     "name": "Atiqul Islam"
   },
