@@ -724,7 +724,10 @@ mod tests {
     #[test]
     fn the_pinned_model_sha256_is_asserted_before_embedding_tests() {
         let (model, _tok) = model_paths();
-        assert!(model.exists(), "model missing: run `node scripts/fetch-model.mjs`");
+        assert!(
+            model.exists(),
+            "model missing: run `node scripts/fetch-model.mjs`"
+        );
         let bytes = std::fs::read(&model).unwrap();
         let digest = hex::encode(Sha256::digest(&bytes));
         assert_eq!(

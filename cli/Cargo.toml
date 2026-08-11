@@ -21,6 +21,9 @@ path = "src/lib.rs"
 # preserve_order so generated JSON (settings.json / .mcp.json / required.json) keeps insertion order,
 # matching the Node installer's JSON.stringify output.
 serde_json = { version = "1", features = ["preserve_order"] }
+# derive Serialize/Deserialize for the portable memory record (doctor/fix consolidation) — its JSONL line
+# is byte-compatible with the memory server's MemRecord export.
+serde = { version = "1", features = ["derive"] }
 # Credential scrubbing in the session-copy capture step (same ASCII regex semantics as the hooks).
 regex = "1"
 # node:sqlite parity for the session-copy pipeline: read context-mode / genesis DBs, write history.sqlite.

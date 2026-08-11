@@ -17,8 +17,11 @@ const GITIGNORE_END: &str = "# <<< genesis runtime <<<";
 fn gitignore_block() -> String {
     [
         GITIGNORE_START,
-        "# Commit the agent brain (expertise + hooks) and portable memory (JSONL) so agents and their",
-        "# learned memory travel with the repo across systems. Ignore machine-local / regenerable junk.",
+        "# Commit the agent brain (expertise + hooks) AND its learned memory — both the vector DB",
+        "# (memory.db, ready-to-use with embeddings) and the portable JSONL mirror (the diff-friendly",
+        "# merge substrate) — so memory travels with the repo across systems. On `update remote`, git",
+        "# takes the latest .db and `genesis-cli reconcile` unions the JSONL so nothing is ever lost.",
+        "# Ignore only machine-local / regenerable junk (stray DBs, archived strays, temp exports).",
         ".genesis/*",
         "!.genesis/expertise/",
         "!.genesis/hooks/",
@@ -26,7 +29,9 @@ fn gitignore_block() -> String {
         ".genesis/**/__pycache__/",
         ".genesis/expertise/.genesis/",
         ".genesis/memory/*.tmp",
+        ".genesis/memory/archived-strays/",
         "*.db",
+        "!.genesis/memory.db",
         ".mcp.json",
         GITIGNORE_END,
         "",

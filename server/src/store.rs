@@ -15,8 +15,11 @@ use sqlite_vec::sqlite3_vec_init;
 
 use crate::embed::EMBED_DIM;
 
-/// The default on-disk database filename used when `GENESIS_MEMORY_DB` is unset.
-pub const DEFAULT_DB_FILENAME: &str = "genesis-memory.db";
+/// The default on-disk database path (relative to the CWD = the project root) used when
+/// `GENESIS_MEMORY_DB` is unset. Lives under `.genesis/` so an agent's memory ALWAYS lands in the
+/// repo's workspace (and travels via the committed JSONL export) — never a stray `genesis-memory.db`
+/// in whatever directory the server happened to be launched from.
+pub const DEFAULT_DB_FILENAME: &str = ".genesis/memory.db";
 
 /// Resolves the database path from an optional `GENESIS_MEMORY_DB` value, falling back to
 /// [`DEFAULT_DB_FILENAME`] in the working directory. Pure (env read is done by the caller)
@@ -142,6 +145,14 @@ impl VectorStore {
         #[allow(clippy::missing_transmute_annotations)]
         unsafe {
             sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+        }
+        // Ensure the parent dir exists (e.g. `.genesis/`) — `Connection::open` will NOT create it,
+        // and the default db path is now `.genesis/memory.db`.
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| anyhow::anyhow!("creating db dir {}: {e}", parent.display()))?;
+            }
         }
         let conn = Connection::open(path)?;
         conn.execute_batch(
@@ -350,6 +361,21 @@ impl VectorStore {
             .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?)
     }
 
+    /// True if a memory with this exact `(agent_id, text)` already exists. Used by the JSONL
+    /// union-merge to dedupe by content — so merging never inserts a duplicate and never loses,
+    /// overwrites, or deletes an existing memory.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn has_memory(&self, agent_id: &str, text: &str) -> Result<bool> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE agent_id = ?1 AND text = ?2",
+            params![agent_id, text],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Exports every `memories` row — all agents, all columns, including superseded rows —
     /// ordered by `id` for a deterministic, diff-friendly export. Embeddings are excluded
     /// (they are regenerated from `text` on import), so this captures the full source of truth.
@@ -434,9 +460,22 @@ mod tests {
     }
 
     #[test]
-    fn db_path_falls_back_to_genesis_memory_db_in_the_working_directory() {
-        assert_eq!(DEFAULT_DB_FILENAME, "genesis-memory.db");
+    fn db_path_falls_back_to_the_repo_genesis_workspace() {
+        // Default lands in the repo's `.genesis/` — NOT a stray root db in the launch dir.
+        assert_eq!(DEFAULT_DB_FILENAME, ".genesis/memory.db");
         assert_eq!(resolve_db_path(None), DEFAULT_DB_FILENAME);
+    }
+
+    #[test]
+    fn has_memory_dedupes_by_agent_and_text() {
+        let (_d, mut s) = open_temp();
+        s.insert("fih-engineer", "the blue widget spec", &emb(0.1), 1.0, 10)
+            .unwrap();
+        assert!(s
+            .has_memory("fih-engineer", "the blue widget spec")
+            .unwrap());
+        assert!(!s.has_memory("fih-engineer", "a different memory").unwrap()); // different text
+        assert!(!s.has_memory("other-agent", "the blue widget spec").unwrap()); // different agent
     }
 
     // ─── Vector store ────────────────────────────────────────────────────────
@@ -686,7 +725,11 @@ mod tests {
         let a = s.insert("x", "a", &emb(0.1), 1.0, 0).unwrap();
         let b = s.insert("x", "b", &emb(0.2), 1.0, 0).unwrap();
         s.set_superseded(a, b).unwrap();
-        assert_eq!(s.count_memories().unwrap(), 2, "superseded rows still count");
+        assert_eq!(
+            s.count_memories().unwrap(),
+            2,
+            "superseded rows still count"
+        );
     }
 
     #[test]
@@ -765,6 +808,9 @@ mod tests {
         }
         let after = s2.export_all().unwrap();
 
-        assert_eq!(after, before, "nothing is lost across export → text → import");
+        assert_eq!(
+            after, before,
+            "nothing is lost across export → text → import"
+        );
     }
 }

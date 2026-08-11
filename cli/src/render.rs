@@ -199,7 +199,7 @@ pub fn review_prompt_text(name: &str, expertise: &[String]) -> String {
     format!(
         "You are an INDEPENDENT semantic reviewer for the Genesis agent '{name}', which just finished. \
          You did NOT write its work; judge it skeptically. Read the artifacts it produced under the current \
-         project (files matching *persona.md, *behavior.md, CLAUDE.md, .claude/agents/*.md, *persona.spec.json, \
+         project (files matching *persona.md, *behavior.md, .claude/agents/*.md, *persona.spec.json, \
          *.tests.json); if there are none, respond {{\"ok\":true}}. Its REQUIRED expertise: {list}. The \
          expertise store is at .genesis/expertise under the project root. For each required expertise \
          <name>, read .genesis/expertise/manifests/<name>.json and check every rule of type \"judgment\" (and \

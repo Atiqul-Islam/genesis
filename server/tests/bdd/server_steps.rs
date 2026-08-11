@@ -147,7 +147,10 @@ async fn an_initialized_memory_server_child_process(w: &mut ServerWorld) {
 )]
 async fn an_initialized_server_with_the_model_on_disk(w: &mut ServerWorld) {
     let (m, _t) = genesis_memory::embed::model_paths();
-    assert!(m.exists(), "model missing: run `node scripts/fetch-model.mjs`");
+    assert!(
+        m.exists(),
+        "model missing: run `node scripts/fetch-model.mjs`"
+    );
     let dir = TempDir::new().unwrap();
     let db = dir.path().join("m.db");
     let mut child = rpc::spawn(&db, Some(&genesis_memory::embed::model_dir()));

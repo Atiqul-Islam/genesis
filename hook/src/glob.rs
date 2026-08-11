@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 pub const ARTIFACT_GLOBS: &[&str] = &[
     "*persona.md",
     "*behavior.md",
-    "CLAUDE.md",
+    // A bare `CLAUDE.md` is intentionally NOT here. A normal agent build never authors CLAUDE.md — its
+    // persona lives in `*persona.md` / `.claude/agents/*.md`. Matching a bare `CLAUDE.md` made validate/
+    // review judge the USER's own project CLAUDE.md (and nested ones) against the expertise rules, producing
+    // spurious complaints (agents even edited the user's CLAUDE.md to "fix" them). A promoted main agent's
+    // persona is a managed-block COPY of an already-validated persona, so nothing is lost by excluding it.
     ".claude/agents/*.md",
     "*persona.spec.json",
     "*.tests.json",
@@ -167,6 +171,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         fs::write(root.join("worker.persona.md"), "p").unwrap();
+        // The user's OWN project CLAUDE.md (root + nested) must NOT be treated as an agent artifact.
+        fs::write(root.join("CLAUDE.md"), "user project file").unwrap();
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join("sub/CLAUDE.md"), "c").unwrap();
         fs::create_dir_all(root.join(".claude/agents")).unwrap();
@@ -178,7 +184,10 @@ mod tests {
         let found = produced_files(root);
         let names: Vec<String> = found.iter().map(|(p, _)| p.clone()).collect();
         assert!(names.iter().any(|p| p.ends_with("worker.persona.md")));
-        assert!(names.iter().any(|p| p.ends_with("CLAUDE.md")));
+        assert!(
+            !names.iter().any(|p| p.ends_with("CLAUDE.md")),
+            "a project CLAUDE.md must NOT be collected as an agent artifact: {names:?}"
+        );
         assert!(names
             .iter()
             .any(|p| p.replace('\\', "/").ends_with(".claude/agents/a.md")));

@@ -366,7 +366,10 @@ pub async fn serve_stdio() -> Result<()> {
     service.waiting().await?;
     let g = flush.inner.lock().await;
     if let Err(e) = crate::persist::export_jsonl(&g.store, &export) {
-        tracing::warn!("final memory snapshot to {} failed: {e:#}", export.display());
+        tracing::warn!(
+            "final memory snapshot to {} failed: {e:#}",
+            export.display()
+        );
     }
     Ok(())
 }
@@ -392,7 +395,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = VectorStore::open(dir.path().join("m.db").to_str().unwrap()).unwrap();
         let (m, t) = model_paths();
-        assert!(m.exists(), "model missing: run `node scripts/fetch-model.mjs`");
+        assert!(
+            m.exists(),
+            "model missing: run `node scripts/fetch-model.mjs`"
+        );
         let embedder = Embedder::load(m.to_str().unwrap(), t.to_str().unwrap()).unwrap();
         (dir, store, embedder)
     }
