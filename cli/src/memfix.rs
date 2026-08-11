@@ -115,46 +115,114 @@ pub fn canon(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// The default scan root for `doctor`/`fix` — the user's home directory that CONTAINS `repo`. Scatter lands
-/// in whatever directory Claude Code was launched from (a SIBLING of the repo, not inside it), so the default
-/// must be broad enough to include those siblings. It is derived from `repo`'s own path FIRST — the
-/// `<...>/Users/<name>` (Windows) or `<...>/home/<name>` (Unix) ancestor — so it does NOT depend on `HOME`/
-/// `USERPROFILE` being present in the process environment (they may be stripped when the CLI is spawned via
-/// the plugin launcher, which would otherwise make the scan miss everything). Env home, then the repo
-/// itself, are only fallbacks. Narrow it with `--root` when you know where to look.
-#[must_use]
-pub fn default_scan_root(repo: &Path) -> PathBuf {
-    if let Some(home) = home_ancestor_of(repo) {
-        return home;
+/// Where `doctor`/`fix` should look for scattered memory. There is NO guessed default: scatter can land in
+/// any launch directory, so the breadth is the USER's decision (surfaced by the slash commands), never a
+/// path heuristic. Resolved by [`resolve_scan_roots`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Everything under the OS user directory (`USERPROFILE`/`HOME`).
+    User,
+    /// Everything on the machine — every filesystem root (all drives on Windows, `/` on Unix).
+    System,
+}
+
+impl Scope {
+    /// Parse a `--scope` value.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(Self::User),
+            "system" => Some(Self::System),
+            _ => None,
+        }
     }
+}
+
+/// The OS user directory, from the environment the OS itself reports (`USERPROFILE` on Windows, else
+/// `HOME`). `None` if neither is set. This is the standard OS home lookup — not a path heuristic.
+#[must_use]
+pub fn os_home() -> Option<PathBuf> {
     for key in ["USERPROFILE", "HOME"] {
         if let Ok(v) = std::env::var(key) {
             if !v.is_empty() {
-                return PathBuf::from(v);
+                return Some(PathBuf::from(v));
             }
-        }
-    }
-    repo.to_path_buf()
-}
-
-/// The home directory that contains `repo`, derived purely from its path: the component right below a
-/// `Users` (Windows) or `home` (Unix/WSL) segment — e.g. `C:\Users\iatiq\Documents\x` → `C:\Users\iatiq`,
-/// `/mnt/c/Users/iatiq/Documents/x` → `/mnt/c/Users/iatiq`, `/home/iatiq/dev/x` → `/home/iatiq`. `None` when
-/// the repo is not under a recognizable home (then callers fall back to env home / the repo).
-#[must_use]
-fn home_ancestor_of(repo: &Path) -> Option<PathBuf> {
-    let comps: Vec<_> = repo.components().collect();
-    for i in 0..comps.len().saturating_sub(1) {
-        let seg = comps[i].as_os_str().to_string_lossy().to_ascii_lowercase();
-        if seg == "users" || seg == "home" {
-            let mut home = PathBuf::new();
-            for c in &comps[..=i + 1] {
-                home.push(c.as_os_str());
-            }
-            return Some(home);
         }
     }
     None
+}
+
+/// Every filesystem root on this machine: the existing drive letters on Windows, `/` on Unix.
+#[must_use]
+pub fn filesystem_roots() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut roots = Vec::new();
+        for c in b'A'..=b'Z' {
+            let drive = format!("{}:\\", char::from(c));
+            if Path::new(&drive).exists() {
+                roots.push(PathBuf::from(drive));
+            }
+        }
+        if roots.is_empty() {
+            roots.push(PathBuf::from("C:\\"));
+        }
+        roots
+    }
+    #[cfg(not(windows))]
+    {
+        vec![PathBuf::from("/")]
+    }
+}
+
+/// Resolve the concrete scan roots from a user-chosen `scope` plus any explicit `--root` paths. There is
+/// deliberately NO fallback default: if the caller supplies neither, this errors, so `doctor`/`fix` never
+/// silently guess where to look.
+///
+/// # Errors
+/// Returns a message if `scope` is `User` but the OS home can't be determined and no explicit root was
+/// given, or if nothing at all was specified.
+pub fn resolve_scan_roots(
+    scope: Option<Scope>,
+    explicit: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
+    let mut roots: Vec<PathBuf> = explicit.to_vec();
+    match scope {
+        Some(Scope::User) => match os_home() {
+            Some(home) => roots.push(home),
+            None if explicit.is_empty() => {
+                return Err(
+                    "could not determine your user directory (USERPROFILE/HOME not set); \
+                            re-run with --root <path>"
+                        .to_string(),
+                );
+            }
+            None => {}
+        },
+        Some(Scope::System) => roots.extend(filesystem_roots()),
+        None => {}
+    }
+    if roots.is_empty() {
+        return Err(
+            "specify a scan scope: --scope user | --scope system  (or an explicit --root <path>)"
+                .to_string(),
+        );
+    }
+    roots.sort();
+    roots.dedup();
+    Ok(roots)
+}
+
+/// Scan several roots for genesis memory DBs, deduping the results (roots may overlap).
+#[must_use]
+pub fn scan_memory_dbs_in(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for r in roots {
+        out.extend(scan_memory_dbs(r));
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Is `db` physically inside the `repo` tree? (An in-repo stray is unambiguously the repo's, so `fix`
@@ -456,23 +524,33 @@ mod tests {
     }
 
     #[test]
-    fn default_scan_root_is_the_home_that_contains_the_repo() {
-        // Derived from the repo path, NOT the environment — this is what makes doctor/fix reliably reach the
-        // sibling launch dirs where scatter lands. (Forward-slash cases behave identically on every OS; on
-        // Windows the same logic applies to `C:\Users\<name>\...` since `\` is a component separator there.)
+    fn resolve_scan_roots_requires_a_scope_or_explicit_root() {
+        // No scope, no root → error (never silently guess a path).
+        assert!(resolve_scan_roots(None, &[]).is_err());
+        // Explicit root alone is fine.
         assert_eq!(
-            default_scan_root(Path::new("/mnt/c/Users/iatiq/Documents/48hr/ifs")),
-            PathBuf::from("/mnt/c/Users/iatiq")
+            resolve_scan_roots(None, &[PathBuf::from("/some/dir")]).unwrap(),
+            vec![PathBuf::from("/some/dir")]
         );
+        // System scope resolves to the filesystem roots.
         assert_eq!(
-            default_scan_root(Path::new("/home/iatiq/dev/ifs")),
-            PathBuf::from("/home/iatiq")
+            resolve_scan_roots(Some(Scope::System), &[]).unwrap(),
+            filesystem_roots()
         );
-        assert_eq!(
-            home_ancestor_of(Path::new("/Users/iatiq/x/y")),
-            Some(PathBuf::from("/Users/iatiq"))
+        // Explicit roots are unioned + deduped with scope roots.
+        assert!(
+            resolve_scan_roots(Some(Scope::System), &[PathBuf::from("/some/dir")])
+                .unwrap()
+                .contains(&PathBuf::from("/some/dir"))
         );
-        assert_eq!(home_ancestor_of(Path::new("/opt/nothing/here")), None);
+    }
+
+    #[test]
+    fn scope_parses_only_user_and_system() {
+        assert_eq!(Scope::parse("user"), Some(Scope::User));
+        assert_eq!(Scope::parse("system"), Some(Scope::System));
+        assert_eq!(Scope::parse("home"), None);
+        assert_eq!(Scope::parse(""), None);
     }
 
     #[test]

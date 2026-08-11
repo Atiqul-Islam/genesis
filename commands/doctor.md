@@ -1,24 +1,34 @@
 ---
-description: Diagnose where this repo's Genesis memory actually lives — scans your home dir for stray memory databases (scatter lands outside the repo) and flags any that hold THIS repo's agents. Read-only.
-argument-hint: (no arguments)
+description: Diagnose where this repo's Genesis memory actually lives — you choose the scan scope (your user directory, or the whole system), then it flags any stray memory databases holding THIS repo's agents. Read-only.
+argument-hint: (no arguments) — you'll be asked for the scan scope
 ---
 
 You are running **`/genesis:doctor`** — a READ-ONLY health check on this repo's Genesis memory. Scattered
-memory lands in whatever folder Claude Code was launched from — a **sibling** of the repo, not inside it — so
-this scans your **home directory**, not just the repo. It reports the repo's canonical store, then any stray
-databases that hold **this repo's own agents** (the memory `/genesis:fix` would recover). It changes nothing.
+memory lands in whatever directory Claude Code was launched from, which can be anywhere, so **you choose how
+wide to look** — there is no guessed default. It reports the repo's canonical store, then any stray databases
+that hold **this repo's own agents** (the memory `/genesis:fix` would recover). It changes nothing.
 
 **Do this now:**
 
-1. Run the diagnosis via the plugin launcher (it resolves the native `genesis-cli`):
-   ```
-   node "${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js" --run-cli doctor --repo "${CLAUDE_PROJECT_DIR}"
-   ```
-   It prints JSON: `canonical` (this repo's store + per-agent counts), `custom_agents` (this repo's agents),
-   `recoverable_strays` (databases OUTSIDE `.genesis/` holding this repo's memory + how much), `other_stores`
-   (memory belonging to other repos/agents — informational), and a `healthy` flag. (The scan defaults to your
-   home dir; add `--root "<dir>"` to narrow it if it's slow.)
+1. **Ask the user the scan scope** (do not guess) — present exactly two choices:
+   - **User** — scan everything under their user/home directory (covers all their projects and launch dirs).
+   - **System** — scan the entire machine (every drive). Thorough but slow.
+   Wait for their answer.
 
-2. Summarize for the user: is memory healthy (all in `.genesis/`), or are there `recoverable_strays`? If so,
-   name how many memories and which stray files hold them, and that **`/genesis:fix`** consolidates them into
-   this repo losslessly. Do not run `fix` yourself unless the user asks.
+2. Build the scope argument:
+   - **User** → determine the user's home directory for their OS (the standard home: `%USERPROFILE%` on
+     Windows, `$HOME` on macOS/Linux — resolve it, e.g. via a quick shell `echo`) and pass it as
+     `--root "<that home dir>"`.
+   - **System** → pass `--scope system` (the CLI enumerates every filesystem root itself).
+
+3. Run the diagnosis via the plugin launcher (it resolves the native `genesis-cli`):
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js" --run-cli doctor --repo "${CLAUDE_PROJECT_DIR}" <scope-arg from step 2>
+   ```
+   It prints JSON: `scan_roots`, `canonical` (this repo's store + per-agent counts), `custom_agents`,
+   `recoverable_strays` (databases OUTSIDE `.genesis/` holding this repo's memory + how much), `other_stores`
+   (memory belonging to other repos/agents — informational), and a `healthy` flag.
+
+4. Summarize: healthy (all in `.genesis/`), or are there `recoverable_strays`? If so, name how many memories
+   and which files hold them, and that **`/genesis:fix`** (at the same scope) consolidates them into this repo
+   losslessly. Do not run `fix` yourself unless the user asks.

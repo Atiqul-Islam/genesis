@@ -1,8 +1,10 @@
-//! `genesis-cli doctor [--repo <repo>] [--root <dir>]` — READ-ONLY diagnosis of where a repo's memory lives.
+//! `genesis-cli doctor --repo <repo> (--scope user|system | --root <dir>...)` — READ-ONLY diagnosis of
+//! where a repo's memory lives.
 //!
-//! Scatter lands in whatever directory Claude Code was launched from — a SIBLING of the repo, not inside it
-//! — so `doctor` scans the user's HOME directory by default (override with `--root`), NOT just the repo. It
-//! reports the repo's canonical store, then any **stray** databases that hold THIS repo's custom agents
+//! Scatter lands in whatever directory Claude Code was launched from — a SIBLING of the repo, not inside it,
+//! and it can be anywhere — so the scan area is the USER's choice, never a guessed default: `--scope user`
+//! (their home dir), `--scope system` (every drive), or explicit `--root` path(s). It reports the repo's
+//! canonical store, then any **stray** databases that hold THIS repo's custom agents
 //! (`<repo>/.claude/agents/*.md`, excluding the shared `sensei`/`method`) — the memory `genesis-cli fix`
 //! (or `/genesis:fix`) would recover. It changes NOTHING.
 
@@ -21,7 +23,20 @@ pub fn run(args: &[String]) -> i32 {
     if !repo.is_dir() {
         fsx::fail(&format!("repo not found: {}", repo.display()));
     }
-    let root = flag(args, "--root").map_or_else(|| memfix::default_scan_root(&repo), PathBuf::from);
+    let scope = scope_of(args);
+    let explicit: Vec<PathBuf> = flag_values(args, "--root")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let roots = match memfix::resolve_scan_roots(scope, &explicit) {
+        Ok(r) => r,
+        Err(e) => fsx::fail(&e),
+    };
+    let roots_display = roots
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let custom_agents = memfix::repo_custom_agents(&repo);
     let custom_set: std::collections::HashSet<&str> =
@@ -41,7 +56,7 @@ pub fn run(args: &[String]) -> i32 {
     let mut other_stores: Vec<Value> = Vec::new(); // memory belonging to other repos/agents (informational)
     let mut recoverable_total = 0usize;
 
-    for db in memfix::scan_memory_dbs(&root) {
+    for db in memfix::scan_memory_dbs_in(&roots) {
         let rows = match memfix::read_db_memories(&db) {
             Ok(Some(rows)) => rows,
             Ok(None) => continue,
@@ -88,8 +103,7 @@ pub fn run(args: &[String]) -> i32 {
     let healthy = recoverable.is_empty();
     let note = if healthy {
         format!(
-            "All of this repo's memory is in its .genesis/ store (scanned {}). Custom agents: {}.",
-            root.display(),
+            "All of this repo's memory is in its .genesis/ store (scanned {roots_display}). Custom agents: {}.",
             if custom_agents.is_empty() {
                 "none".into()
             } else {
@@ -99,10 +113,11 @@ pub fn run(args: &[String]) -> i32 {
     } else {
         format!(
             "Found {} memories for THIS repo sitting OUTSIDE its .genesis/ store (in {} stray database(s) \
-             under {}). Run `genesis-cli fix` (or /genesis:fix) to consolidate them into {}.",
+             within the {} scan). Run `genesis-cli fix` (or /genesis:fix) at the same scope to consolidate \
+             them into {}.",
             recoverable_total,
             recoverable.len(),
-            root.display(),
+            roots_display,
             canonical_jsonl.display()
         )
     };
@@ -111,7 +126,7 @@ pub fn run(args: &[String]) -> i32 {
         "{}",
         fsx::json_pretty(&json!({
             "repo": repo.to_string_lossy(),
-            "scan_root": root.to_string_lossy(),
+            "scan_roots": roots.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
             "custom_agents": custom_agents,
             "healthy": healthy,
             "canonical": canonical,
@@ -131,6 +146,31 @@ fn flag(args: &[String], flag: &str) -> Option<String> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .cloned()
+}
+
+/// Return every value following an occurrence of `name` (so `--root` can be repeated).
+fn flag_values(args: &[String], name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == name {
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.clone());
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Parse `--scope user|system` (absent → `None`); a present-but-invalid value is a fatal usage error.
+fn scope_of(args: &[String]) -> Option<memfix::Scope> {
+    flag(args, "--scope").map(|s| {
+        memfix::Scope::parse(&s)
+            .unwrap_or_else(|| fsx::fail(&format!("invalid --scope {s:?} (expected user|system)")))
+    })
 }
 
 #[cfg(test)]

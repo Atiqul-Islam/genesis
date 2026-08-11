@@ -53,18 +53,21 @@ conflict.
 ## Diagnose + repair scattered memory (older workspaces)
 
 Before the anchoring fix, a mis-configured server wrote a stray `genesis-memory.db` in the **launch
-directory** — a *sibling* of the repo, NOT inside it. So doctor/fix scan your **home directory** by default
-(not just the repo — the stray isn't there) and attribute memory by agent:
+directory** — a *sibling* of the repo, NOT inside it. It can be anywhere, so doctor/fix never guess a scan
+area: **the user chooses the scope** — `user` (their home directory) or `system` (every drive) — and memory
+is attributed by agent:
 
-- **`/genesis:doctor`** (`--run-cli doctor --repo <repo>`) — READ-ONLY: scans home, reports the canonical
-  store plus `recoverable_strays` — databases outside `.genesis/` that hold **this repo's own agents** — and
-  a `healthy` flag. Other repos' memory is listed only as `other_stores` (informational).
-- **`/genesis:fix`** (`--run-cli fix --into <repo>`) — reads strays READ-ONLY and UNION-merges into the repo's
-  canonical JSONL **only the memories that belong to this repo** — its custom agents
-  (`<repo>/.claude/agents/*.md`, excluding the shared `sensei`/`method`), plus anything in a stray physically
-  inside the repo. A broad scan therefore never drags a *foreign* repo's memory in. `--all-agents` / `--agent
-  <name>` override the scope; `--root <dir>` narrows the scan; `--archive` copies contributing strays. The
+- **`/genesis:doctor`** — READ-ONLY. Asks the user for scope, then reports the canonical store plus
+  `recoverable_strays` (databases outside `.genesis/` that hold **this repo's own agents**) and a `healthy`
+  flag; other repos' memory is listed only as `other_stores` (informational). CLI:
+  `doctor --repo <repo> --scope system` (or `--root <dir>` for an explicit area, e.g. the user's home).
+- **`/genesis:fix`** — reads strays READ-ONLY and UNION-merges into the repo's canonical JSONL **only the
+  memories that belong to this repo** — its custom agents (`<repo>/.claude/agents/*.md`, excluding the shared
+  `sensei`/`method`), plus anything in a stray physically inside the repo. A broad scan therefore never drags
+  a *foreign* repo's memory in. `--all-agents` / `--agent <name>` change which agents are pulled; `--scope
+  user|system` / repeatable `--root <dir>` set the scan area; `--archive` copies contributing strays. The
   `.db` catches up on the next server start. (Idempotent; zero footprint outside the target repo.)
+- **No scope and no `--root` → the CLI errors** and asks for one; it never silently picks a directory.
 
 New installs no longer scatter: the server defaults its DB to `<cwd>/.genesis/memory.db`, and the plugin /
 bootstrap `.mcp.json` set `GENESIS_MEMORY_DB`/`GENESIS_MEMORY_EXPORT` to the repo's `.genesis/` paths.

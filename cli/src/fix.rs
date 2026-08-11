@@ -1,9 +1,10 @@
-//! `genesis-cli fix [--into <repo>] [--root <dir>] [--agent <name>] [--all-agents] [--archive]` —
-//! CONSOLIDATE scattered memory into the repo's canonical store, losslessly and deterministically.
+//! `genesis-cli fix --into <repo> (--scope user|system | --root <dir>...) [--agent <name>] [--all-agents]
+//! [--archive]` — CONSOLIDATE scattered memory into the repo's canonical store, losslessly + deterministically.
 //!
-//! Scatter lands in whatever directory Claude Code was launched from — a SIBLING of the repo, NOT inside it
-//! — so by default `fix` scans the user's HOME directory (override with `--root`), not just the repo. To
-//! avoid a broad scan pulling OTHER repos' memory in, an external stray only contributes memories whose
+//! Scatter lands in whatever directory Claude Code was launched from — a SIBLING of the repo, NOT inside it,
+//! and it can be anywhere — so the scan area is the USER's choice (`--scope user|system` or explicit `--root`
+//! path(s)), never a guessed default. To avoid a broad scan pulling OTHER repos' memory in, an external stray
+//! only contributes memories whose
 //! `agent_id` is one of THIS repo's custom agents (`<repo>/.claude/agents/*.md`, excluding the shared
 //! `sensei`/`method` builder team). A stray physically INSIDE the repo is unambiguously the repo's, so all
 //! of its memories are taken regardless of agent. `--agent <name>` targets one agent; `--all-agents` takes
@@ -31,7 +32,20 @@ pub fn run(args: &[String]) -> i32 {
     if !into.is_dir() {
         fsx::fail(&format!("target repo not found: {}", into.display()));
     }
-    let root = flag(args, "--root").map_or_else(|| memfix::default_scan_root(&into), PathBuf::from);
+    let scan_scope = scope_of(args);
+    let explicit: Vec<PathBuf> = flag_values(args, "--root")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let roots = match memfix::resolve_scan_roots(scan_scope, &explicit) {
+        Ok(r) => r,
+        Err(e) => fsx::fail(&e),
+    };
+    let roots_display = roots
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
     let archive = args.iter().any(|a| a == "--archive");
 
     // Which external agents' memories may be pulled in: an explicit --agent, everything (--all-agents), or
@@ -61,7 +75,7 @@ pub fn run(args: &[String]) -> i32 {
     let mut archived: Vec<Value> = Vec::new();
     let mut stray_memories = 0usize;
 
-    for db in memfix::scan_memory_dbs(&root) {
+    for db in memfix::scan_memory_dbs_in(&roots) {
         if memfix::canon(&db) == canonical_db_c {
             continue; // the canonical DB is already folded in above
         }
@@ -115,9 +129,8 @@ pub fn run(args: &[String]) -> i32 {
     };
     let note = if consolidated_from.is_empty() {
         format!(
-            "No stray memory for this repo found under {}. Scope: {scope}. The repo store at {} holds \
-             {after} memories.",
-            root.display(),
+            "No stray memory for this repo found in the {roots_display} scan. Agent scope: {scope}. The repo \
+             store at {} holds {after} memories.",
             canonical_jsonl.display()
         )
     } else {
@@ -134,7 +147,7 @@ pub fn run(args: &[String]) -> i32 {
         "{}",
         fsx::json_pretty(&json!({
             "into": into.to_string_lossy(),
-            "scan_root": root.to_string_lossy(),
+            "scan_roots": roots.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
             "canonical_jsonl": canonical_jsonl.to_string_lossy(),
             "records_before": before,
             "records_after": after,
@@ -185,6 +198,31 @@ fn flag(args: &[String], flag: &str) -> Option<String> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .cloned()
+}
+
+/// Return every value following an occurrence of `name` (so `--root` can be repeated).
+fn flag_values(args: &[String], name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == name {
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.clone());
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Parse `--scope user|system` (absent → `None`); a present-but-invalid value is a fatal usage error.
+fn scope_of(args: &[String]) -> Option<memfix::Scope> {
+    flag(args, "--scope").map(|s| {
+        memfix::Scope::parse(&s)
+            .unwrap_or_else(|| fsx::fail(&format!("invalid --scope {s:?} (expected user|system)")))
+    })
 }
 
 #[cfg(test)]
