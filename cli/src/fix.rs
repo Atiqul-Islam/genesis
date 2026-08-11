@@ -31,7 +31,7 @@ pub fn run(args: &[String]) -> i32 {
     if !into.is_dir() {
         fsx::fail(&format!("target repo not found: {}", into.display()));
     }
-    let root = flag(args, "--root").map_or_else(memfix::default_scan_root, PathBuf::from);
+    let root = flag(args, "--root").map_or_else(|| memfix::default_scan_root(&into), PathBuf::from);
     let archive = args.iter().any(|a| a == "--archive");
 
     // Which external agents' memories may be pulled in: an explicit --agent, everything (--all-agents), or

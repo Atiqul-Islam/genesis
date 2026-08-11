@@ -115,12 +115,18 @@ pub fn canon(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// The default scan root for `doctor`/`fix`: the user's HOME directory (`USERPROFILE` on Windows, else
-/// `HOME`), falling back to the current dir. Scatter lands in whatever directory Claude Code was launched
-/// from — a SIBLING of the repo, not inside it — so the default must be broad enough to find it. Narrow it
-/// with `--root` when you know where to look.
+/// The default scan root for `doctor`/`fix` — the user's home directory that CONTAINS `repo`. Scatter lands
+/// in whatever directory Claude Code was launched from (a SIBLING of the repo, not inside it), so the default
+/// must be broad enough to include those siblings. It is derived from `repo`'s own path FIRST — the
+/// `<...>/Users/<name>` (Windows) or `<...>/home/<name>` (Unix) ancestor — so it does NOT depend on `HOME`/
+/// `USERPROFILE` being present in the process environment (they may be stripped when the CLI is spawned via
+/// the plugin launcher, which would otherwise make the scan miss everything). Env home, then the repo
+/// itself, are only fallbacks. Narrow it with `--root` when you know where to look.
 #[must_use]
-pub fn default_scan_root() -> PathBuf {
+pub fn default_scan_root(repo: &Path) -> PathBuf {
+    if let Some(home) = home_ancestor_of(repo) {
+        return home;
+    }
     for key in ["USERPROFILE", "HOME"] {
         if let Ok(v) = std::env::var(key) {
             if !v.is_empty() {
@@ -128,7 +134,27 @@ pub fn default_scan_root() -> PathBuf {
             }
         }
     }
-    std::env::current_dir().unwrap_or_default()
+    repo.to_path_buf()
+}
+
+/// The home directory that contains `repo`, derived purely from its path: the component right below a
+/// `Users` (Windows) or `home` (Unix/WSL) segment — e.g. `C:\Users\iatiq\Documents\x` → `C:\Users\iatiq`,
+/// `/mnt/c/Users/iatiq/Documents/x` → `/mnt/c/Users/iatiq`, `/home/iatiq/dev/x` → `/home/iatiq`. `None` when
+/// the repo is not under a recognizable home (then callers fall back to env home / the repo).
+#[must_use]
+fn home_ancestor_of(repo: &Path) -> Option<PathBuf> {
+    let comps: Vec<_> = repo.components().collect();
+    for i in 0..comps.len().saturating_sub(1) {
+        let seg = comps[i].as_os_str().to_string_lossy().to_ascii_lowercase();
+        if seg == "users" || seg == "home" {
+            let mut home = PathBuf::new();
+            for c in &comps[..=i + 1] {
+                home.push(c.as_os_str());
+            }
+            return Some(home);
+        }
+    }
+    None
 }
 
 /// Is `db` physically inside the `repo` tree? (An in-repo stray is unambiguously the repo's, so `fix`
@@ -427,6 +453,26 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn default_scan_root_is_the_home_that_contains_the_repo() {
+        // Derived from the repo path, NOT the environment — this is what makes doctor/fix reliably reach the
+        // sibling launch dirs where scatter lands. (Forward-slash cases behave identically on every OS; on
+        // Windows the same logic applies to `C:\Users\<name>\...` since `\` is a component separator there.)
+        assert_eq!(
+            default_scan_root(Path::new("/mnt/c/Users/iatiq/Documents/48hr/ifs")),
+            PathBuf::from("/mnt/c/Users/iatiq")
+        );
+        assert_eq!(
+            default_scan_root(Path::new("/home/iatiq/dev/ifs")),
+            PathBuf::from("/home/iatiq")
+        );
+        assert_eq!(
+            home_ancestor_of(Path::new("/Users/iatiq/x/y")),
+            Some(PathBuf::from("/Users/iatiq"))
+        );
+        assert_eq!(home_ancestor_of(Path::new("/opt/nothing/here")), None);
     }
 
     #[test]

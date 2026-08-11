@@ -21,7 +21,7 @@ pub fn run(args: &[String]) -> i32 {
     if !repo.is_dir() {
         fsx::fail(&format!("repo not found: {}", repo.display()));
     }
-    let root = flag(args, "--root").map_or_else(memfix::default_scan_root, PathBuf::from);
+    let root = flag(args, "--root").map_or_else(|| memfix::default_scan_root(&repo), PathBuf::from);
 
     let custom_agents = memfix::repo_custom_agents(&repo);
     let custom_set: std::collections::HashSet<&str> =
