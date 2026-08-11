@@ -52,14 +52,19 @@ conflict.
 
 ## Diagnose + repair scattered memory (older workspaces)
 
-Before the anchoring fix, a mis-configured server could write a stray `genesis-memory.db` in the launch
-directory instead of the repo. To find and fix that:
+Before the anchoring fix, a mis-configured server wrote a stray `genesis-memory.db` in the **launch
+directory** — a *sibling* of the repo, NOT inside it. So doctor/fix scan your **home directory** by default
+(not just the repo — the stray isn't there) and attribute memory by agent:
 
-- **`/genesis:doctor`** (`--run-cli doctor --root <repo>`) — READ-ONLY: reports every memory DB (canonical +
-  strays) with per-agent counts and a `healthy` flag.
-- **`/genesis:fix`** (`--run-cli fix --into <repo>`) — reads strays READ-ONLY and UNION-merges them into the
-  repo's canonical JSONL (idempotent; zero footprint outside the target repo; `--archive` copies strays for
-  safekeeping). The `.db` catches up on the next server start.
+- **`/genesis:doctor`** (`--run-cli doctor --repo <repo>`) — READ-ONLY: scans home, reports the canonical
+  store plus `recoverable_strays` — databases outside `.genesis/` that hold **this repo's own agents** — and
+  a `healthy` flag. Other repos' memory is listed only as `other_stores` (informational).
+- **`/genesis:fix`** (`--run-cli fix --into <repo>`) — reads strays READ-ONLY and UNION-merges into the repo's
+  canonical JSONL **only the memories that belong to this repo** — its custom agents
+  (`<repo>/.claude/agents/*.md`, excluding the shared `sensei`/`method`), plus anything in a stray physically
+  inside the repo. A broad scan therefore never drags a *foreign* repo's memory in. `--all-agents` / `--agent
+  <name>` override the scope; `--root <dir>` narrows the scan; `--archive` copies contributing strays. The
+  `.db` catches up on the next server start. (Idempotent; zero footprint outside the target repo.)
 
 New installs no longer scatter: the server defaults its DB to `<cwd>/.genesis/memory.db`, and the plugin /
 bootstrap `.mcp.json` set `GENESIS_MEMORY_DB`/`GENESIS_MEMORY_EXPORT` to the repo's `.genesis/` paths.

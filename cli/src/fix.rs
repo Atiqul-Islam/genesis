@@ -1,24 +1,28 @@
-//! `genesis-cli fix [--into <repo>] [--root <dir>] [--archive]` — CONSOLIDATE scattered memory into the
-//! repo's canonical store, losslessly and deterministically.
+//! `genesis-cli fix [--into <repo>] [--root <dir>] [--agent <name>] [--all-agents] [--archive]` —
+//! CONSOLIDATE scattered memory into the repo's canonical store, losslessly and deterministically.
 //!
-//! It scans `<root>` (default: `<into>`) for stray memory databases, reads every one READ-ONLY, and folds
-//! their memories — together with whatever is already in `<into>/.genesis/memory.db` and its JSONL — into
-//! `<into>/.genesis/memory/memory.jsonl` via [`memfix::consolidate`] (UNION by `(agent_id, text)`, so
-//! nothing is overwritten or lost). The server rebuilds/​unions the local DB from that JSONL on its next
-//! start, so `memory.db` catches up automatically.
+//! Scatter lands in whatever directory Claude Code was launched from — a SIBLING of the repo, NOT inside it
+//! — so by default `fix` scans the user's HOME directory (override with `--root`), not just the repo. To
+//! avoid a broad scan pulling OTHER repos' memory in, an external stray only contributes memories whose
+//! `agent_id` is one of THIS repo's custom agents (`<repo>/.claude/agents/*.md`, excluding the shared
+//! `sensei`/`method` builder team). A stray physically INSIDE the repo is unambiguously the repo's, so all
+//! of its memories are taken regardless of agent. `--agent <name>` targets one agent; `--all-agents` takes
+//! every agent found (the old broad behavior).
 //!
-//! **Zero footprint outside the target repo.** Strays are only ever READ; the sole write is the target
-//! repo's JSONL. Because the union dedupes by content, `fix` is idempotent — re-running with the strays
-//! still in place produces the same JSONL and no duplicates, so the strays are safe to leave (and safe to
-//! delete manually afterwards). `--archive` additionally COPIES (never moves) each stray into
-//! `<into>/.genesis/memory/archived-strays/` for safekeeping, still touching nothing outside `<into>`.
+//! Selected memories are UNION-merged (by `(agent_id, text)`) with the repo's existing JSONL + local DB into
+//! `<repo>/.genesis/memory/memory.jsonl` — nothing is overwritten or lost. The local `.db` catches up from
+//! the JSONL on the next server start. **Zero footprint:** strays are only READ; the sole write is the
+//! target repo's JSONL. Idempotent. `--archive` COPIES (never moves) contributing strays into
+//! `<repo>/.genesis/memory/archived-strays/`.
 
 use crate::{fsx, memfix};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Entry point for `genesis-cli fix`. Returns the process exit code.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &[String]) -> i32 {
     let into = flag(args, "--into").map_or_else(
         || std::env::current_dir().unwrap_or_default(),
@@ -27,14 +31,24 @@ pub fn run(args: &[String]) -> i32 {
     if !into.is_dir() {
         fsx::fail(&format!("target repo not found: {}", into.display()));
     }
-    let root = flag(args, "--root").map_or_else(|| into.clone(), PathBuf::from);
+    let root = flag(args, "--root").map_or_else(memfix::default_scan_root, PathBuf::from);
     let archive = args.iter().any(|a| a == "--archive");
+
+    // Which external agents' memories may be pulled in: an explicit --agent, everything (--all-agents), or
+    // (default) this repo's custom agents. In-repo strays ignore this filter (they are unambiguously ours).
+    let filter: Option<HashSet<String>> = if let Some(a) = flag(args, "--agent") {
+        Some([a].into_iter().collect())
+    } else if args.iter().any(|a| a == "--all-agents") {
+        None
+    } else {
+        Some(memfix::repo_custom_agents(&into).into_iter().collect())
+    };
 
     let (canonical_db, canonical_jsonl) = memfix::canonical_paths(&into);
     let canonical_db_c = memfix::canon(&canonical_db);
 
     // Priority order for the union (earlier wins duplicate metadata): the repo's committed JSONL, then its
-    // local DB, then the strays in scan order. This guarantees repo-native memory keeps its own metadata.
+    // local DB, then the selected strays in scan order — so repo-native memory keeps its own metadata.
     let mut sources: Vec<Vec<memfix::MemRecord>> = Vec::new();
     let existing_jsonl = memfix::read_jsonl(&canonical_jsonl);
     let before = existing_jsonl.len();
@@ -59,18 +73,27 @@ pub fn run(args: &[String]) -> i32 {
                 continue;
             }
         };
-        if rows.is_empty() {
-            continue;
+        let selected = select(rows, &db, &into, filter.as_ref());
+        if selected.is_empty() {
+            continue; // holds nothing that belongs to this repo
         }
-        stray_memories += rows.len();
-        consolidated_from.push(json!({ "path": db.to_string_lossy(), "memories": rows.len() }));
+        stray_memories += selected.len();
+        let agents: Vec<String> = {
+            let mut a: Vec<String> = selected.iter().map(|r| r.agent_id.clone()).collect();
+            a.sort();
+            a.dedup();
+            a
+        };
+        consolidated_from.push(
+            json!({ "path": db.to_string_lossy(), "memories": selected.len(), "agents": agents }),
+        );
         if archive {
             match archive_copy(&db, &into) {
                 Ok(dest) => archived.push(json!(dest.to_string_lossy())),
                 Err(e) => eprintln!("warning: archive {}: {e}", db.display()),
             }
         }
-        sources.push(rows);
+        sources.push(selected);
     }
 
     let merged = memfix::consolidate(&sources);
@@ -79,16 +102,29 @@ pub fn run(args: &[String]) -> i32 {
         fsx::fail(&format!("writing consolidated memory: {e}"));
     }
 
+    let scope = match &filter {
+        None => "all agents".to_string(),
+        Some(set) if set.is_empty() => {
+            "in-repo strays only (no custom agents installed)".to_string()
+        }
+        Some(set) => {
+            let mut v: Vec<&str> = set.iter().map(String::as_str).collect();
+            v.sort_unstable();
+            format!("this repo's agents [{}] + any in-repo strays", v.join(", "))
+        }
+    };
     let note = if consolidated_from.is_empty() {
         format!(
-            "No stray memory found. The repo store at {} holds {after} memories.",
+            "No stray memory for this repo found under {}. Scope: {scope}. The repo store at {} holds \
+             {after} memories.",
+            root.display(),
             canonical_jsonl.display()
         )
     } else {
         format!(
-            "Consolidated {} stray database(s) ({stray_memories} memories) into {}. Union is lossless and \
-             idempotent; the strays were only READ and are safe to remove. The local memory.db rebuilds \
-             from this JSONL on the next server start in this repo.",
+            "Consolidated {} stray database(s) ({stray_memories} memories; scope: {scope}) into {}. Union is \
+             lossless + idempotent; strays were only READ. The local memory.db rebuilds from this JSONL on \
+             the next server start in this repo.",
             consolidated_from.len(),
             canonical_jsonl.display()
         )
@@ -98,6 +134,7 @@ pub fn run(args: &[String]) -> i32 {
         "{}",
         fsx::json_pretty(&json!({
             "into": into.to_string_lossy(),
+            "scan_root": root.to_string_lossy(),
             "canonical_jsonl": canonical_jsonl.to_string_lossy(),
             "records_before": before,
             "records_after": after,
@@ -108,6 +145,22 @@ pub fn run(args: &[String]) -> i32 {
         }))
     );
     0
+}
+
+/// Pick which of a stray DB's rows belong to `into`: everything if the DB is inside the repo tree, else
+/// only rows whose `agent_id` passes `filter` (`None` = keep all — the `--all-agents` case).
+fn select(
+    rows: Vec<memfix::MemRecord>,
+    db: &Path,
+    into: &Path,
+    filter: Option<&HashSet<String>>,
+) -> Vec<memfix::MemRecord> {
+    if memfix::is_inside(db, into) {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|r| filter.is_none_or(|f| f.contains(&r.agent_id)))
+        .collect()
 }
 
 /// Copy a stray DB into `<into>/.genesis/memory/archived-strays/`, giving it a unique, path-derived name so
@@ -181,60 +234,113 @@ mod tests {
         }
     }
 
+    fn install_agent(repo: &Path, name: &str) {
+        let p = repo
+            .join(".claude")
+            .join("agents")
+            .join(format!("{name}.md"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "---\nname: x\n---\n").unwrap();
+    }
+
+    /// The bug this fixes: fih-engineer's memory is in a SIBLING launch dir, and OTHER repos' memory sits
+    /// next to it. `fix --into repo --root <parent>` must pull the repo's custom agent from the sibling but
+    /// NOT drag the other repo's sensei memory in.
     #[test]
-    fn fix_consolidates_strays_into_repo_jsonl_without_touching_strays() {
+    fn fix_pulls_the_repos_custom_agent_from_a_sibling_but_not_foreign_memory() {
         let td = tempfile::tempdir().unwrap();
-        let repo = td.path();
-        // a stray at the launch root + a nested stray, both OUTSIDE .genesis/
+        let parent = td.path();
+        let repo = parent.join("ifs-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        install_agent(&repo, "fih-engineer"); // this repo's custom agent
+
+        // sibling launch dir holds the scattered fih-engineer memory + an unrelated sensei store
         make_db(
-            &repo.join("genesis-memory.db"),
-            &[rec(1, "fih", "stray root", 5)],
+            &parent.join("launch-dir/genesis-memory.db"),
+            &[rec(1, "fih-engineer", "the fih memory", 5)],
         );
         make_db(
-            &repo.join("sub/genesis-memory.db"),
-            &[rec(1, "fih", "stray nested", 6)],
-        );
-        // canonical DB already has one memory
-        make_db(
-            &repo.join(".genesis/memory.db"),
-            &[rec(1, "fih", "already in repo", 1)],
+            &parent.join("other-repo/genesis-memory.db"),
+            &[rec(1, "sensei", "someone else's memory", 6)],
         );
 
-        let code = run(&["--into".into(), repo.to_string_lossy().into_owned()]);
+        let code = run(&[
+            "--into".into(),
+            repo.to_string_lossy().into_owned(),
+            "--root".into(),
+            parent.to_string_lossy().into_owned(),
+        ]);
         assert_eq!(code, 0);
 
-        let (_db, jsonl) = memfix::canonical_paths(repo);
-        let out = memfix::read_jsonl(&jsonl);
-        let texts: Vec<&str> = out.iter().map(|r| r.text.as_str()).collect();
-        assert!(texts.contains(&"already in repo"));
-        assert!(texts.contains(&"stray root"));
-        assert!(texts.contains(&"stray nested"));
-        assert_eq!(out.len(), 3, "union of 3 distinct memories");
+        let (_db, jsonl) = memfix::canonical_paths(&repo);
+        let texts: Vec<String> = memfix::read_jsonl(&jsonl)
+            .into_iter()
+            .map(|r| r.text)
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "the fih memory"),
+            "must recover the repo's own agent from the sibling"
+        );
+        assert!(
+            !texts.iter().any(|t| t == "someone else's memory"),
+            "must NOT pull a foreign repo's memory"
+        );
+        assert_eq!(texts.len(), 1);
+    }
 
-        // strays untouched (READ-ONLY)
-        assert!(repo.join("genesis-memory.db").is_file());
-        assert!(repo.join("sub/genesis-memory.db").is_file());
+    #[test]
+    fn fix_takes_all_agents_from_an_in_repo_stray() {
+        let td = tempfile::tempdir().unwrap();
+        let repo = td.path();
+        install_agent(repo, "fih-engineer");
+        // an in-repo stray with a builder-team agent → taken despite not being a "custom" agent
+        make_db(
+            &repo.join("genesis-memory.db"),
+            &[rec(1, "method", "in-repo builder note", 5)],
+        );
+
+        assert_eq!(
+            run(&[
+                "--into".into(),
+                repo.to_string_lossy().into_owned(),
+                "--root".into(),
+                repo.to_string_lossy().into_owned()
+            ]),
+            0
+        );
+        let (_db, jsonl) = memfix::canonical_paths(repo);
+        let texts: Vec<String> = memfix::read_jsonl(&jsonl)
+            .into_iter()
+            .map(|r| r.text)
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "in-repo builder note"),
+            "in-repo strays are taken regardless of agent"
+        );
     }
 
     #[test]
     fn fix_is_idempotent() {
         let td = tempfile::tempdir().unwrap();
         let repo = td.path();
+        install_agent(repo, "fih-engineer");
         make_db(
             &repo.join("genesis-memory.db"),
-            &[rec(1, "a", "one", 1), rec(2, "a", "two", 2)],
+            &[
+                rec(1, "fih-engineer", "one", 1),
+                rec(2, "fih-engineer", "two", 2),
+            ],
         );
         let (_db, jsonl) = memfix::canonical_paths(repo);
-
-        assert_eq!(
-            run(&["--into".into(), repo.to_string_lossy().into_owned()]),
-            0
-        );
+        let args = [
+            "--into".to_string(),
+            repo.to_string_lossy().into_owned(),
+            "--root".into(),
+            repo.to_string_lossy().into_owned(),
+        ];
+        assert_eq!(run(&args), 0);
         let first = std::fs::read_to_string(&jsonl).unwrap();
-        assert_eq!(
-            run(&["--into".into(), repo.to_string_lossy().into_owned()]),
-            0
-        );
+        assert_eq!(run(&args), 0);
         let second = std::fs::read_to_string(&jsonl).unwrap();
         assert_eq!(first, second, "re-running fix yields byte-identical jsonl");
     }

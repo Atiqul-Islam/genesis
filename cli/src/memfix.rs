@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Directory names never worth descending into while scanning for stray memory DBs.
+/// Directory names never worth descending into while scanning for stray memory DBs. Includes OS junk
+/// (`AppData`, `Library`) so a home-rooted scan stays fast — memory DBs live in project dirs, not there.
 const PRUNE_DIRS: &[&str] = &[
     "node_modules",
     "target",
@@ -32,6 +33,9 @@ const PRUNE_DIRS: &[&str] = &[
     "dist",
     "build",
     ".next",
+    "AppData",
+    "Library",
+    "Application Data",
     ARCHIVE_DIRNAME,
 ];
 
@@ -109,6 +113,55 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 #[must_use]
 pub fn canon(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// The default scan root for `doctor`/`fix`: the user's HOME directory (`USERPROFILE` on Windows, else
+/// `HOME`), falling back to the current dir. Scatter lands in whatever directory Claude Code was launched
+/// from — a SIBLING of the repo, not inside it — so the default must be broad enough to find it. Narrow it
+/// with `--root` when you know where to look.
+#[must_use]
+pub fn default_scan_root() -> PathBuf {
+    for key in ["USERPROFILE", "HOME"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.is_empty() {
+                return PathBuf::from(v);
+            }
+        }
+    }
+    std::env::current_dir().unwrap_or_default()
+}
+
+/// Is `db` physically inside the `repo` tree? (An in-repo stray is unambiguously the repo's, so `fix`
+/// consolidates it regardless of agent.)
+#[must_use]
+pub fn is_inside(db: &Path, repo: &Path) -> bool {
+    canon(db).starts_with(canon(repo))
+}
+
+/// The repo's CUSTOM agents — the basenames of `<repo>/.claude/agents/*.md` EXCLUDING the shared builder
+/// team (`sensei`, `method`). A custom agent's name is unique to the repo that built it, so it safely
+/// identifies THIS repo's scattered memory across a broad scan; `sensei`/`method` are installed in every
+/// Genesis repo, so their memory can't be attributed by name and is never cross-pulled.
+#[must_use]
+pub fn repo_custom_agents(repo: &Path) -> Vec<String> {
+    let dir = repo.join(".claude").join("agents");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                if stem != "sensei" && stem != "method" {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Read every row of a memory DB's `memories` table (READ-ONLY). Returns:

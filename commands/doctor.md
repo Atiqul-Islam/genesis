@@ -1,24 +1,24 @@
 ---
-description: Diagnose where this repo's Genesis memory actually lives — finds stray memory databases outside .genesis/ and reports per-agent counts. Read-only; changes nothing.
+description: Diagnose where this repo's Genesis memory actually lives — scans your home dir for stray memory databases (scatter lands outside the repo) and flags any that hold THIS repo's agents. Read-only.
 argument-hint: (no arguments)
 ---
 
-You are running **`/genesis:doctor`** — a READ-ONLY health check on this repo's Genesis memory. It scans the
-project for every genesis memory database (the canonical `.genesis/memory.db` plus any **stray**
-`genesis-memory.db` a mis-anchored server left in a launch directory) and reports, per agent, how many
-memories each database holds. It flags any memory that is NOT in the repo's `.genesis/` store. It changes
-nothing.
+You are running **`/genesis:doctor`** — a READ-ONLY health check on this repo's Genesis memory. Scattered
+memory lands in whatever folder Claude Code was launched from — a **sibling** of the repo, not inside it — so
+this scans your **home directory**, not just the repo. It reports the repo's canonical store, then any stray
+databases that hold **this repo's own agents** (the memory `/genesis:fix` would recover). It changes nothing.
 
 **Do this now:**
 
 1. Run the diagnosis via the plugin launcher (it resolves the native `genesis-cli`):
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js" --run-cli doctor --root "${CLAUDE_PROJECT_DIR}"
+   node "${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js" --run-cli doctor --repo "${CLAUDE_PROJECT_DIR}"
    ```
-   It prints JSON: the canonical store (path, whether it exists, per-agent counts), the count in the
-   committed `memory.jsonl`, a list of `strays` (databases outside `.genesis/` with their memories), and a
-   `healthy` flag.
+   It prints JSON: `canonical` (this repo's store + per-agent counts), `custom_agents` (this repo's agents),
+   `recoverable_strays` (databases OUTSIDE `.genesis/` holding this repo's memory + how much), `other_stores`
+   (memory belonging to other repos/agents — informational), and a `healthy` flag. (The scan defaults to your
+   home dir; add `--root "<dir>"` to narrow it if it's slow.)
 
-2. Summarize for the user: is memory healthy (all in `.genesis/`), or is memory scattered? If `healthy` is
-   false, tell them exactly how many stray databases and memories were found, and that **`/genesis:fix`**
-   will consolidate them losslessly into the repo store. Do not run `fix` yourself unless the user asks.
+2. Summarize for the user: is memory healthy (all in `.genesis/`), or are there `recoverable_strays`? If so,
+   name how many memories and which stray files hold them, and that **`/genesis:fix`** consolidates them into
+   this repo losslessly. Do not run `fix` yourself unless the user asks.
