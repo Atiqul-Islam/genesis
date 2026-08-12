@@ -32,6 +32,7 @@ start. See the **memory-sync** skill for the model.
    `--agent <name>` to target one agent, or `--all-agents` to take every agent found. The command NEVER writes
    outside the target repo and is idempotent.
 
-5. Report `records_before` → `records_after`, how many strays contributed, which agents/paths, and the
-   `scan_roots`. Remind the user the strays were only read (safe to delete), and that the repo must be
-   reopened (or the memory server restarted) for `memory.db` to rebuild from the updated JSONL.
+5. Report `records_before` → `records_after`, how many memories were `added`, which agents/paths, and the
+   `scan_roots`. The consolidated memories are written straight into `.genesis/memory.db` with their
+   embeddings, so they are **recall-able immediately — no restart needed**. Remind the user the strays were
+   only read (safe to delete).

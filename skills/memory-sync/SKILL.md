@@ -61,12 +61,14 @@ is attributed by agent:
   `recoverable_strays` (databases outside `.genesis/` that hold **this repo's own agents**) and a `healthy`
   flag; other repos' memory is listed only as `other_stores` (informational). CLI:
   `doctor --repo <repo> --scope system` (or `--root <dir>` for an explicit area, e.g. the user's home).
-- **`/genesis:fix`** — reads strays READ-ONLY and UNION-merges into the repo's canonical JSONL **only the
-  memories that belong to this repo** — its custom agents (`<repo>/.claude/agents/*.md`, excluding the shared
-  `sensei`/`method`), plus anything in a stray physically inside the repo. A broad scan therefore never drags
-  a *foreign* repo's memory in. `--all-agents` / `--agent <name>` change which agents are pulled; `--scope
-  user|system` / repeatable `--root <dir>` set the scan area; `--archive` copies contributing strays. The
-  `.db` catches up on the next server start. (Idempotent; zero footprint outside the target repo.)
+- **`/genesis:fix`** — reads strays READ-ONLY and merges **only the memories that belong to this repo** —
+  its custom agents (`<repo>/.claude/agents/*.md`, excluding the shared `sensei`/`method`), plus anything in
+  a stray physically inside the repo — straight into the canonical **`.db`**. Each stray already holds its
+  embeddings, so the memory + its embedding blob are copied verbatim (no re-embedding): the consolidated
+  memory is **recall-able immediately, with no server restart**. The JSONL mirror is re-exported from the
+  `.db` afterward. A broad scan never drags a *foreign* repo's memory in. `--all-agents` / `--agent <name>`
+  change which agents are pulled; `--scope user|system` / repeatable `--root <dir>` set the scan area;
+  `--archive` copies contributing strays. (Idempotent; zero footprint outside the target repo.)
 - **No scope and no `--root` → the CLI errors** and asks for one; it never silently picks a directory.
 
 New installs no longer scatter: the server defaults its DB to `<cwd>/.genesis/memory.db`, and the plugin /

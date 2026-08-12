@@ -1,23 +1,23 @@
 //! Shared memory core for `doctor` (diagnose), `fix` (consolidate strays), and `reconcile` (merge with a
 //! remote export).
 //!
-//! Genesis memory lives in ONE place per repo and is committed as BOTH `<repo>/.genesis/memory.db` (the
-//! ready-to-use vector DB — git takes the latest on a sync) and `<repo>/.genesis/memory/memory.jsonl` (the
-//! line-diffable merge substrate that guarantees nothing is lost). Before the beta.9 fixes, a plugin-scoped
+//! **The `<repo>/.genesis/memory.db` vector store is the source of truth** — committed and travelling with
+//! the repo, ready-to-use with its embeddings baked in. `<repo>/.genesis/memory/memory.jsonl` is its
+//! derived, line-diffable mirror (the merge/diff substrate). Before the beta.9 fixes, a plugin-scoped
 //! server with no db path defaulted to a bare `genesis-memory.db` in whatever directory Claude Code was
-//! launched from, so memory **scattered** into stray root DBs that never reached the repo and never
-//! travelled.
+//! launched from, so memory **scattered** into stray root DBs that never reached the repo.
 //!
-//! This module reads those stray DBs (READ-ONLY — zero footprint on anything outside the target repo)
-//! and folds their memories into the target repo's JSONL via a **deterministic, lossless UNION merge**
-//! (dedupe by `(agent_id, text)` — nothing is ever overwritten or dropped). The server's own
-//! `rebuild_if_needed` performs the same union on its next start, so the DB catches up automatically.
-//!
-//! No ONNX embedder is needed here: the JSONL is text, and embeddings are a derived index the server
-//! regenerates from `text` on import. That is why consolidation can be a plain `genesis-cli` subcommand.
+//! This module reads those stray DBs (READ-ONLY — zero footprint outside the target repo) and lets `fix`
+//! merge them straight into the canonical `.db`: each stray already holds its embeddings, so a memory and
+//! its embedding blob are copied **verbatim** into the canonical store (dedupe by `(agent_id, text)` —
+//! nothing overwritten or dropped). No ONNX re-embedding, so consolidation is a plain `genesis-cli`
+//! subcommand — and the consolidated memory is recall-able immediately, with no server restart. After the
+//! merge, `fix` re-exports the JSONL mirror from the `.db`.
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::ffi::sqlite3_auto_extension;
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use sqlite_vec::sqlite3_vec_init;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -399,6 +399,187 @@ pub fn read_db_memories(path: &Path) -> Result<Option<Vec<MemRecord>>, String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("read rows {}: {e}", path.display()))?;
     Ok(Some(rows))
+}
+
+/// A memory plus its raw embedding blob, read straight out of a DB's `vec_items` — the exact bytes
+/// `sqlite-vec` stored (native-endian `f32`s). Copied verbatim between DBs, so no decode and no ONNX
+/// re-embedding is ever needed.
+#[derive(Debug, Clone)]
+pub struct EmbeddedRecord {
+    /// The memory row (its `id`/`superseded_by` are not carried across a merge).
+    pub rec: MemRecord,
+    /// The raw `vec_items` embedding blob (384 `f32`s = 1536 bytes).
+    pub embedding: Vec<u8>,
+}
+
+/// Register the `sqlite-vec` extension for every subsequent connection in this process. Mirrors the memory
+/// server's registration (`store.rs`); calling it per-open is the server's own idempotent pattern.
+#[allow(unsafe_code)]
+fn register_vec_extension() {
+    // The sole `unsafe` in the crate: the verified `sqlite3_auto_extension(sqlite3_vec_init)` registration,
+    // identical to the memory server. There is no safe wrapper.
+    #[allow(clippy::missing_transmute_annotations)]
+    unsafe {
+        sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+    }
+}
+
+/// Open (creating if missing) a genesis memory DB with `sqlite-vec` registered and the canonical schema
+/// ensured — for READ/WRITE of memories AND their embeddings. This is the store `fix` merges into.
+///
+/// # Errors
+/// Returns a message if the parent dir, the connection, or the schema DDL fails.
+pub fn open_memory_db(path: &Path) -> Result<Connection, String> {
+    register_vec_extension();
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+    }
+    let conn = Connection::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memories (
+             id            INTEGER PRIMARY KEY,
+             agent_id      TEXT    NOT NULL,
+             text          TEXT    NOT NULL,
+             created_at    INTEGER NOT NULL,
+             last_used_at  INTEGER NOT NULL,
+             use_count     INTEGER NOT NULL DEFAULT 0,
+             base_score    REAL    NOT NULL,
+             superseded_by INTEGER REFERENCES memories(id)
+         );
+         CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(embedding float[384]);",
+    )
+    .map_err(|e| format!("ensure schema {}: {e}", path.display()))?;
+    Ok(conn)
+}
+
+/// Read a DB's ACTIVE memories (`superseded_by IS NULL`) together with their embedding blobs, READ-ONLY.
+/// Superseded rows were deliberately retired, so they are not carried into a consolidation. Returns
+/// `Ok(None)` if the file has no `memories` table. A memory with no `vec_items` row (no embedding) is
+/// skipped — it can't be recalled without re-embedding.
+///
+/// # Errors
+/// Returns a message if the DB can't be opened read-only or the query fails.
+pub fn read_active_with_embeddings(path: &Path) -> Result<Option<Vec<EmbeddedRecord>>, String> {
+    register_vec_extension();
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open {} read-only: {e}", path.display()))?;
+    let has_table: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !has_table {
+        return Ok(None);
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id, m.agent_id, m.text, m.created_at, m.last_used_at, m.use_count, m.base_score, \
+             v.embedding \
+             FROM memories m JOIN vec_items v ON v.rowid = m.id \
+             WHERE m.superseded_by IS NULL ORDER BY m.id",
+        )
+        .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(EmbeddedRecord {
+                rec: MemRecord {
+                    id: r.get(0)?,
+                    agent_id: r.get(1)?,
+                    text: r.get(2)?,
+                    created_at: r.get(3)?,
+                    last_used_at: r.get(4)?,
+                    use_count: r.get(5)?,
+                    base_score: r.get(6)?,
+                    superseded_by: None,
+                },
+                embedding: r.get(7)?,
+            })
+        })
+        .map_err(|e| format!("query {}: {e}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+    Ok(Some(rows))
+}
+
+/// The set of `(agent_id, text)` keys already present in an open memory DB (for dedup during a merge).
+///
+/// # Errors
+/// Returns a message if the query fails.
+pub fn existing_keys(
+    conn: &Connection,
+) -> Result<std::collections::HashSet<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT agent_id, text FROM memories")
+        .map_err(|e| format!("prepare keys: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("query keys: {e}"))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()
+        .map_err(|e| format!("read keys: {e}"))?;
+    Ok(rows)
+}
+
+/// Insert one memory + its embedding blob into an open memory DB under a shared fresh rowid (same two-table
+/// write the server does). The embedding bytes are copied verbatim — no decode, no re-embedding.
+///
+/// # Errors
+/// Returns a message if either insert fails.
+pub fn insert_embedded(conn: &Connection, e: &EmbeddedRecord) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO memories (agent_id, text, created_at, last_used_at, use_count, base_score) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            e.rec.agent_id,
+            e.rec.text,
+            e.rec.created_at,
+            e.rec.last_used_at,
+            e.rec.use_count,
+            e.rec.base_score
+        ],
+    )
+    .map_err(|err| format!("insert memory: {err}"))?;
+    let id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO vec_items(rowid, embedding) VALUES (?1, ?2)",
+        params![id, e.embedding],
+    )
+    .map_err(|err| format!("insert embedding: {err}"))?;
+    Ok(())
+}
+
+/// Read every memory row from an open memory DB (for re-exporting the JSONL mirror after a merge).
+///
+/// # Errors
+/// Returns a message if the query fails.
+pub fn db_records(conn: &Connection) -> Result<Vec<MemRecord>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by \
+             FROM memories ORDER BY id",
+        )
+        .map_err(|e| format!("prepare db_records: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(MemRecord {
+                id: r.get(0)?,
+                agent_id: r.get(1)?,
+                text: r.get(2)?,
+                created_at: r.get(3)?,
+                last_used_at: r.get(4)?,
+                use_count: r.get(5)?,
+                base_score: r.get(6)?,
+                superseded_by: r.get(7)?,
+            })
+        })
+        .map_err(|e| format!("query db_records: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read db_records: {e}"))?;
+    Ok(rows)
 }
 
 /// Count memories per agent (for the diagnosis report), in sorted-agent order.
