@@ -28,7 +28,7 @@ pub fn run(args: &[String]) -> i32 {
         .into_iter()
         .map(PathBuf::from)
         .collect();
-    let roots = match memfix::resolve_scan_roots(scope, &explicit) {
+    let roots = match memfix::resolve_scan_roots(scope, &explicit, &repo) {
         Ok(r) => r,
         Err(e) => fsx::fail(&e),
     };

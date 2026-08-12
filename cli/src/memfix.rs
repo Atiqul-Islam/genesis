@@ -261,8 +261,23 @@ pub fn filesystem_roots() -> Vec<PathBuf> {
 pub fn resolve_scan_roots(
     scope: Option<Scope>,
     explicit: &[PathBuf],
+    repo: &Path,
 ) -> Result<Vec<PathBuf>, String> {
+    // The breadth is still the user's decision: an absent scope with no explicit root is a usage
+    // error, exactly as before. Checked BEFORE the repo is added, so adding it cannot mask this.
+    if scope.is_none() && explicit.is_empty() {
+        return Err(
+            "specify a scan scope: --scope user | --scope system  (or an explicit --root <path>)"
+                .to_string(),
+        );
+    }
     let mut roots: Vec<PathBuf> = explicit.to_vec();
+    // The repo itself is ALWAYS scanned, on every scope. Scatter most often lands in the launch
+    // directory, which is usually the repo root — and `--repo`/`--into` is a known absolute path,
+    // so including it needs no detection, no heuristic and no OS-specific branch. Scope decides how
+    // far to look BEYOND the repo; it never decides whether the repo is looked at. Without this, a
+    // stray sitting in the repo directory is missed and `healthy` is reported for a scattered store.
+    roots.push(repo.to_path_buf());
     match scope {
         Some(Scope::User) => {
             let mut found = false;
@@ -287,12 +302,6 @@ pub fn resolve_scan_roots(
         }
         Some(Scope::System) => roots.extend(filesystem_roots()),
         None => {}
-    }
-    if roots.is_empty() {
-        return Err(
-            "specify a scan scope: --scope user | --scope system  (or an explicit --root <path>)"
-                .to_string(),
-        );
     }
     roots.sort();
     roots.dedup();
@@ -611,24 +620,45 @@ mod tests {
 
     #[test]
     fn resolve_scan_roots_requires_a_scope_or_explicit_root() {
-        // No scope, no root → error (never silently guess a path).
-        assert!(resolve_scan_roots(None, &[]).is_err());
-        // Explicit root alone is fine.
-        assert_eq!(
-            resolve_scan_roots(None, &[PathBuf::from("/some/dir")]).unwrap(),
-            vec![PathBuf::from("/some/dir")]
-        );
-        // System scope resolves to the filesystem roots.
-        assert_eq!(
-            resolve_scan_roots(Some(Scope::System), &[]).unwrap(),
-            filesystem_roots()
-        );
+        let repo = PathBuf::from("/some/repo");
+        // No scope, no root → error (never silently guess a path). The repo being an implicit root
+        // must NOT satisfy this: the breadth beyond the repo is still the user's decision.
+        assert!(resolve_scan_roots(None, &[], &repo).is_err());
+        // Explicit root alone is fine — and the repo comes along with it.
+        let r = resolve_scan_roots(None, &[PathBuf::from("/some/dir")], &repo).unwrap();
+        assert!(r.contains(&PathBuf::from("/some/dir")));
+        assert!(r.contains(&repo));
+        // System scope resolves to the filesystem roots, plus the repo.
+        let r = resolve_scan_roots(Some(Scope::System), &[], &repo).unwrap();
+        for fs_root in filesystem_roots() {
+            assert!(r.contains(&fs_root));
+        }
+        assert!(r.contains(&repo));
         // Explicit roots are unioned + deduped with scope roots.
         assert!(
-            resolve_scan_roots(Some(Scope::System), &[PathBuf::from("/some/dir")])
+            resolve_scan_roots(Some(Scope::System), &[PathBuf::from("/some/dir")], &repo)
                 .unwrap()
                 .contains(&PathBuf::from("/some/dir"))
         );
+    }
+
+    #[test]
+    fn resolve_scan_roots_always_includes_the_repo() {
+        // The regression this guards: a stray database sitting in the repo directory was missed
+        // because scope resolution never included the repo, so `doctor` reported `healthy: true`
+        // for a scattered store. The repo is a known absolute path — it is always scanned.
+        let repo = PathBuf::from("/some/repo");
+        for scope in [Some(Scope::User), Some(Scope::System)] {
+            let roots = resolve_scan_roots(scope, &[], &repo).unwrap();
+            assert!(
+                roots.contains(&repo),
+                "repo must be a scan root for scope {scope:?}"
+            );
+        }
+        // Deduped when the caller also passes it explicitly.
+        let roots =
+            resolve_scan_roots(Some(Scope::System), std::slice::from_ref(&repo), &repo).unwrap();
+        assert_eq!(roots.iter().filter(|p| **p == repo).count(), 1);
     }
 
     #[test]
