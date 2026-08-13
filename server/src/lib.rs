@@ -52,12 +52,13 @@ use crate::store::VectorStore;
 /// Default number of recall hits when `k` is omitted.
 pub const DEFAULT_K: usize = 5;
 
-/// One recall result: the memory id, its stored text, and its distance from the query.
+/// One recall result: the memory id, its stored text, and its composite relevance `score`
+/// (higher = better) from the hybrid retrieval pipeline.
 #[derive(Debug, Serialize)]
 struct Hit {
     id: i64,
     text: String,
-    distance: f64,
+    score: f64,
 }
 
 /// Embeds `text` and stores it under `agent_id`; returns the assigned id.
@@ -81,12 +82,13 @@ pub fn do_store(
     store.insert(agent_id, text, &vec, cfg.base_score, clock.now_unix())
 }
 
-/// Embeds `query`, runs agent-scoped KNN, bumps usage on each hit, and returns the JSON
-/// payload string (a `[{id, text, distance}]` array ordered by ascending distance).
+/// Embeds `query`, runs the full HYBRID retrieval pipeline (vector + BM25 → RRF fusion → recency/importance
+/// composite → MMR diversity, active memories only), bumps usage on each hit, and returns the JSON payload
+/// string (a `[{id, text, score}]` array ordered by descending relevance `score`).
 ///
 /// # Errors
 ///
-/// Returns an error if embedding, KNN, hydration, or serialization fails.
+/// Returns an error if embedding, retrieval, hydration, or serialization fails.
 pub fn do_recall(
     store: &mut VectorStore,
     embedder: &mut Embedder,
@@ -96,13 +98,13 @@ pub fn do_recall(
     k: usize,
 ) -> Result<String> {
     let vec = embedder.embed(query)?;
-    let hits = store.knn(agent_id, &vec, k)?;
     let now = clock.now_unix();
+    let hits = store.hybrid_recall(agent_id, query, &vec, k, now)?;
     let mut out = Vec::with_capacity(hits.len());
-    for (id, distance) in hits {
+    for (id, score) in hits {
         let text = store.text_of(id)?;
         store.touch(id, now)?; // on recall: use_count += 1, last_used_at = now
-        out.push(Hit { id, text, distance });
+        out.push(Hit { id, text, score });
     }
     Ok(serde_json::to_string(&out)?)
 }
@@ -493,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn recall_result_objects_have_exactly_id_text_and_distance() {
+    fn recall_result_objects_have_exactly_id_text_and_score() {
         let (_d, mut store, mut emb) = setup();
         let cfg = ConsolidationConfig::default();
         let clock = FixedClock(0);
@@ -504,11 +506,11 @@ mod tests {
         assert_eq!(obj.len(), 3);
         assert!(obj["id"].is_i64());
         assert!(obj["text"].is_string());
-        assert!(obj["distance"].is_number());
+        assert!(obj["score"].is_number());
     }
 
     #[test]
-    fn recall_result_array_is_ordered_by_ascending_distance() {
+    fn recall_result_array_is_ordered_by_descending_score() {
         let (_d, mut store, mut emb) = setup();
         let cfg = ConsolidationConfig::default();
         let clock = FixedClock(0);
@@ -532,17 +534,20 @@ mod tests {
         .unwrap();
         let json = do_recall(&mut store, &mut emb, &clock, "a", "the quick brown fox", 5).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let dists: Vec<f64> = v
+        let scores: Vec<f64> = v
             .as_array()
             .unwrap()
             .iter()
-            .map(|e| e["distance"].as_f64().unwrap())
+            .map(|e| e["score"].as_f64().unwrap())
             .collect();
         assert!(
-            dists.windows(2).all(|w| w[0] <= w[1]),
-            "ascending: {dists:?}"
+            scores.windows(2).all(|w| w[0] >= w[1]),
+            "descending relevance: {scores:?}"
         );
-        approx::assert_abs_diff_eq!(dists[0], 0.0, epsilon = 1e-6); // exact match first
+        assert!(
+            scores[0] > 0.0,
+            "the top hit has a positive composite score"
+        );
     }
 
     #[tokio::test]

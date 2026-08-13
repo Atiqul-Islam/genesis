@@ -174,7 +174,32 @@ fn migrate(conn: &Connection) -> Result<()> {
         "UPDATE memories SET valid_from  = created_at WHERE valid_from  IS NULL;
          UPDATE memories SET ingested_at = created_at WHERE ingested_at IS NULL;",
     )?;
+    // Full-text (BM25) index for the lexical leg of hybrid retrieval. A standalone FTS5 table keyed to the
+    // memory id: `text` is immutable after insert and rows are superseded (never hard-deleted), so a
+    // per-insert populate plus a one-time backfill of any rows missing from the index keeps it in sync
+    // without update/delete triggers. Backfill is idempotent (only inserts ids not already indexed).
+    conn.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text);")?;
+    conn.execute_batch(
+        "INSERT INTO memories_fts(rowid, text)
+           SELECT id, text FROM memories WHERE id NOT IN (SELECT rowid FROM memories_fts);",
+    )?;
     Ok(())
+}
+
+/// Build a safe FTS5 MATCH query from arbitrary text: keep alphanumeric tokens, double-quote each (so FTS5
+/// special characters can never break the query syntax), and OR them — BM25 then ranks by term overlap.
+/// Returns `None` for empty / symbol-only text (the BM25 leg simply contributes nothing).
+fn fts_query(text: &str) -> Option<String> {
+    let terms: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{}\"", t.to_lowercase()))
+        .collect();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" OR "))
+    }
 }
 
 /// The content-addressed id for a memory — `sha256(normalized_text \x1e type \x1e agent_id)` in hex. Stable
@@ -190,6 +215,44 @@ pub fn content_id(normalized_text: &str, mem_type: &str, agent_id: &str) -> Stri
     h.update([0x1e]);
     h.update(agent_id.as_bytes());
     hex::encode(h.finalize())
+}
+
+/// Hybrid-retrieval tuning — research defaults, to be calibrated on real data. RRF constant (Cormack 2009);
+/// per-hour recency decay on last access (Generative Agents); MMR diversity λ (Carbonell 1998); and the blend
+/// weights for the fused-relevance / recency / importance composite.
+const RRF_K: f64 = 60.0;
+const RECENCY_DECAY_PER_HOUR: f64 = 0.995;
+const MMR_LAMBDA: f64 = 0.7;
+const W_RELEVANCE: f64 = 1.0;
+const W_RECENCY: f64 = 0.3;
+const W_IMPORTANCE: f64 = 0.3;
+
+/// Dot product of two equal-length vectors. Embeddings are stored L2-normalized, so dot == cosine.
+fn dot(a: &[f32], b: &[f32]) -> f64 {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| f64::from(*x) * f64::from(*y))
+        .sum()
+}
+
+/// Min-max normalize scores to [0,1]; a flat set maps to all-0.5 (neutral, avoids divide-by-zero).
+fn min_max(v: &[f64]) -> Vec<f64> {
+    let (lo, hi) = v
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &x| {
+            (lo.min(x), hi.max(x))
+        });
+    let span = hi - lo;
+    if span <= f64::EPSILON {
+        vec![0.5; v.len()]
+    } else {
+        v.iter().map(|&x| (x - lo) / span).collect()
+    }
+}
+
+/// A `usize` rank / count as `f64` without a lossy `as` cast (ranks are tiny, so the clamp never triggers).
+fn as_f64(n: usize) -> f64 {
+    f64::from(u32::try_from(n).unwrap_or(u32::MAX))
 }
 
 impl VectorStore {
@@ -275,6 +338,10 @@ impl VectorStore {
             "INSERT INTO vec_items(rowid, embedding) VALUES (?1, ?2)",
             params![id, bytemuck::cast_slice::<f32, u8>(embedding)],
         )?;
+        tx.execute(
+            "INSERT INTO memories_fts(rowid, text) VALUES (?1, ?2)",
+            params![id, text],
+        )?;
         tx.commit()?;
         Ok(id)
     }
@@ -347,18 +414,127 @@ impl VectorStore {
             .flatten())
     }
 
+    /// BM25 full-text recall for `agent_id` — the lexical leg of hybrid retrieval. Returns `(id, bm25_rank)`
+    /// (lower rank = better), ACTIVE memories only (same agent / `superseded_by` / bi-temporal filter as
+    /// [`Self::knn`]). Empty or symbol-only queries return `[]`.
+    ///
+    /// # Errors
+    /// Returns an error on any SQL failure.
+    pub fn bm25(&self, agent_id: &str, query_text: &str, k: usize) -> Result<Vec<(i64, f64)>> {
+        let Some(q) = fts_query(query_text) else {
+            return Ok(Vec::new());
+        };
+        let k_i64 = i64::try_from(k).unwrap_or(i64::MAX);
+        let pool = self.count_memories()?.max(k_i64).max(1);
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, f.rank
+               FROM ( SELECT rowid, rank FROM memories_fts
+                      WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2 ) AS f
+               JOIN memories m ON m.id = f.rowid
+              WHERE m.agent_id = ?3 AND m.superseded_by IS NULL
+                AND m.valid_to IS NULL AND m.expired_at IS NULL
+              ORDER BY f.rank
+              LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(params![q, pool, agent_id, k_i64], id_distance)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Full hybrid recall: fuse the vector (semantic) + BM25 (lexical) legs with Reciprocal Rank Fusion,
+    /// blend in recency + importance (min-max normalized), then MMR-diversify to the top `k`. Returns
+    /// `(id, composite_score)` best-first; ACTIVE memories only. `now_unix` drives recency decay.
+    ///
+    /// # Errors
+    /// Returns an error on dimension mismatch or any SQL failure.
+    pub fn hybrid_recall(
+        &self,
+        agent_id: &str,
+        query_text: &str,
+        query_emb: &[f32],
+        k: usize,
+        now_unix: i64,
+    ) -> Result<Vec<(i64, f64)>> {
+        Self::check_dim(query_emb)?;
+        let pool = (k * 5).max(20);
+        let vec_hits = self.knn(agent_id, query_emb, pool)?;
+        let bm_hits = self.bm25(agent_id, query_text, pool)?;
+
+        // Reciprocal Rank Fusion by rank position — scale-free, no cross-leg score calibration needed.
+        let mut fused: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
+        for (rank, (id, _)) in vec_hits.iter().enumerate() {
+            *fused.entry(*id).or_insert(0.0) += 1.0 / (RRF_K + as_f64(rank) + 1.0);
+        }
+        for (rank, (id, _)) in bm_hits.iter().enumerate() {
+            *fused.entry(*id).or_insert(0.0) += 1.0 / (RRF_K + as_f64(rank) + 1.0);
+        }
+        if fused.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Candidate metadata (recency ← last_used_at, importance ← base_score) + embeddings (for MMR).
+        let cand: Vec<i64> = fused.keys().copied().collect();
+        let fused_scores: Vec<f64> = cand.iter().map(|id| fused[id]).collect();
+        let mut recency = Vec::with_capacity(cand.len());
+        let mut importance = Vec::with_capacity(cand.len());
+        let mut embs: Vec<Vec<f32>> = Vec::with_capacity(cand.len());
+        for id in &cand {
+            let (last_used, base): (i64, f64) = self.conn.query_row(
+                "SELECT last_used_at, base_score FROM memories WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let secs = i32::try_from((now_unix - last_used).max(0)).unwrap_or(i32::MAX);
+            recency.push(RECENCY_DECAY_PER_HOUR.powf(f64::from(secs) / 3600.0));
+            importance.push(base);
+            embs.push(self.embedding_of(*id)?);
+        }
+        let nf = min_max(&fused_scores);
+        let ni = min_max(&importance);
+        let relevance: Vec<f64> = (0..cand.len())
+            .map(|i| W_RELEVANCE * nf[i] + W_RECENCY * recency[i] + W_IMPORTANCE * ni[i])
+            .collect();
+
+        // MMR: greedily pick, trading relevance against similarity to what's already chosen (diversity).
+        let want = k.min(cand.len());
+        let mut selected: Vec<usize> = Vec::with_capacity(want);
+        while selected.len() < want {
+            let mut best: Option<(usize, f64)> = None;
+            for i in 0..cand.len() {
+                if selected.contains(&i) {
+                    continue;
+                }
+                let max_sim = selected
+                    .iter()
+                    .map(|&s| dot(&embs[i], &embs[s]))
+                    .fold(0.0_f64, f64::max);
+                let mmr = MMR_LAMBDA.mul_add(relevance[i], -(1.0 - MMR_LAMBDA) * max_sim);
+                if best.is_none_or(|(_, b)| mmr > b) {
+                    best = Some((i, mmr));
+                }
+            }
+            let Some((i, _)) = best else { break };
+            selected.push(i);
+        }
+        Ok(selected
+            .into_iter()
+            .map(|i| (cand[i], relevance[i]))
+            .collect())
+    }
+
     /// Returns the `k` nearest non-superseded memories for `agent_id`, nearest first.
     ///
     /// The verified `vec0` KNN (`MATCH ... ORDER BY distance LIMIT`) runs as an inner
     /// subquery over a candidate pool sized to the whole table, so the outer agent /
-    /// `superseded_by` filter never under-returns.
+    /// `superseded_by` / bi-temporal-validity filter never under-returns. Recall returns only ACTIVE
+    /// memories — those neither `superseded_by`-linked (legacy) NOR bi-temporally retired
+    /// (`valid_to`/`expired_at` set by [`Self::supersede_by_key`]).
     ///
     /// # Errors
     /// Returns an error on dimension mismatch or any SQL failure.
     pub fn knn(&self, agent_id: &str, query: &[f32], k: usize) -> Result<Vec<(i64, f64)>> {
         Self::check_dim(query)?;
         let k_i64 = i64::try_from(k).unwrap_or(i64::MAX);
-        // Candidate pool >= all vec rows so the outer agent/superseded filter never under-returns.
+        // Candidate pool >= all vec rows so the outer agent/validity filter never under-returns.
         let pool = self.count_vectors()?.max(k_i64).max(1);
         let mut stmt = self.conn.prepare(
             "SELECT m.id, k.distance
@@ -366,6 +542,7 @@ impl VectorStore {
                       WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2 ) AS k
                JOIN memories m ON m.id = k.rowid
               WHERE m.agent_id = ?3 AND m.superseded_by IS NULL
+                AND m.valid_to IS NULL AND m.expired_at IS NULL
               ORDER BY k.distance
               LIMIT ?4",
         )?;
@@ -650,6 +827,84 @@ mod tests {
             2,
             "the superseded row is KEPT (bi-temporal), not deleted"
         );
+    }
+
+    #[test]
+    fn knn_excludes_bitemporally_superseded_facts() {
+        let (_d, mut s) = open_temp();
+        let old = s.insert("a", "ball is blue", &emb(0.5), 1.0, 100).unwrap();
+        s.set_structure(old, "semantic", Some("ball"), Some("color"), Some("blue"))
+            .unwrap();
+        let new = s.insert("a", "ball is green", &emb(0.5), 1.0, 200).unwrap();
+        assert_eq!(s.supersede_by_key("a", "ball", "color", 200).unwrap(), 1);
+        let ids: Vec<i64> = s
+            .knn("a", &emb(0.5), 10)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(ids.contains(&new), "the active fact is recalled");
+        assert!(
+            !ids.contains(&old),
+            "a bi-temporally superseded fact must NOT be recalled"
+        );
+    }
+
+    #[test]
+    fn bm25_finds_by_keyword_scoped_to_agent_and_active() {
+        let (_d, mut s) = open_temp();
+        let blue = s
+            .insert("a", "the sky is blue today", &emb(0.1), 1.0, 1)
+            .unwrap();
+        let _green = s.insert("a", "grass is green", &emb(0.2), 1.0, 2).unwrap();
+        let other = s
+            .insert("b", "the blue whale swims", &emb(0.3), 1.0, 3)
+            .unwrap();
+
+        let ids: Vec<i64> = s
+            .bm25("a", "blue sky", 10)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(ids.contains(&blue), "BM25 finds the keyword match");
+        assert!(
+            !ids.contains(&other),
+            "BM25 is scoped to the querying agent"
+        );
+        assert!(
+            s.bm25("a", "!!! ???", 10).unwrap().is_empty(),
+            "symbol-only query yields no results, never an FTS5 syntax error"
+        );
+    }
+
+    #[test]
+    fn hybrid_recall_fuses_legs_ranks_relevant_first_and_excludes_superseded() {
+        let (_d, mut s) = open_temp();
+        let sky = s
+            .insert("a", "the sky is blue", &emb(0.9), 1.0, 100)
+            .unwrap();
+        let grass = s
+            .insert("a", "grass is green", &emb(0.1), 1.0, 100)
+            .unwrap();
+        let old = s
+            .insert("a", "sky colour note", &emb(0.9), 1.0, 50)
+            .unwrap();
+        s.set_structure(old, "semantic", Some("sky"), Some("color"), Some("grey"))
+            .unwrap();
+        s.supersede_by_key("a", "sky", "color", 100).unwrap();
+
+        let hits = s.hybrid_recall("a", "blue sky", &emb(0.9), 5, 100).unwrap();
+        let ids: Vec<i64> = hits.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&sky), "the relevant active memory is recalled");
+        assert!(
+            !ids.contains(&old),
+            "a superseded memory is excluded from hybrid recall"
+        );
+        let pos = |x: i64| ids.iter().position(|id| *id == x);
+        if let (Some(ps), Some(pg)) = (pos(sky), pos(grass)) {
+            assert!(ps < pg, "the more relevant memory ranks higher");
+        }
     }
 
     /// A 384-dim vector distinguished by `seed` in slot 0 (and `1 - seed` in slot 1).
