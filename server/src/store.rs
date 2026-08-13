@@ -10,7 +10,7 @@
 //! to the `vec0` KNN itself. See `docs/SPEC_FORGE_RUST_UPDATE.md` §2.3b.
 
 use anyhow::Result;
-use rusqlite::{ffi::sqlite3_auto_extension, params, Connection};
+use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 
 use crate::embed::EMBED_DIM;
@@ -128,6 +128,70 @@ fn id_distance(r: &rusqlite::Row) -> rusqlite::Result<(i64, f64)> {
     Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
 }
 
+/// The 0.2.0 structured / bi-temporal columns added to `memories`. SQLite `ALTER TABLE ADD COLUMN` cannot add
+/// a NOT NULL column without a *constant* default, so the bi-temporal time fields are added nullable and then
+/// backfilled from `created_at` (see [`migrate`]).
+const MIGRATION_COLUMNS: &[(&str, &str)] = &[
+    ("type", "TEXT NOT NULL DEFAULT 'semantic'"),
+    ("subject", "TEXT"),
+    ("relation", "TEXT"),
+    ("object", "TEXT"),
+    ("valid_from", "INTEGER"),
+    ("valid_to", "INTEGER"),
+    ("ingested_at", "INTEGER"),
+    ("expired_at", "INTEGER"),
+    ("source", "TEXT"),
+    ("principal", "TEXT"),
+    ("asserted_by", "TEXT"),
+    ("confidence", "REAL"),
+    ("content_id", "TEXT"),
+    ("embedding_model", "TEXT"),
+    ("embedding_version", "TEXT"),
+    ("dim", "INTEGER"),
+    ("metric", "TEXT"),
+    ("normalized", "INTEGER"),
+];
+
+/// Idempotently bring an existing `memories` table up to the 0.2.0 structured / bi-temporal schema: add ONLY
+/// the columns that are missing (checked via `PRAGMA table_info`), then backfill bi-temporal defaults from
+/// `created_at`. Safe to run on every open — a fresh table simply gets all columns added once.
+///
+/// # Errors
+/// Returns an error if the pragma read or any `ALTER`/`UPDATE` fails.
+fn migrate(conn: &Connection) -> Result<()> {
+    let existing: std::collections::HashSet<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(memories)")?;
+        let cols = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        cols.collect::<std::result::Result<_, _>>()?
+    };
+    for (name, decl) in MIGRATION_COLUMNS {
+        if !existing.contains(*name) {
+            // Column names/decls are compile-time constants, never user input — no injection surface.
+            conn.execute_batch(&format!("ALTER TABLE memories ADD COLUMN {name} {decl};"))?;
+        }
+    }
+    conn.execute_batch(
+        "UPDATE memories SET valid_from  = created_at WHERE valid_from  IS NULL;
+         UPDATE memories SET ingested_at = created_at WHERE ingested_at IS NULL;",
+    )?;
+    Ok(())
+}
+
+/// The content-addressed id for a memory — `sha256(normalized_text \x1e type \x1e agent_id)` in hex. Stable
+/// and machine-independent, so the same fact stored twice (or synced from two machines) collides to one id →
+/// idempotent dedup + merge. The `\x1e` (ASCII record separator) prevents field-boundary collisions.
+#[must_use]
+pub fn content_id(normalized_text: &str, mem_type: &str, agent_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(normalized_text.as_bytes());
+    h.update([0x1e]);
+    h.update(mem_type.as_bytes());
+    h.update([0x1e]);
+    h.update(agent_id.as_bytes());
+    hex::encode(h.finalize())
+}
+
 impl VectorStore {
     /// Opens (or creates) the store, registering `sqlite-vec` and ensuring the schema.
     ///
@@ -168,6 +232,7 @@ impl VectorStore {
              );
              CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(embedding float[384]);",
         )?;
+        migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -197,9 +262,12 @@ impl VectorStore {
     ) -> Result<i64> {
         Self::check_dim(embedding)?;
         let tx = self.conn.transaction()?;
+        // valid_from = ingested_at = created_at (= now) so a new memory is bi-temporally well-formed and
+        // eligible for deterministic supersession immediately; `type` defaults to 'semantic'.
         tx.execute(
-            "INSERT INTO memories (agent_id, text, created_at, last_used_at, use_count, base_score)
-             VALUES (?1, ?2, ?3, ?3, 0, ?4)",
+            "INSERT INTO memories (agent_id, text, created_at, last_used_at, use_count, base_score, \
+             valid_from, ingested_at)
+             VALUES (?1, ?2, ?3, ?3, 0, ?4, ?3, ?3)",
             params![agent_id, text, now_unix, base_score],
         )?;
         let id = tx.last_insert_rowid();
@@ -209,6 +277,74 @@ impl VectorStore {
         )?;
         tx.commit()?;
         Ok(id)
+    }
+
+    /// Set the structured fields Mneme extracts for a memory (`type` + `subject`/`relation`/`object`).
+    /// A `None` clears that field. This is how a raw stored memory becomes a structured fact.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn set_structure(
+        &self,
+        id: i64,
+        mem_type: &str,
+        subject: Option<&str>,
+        relation: Option<&str>,
+        object: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE memories SET type = ?2, subject = ?3, relation = ?4, object = ?5 WHERE id = ?1",
+            params![id, mem_type, subject, relation, object],
+        )?;
+        Ok(())
+    }
+
+    /// Deterministically supersede prior ACTIVE facts for `(agent_id, subject, relation)` that are OLDER than
+    /// `new_valid_from`, by setting their `valid_to = new_valid_from`. Rows are KEPT (bi-temporal history) —
+    /// never deleted. No similarity, no LLM: staleness cannot be detected by embedding similarity (MemStrata),
+    /// so supersession is keyed on the identity triple. Returns the number of facts retired.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn supersede_by_key(
+        &self,
+        agent_id: &str,
+        subject: &str,
+        relation: &str,
+        new_valid_from: i64,
+    ) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE memories SET valid_to = ?4
+               WHERE agent_id = ?1 AND subject = ?2 AND relation = ?3
+                 AND valid_to IS NULL AND expired_at IS NULL
+                 AND valid_from < ?4",
+            params![agent_id, subject, relation, new_valid_from],
+        )?)
+    }
+
+    /// The current ACTIVE `object` for `(agent_id, subject, relation)`, latest by `valid_from`, if any.
+    /// Active = `valid_to IS NULL AND expired_at IS NULL`.
+    ///
+    /// # Errors
+    /// Returns an error if SQL fails.
+    pub fn active_object(
+        &self,
+        agent_id: &str,
+        subject: &str,
+        relation: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT object FROM memories
+                   WHERE agent_id = ?1 AND subject = ?2 AND relation = ?3
+                     AND valid_to IS NULL AND expired_at IS NULL
+                   ORDER BY valid_from DESC LIMIT 1",
+                params![agent_id, subject, relation],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
     }
 
     /// Returns the `k` nearest non-superseded memories for `agent_id`, nearest first.
@@ -431,7 +567,10 @@ impl VectorStore {
 // database with the real sqlite-vec extension (no mocks, §5 #6: fresh DB per test).
 #[cfg(test)]
 mod tests {
-    use super::{resolve_db_path, MemRecord, MemRow, VectorStore, DEFAULT_DB_FILENAME};
+    use super::{
+        content_id, migrate, resolve_db_path, MemRecord, MemRow, VectorStore, DEFAULT_DB_FILENAME,
+        MIGRATION_COLUMNS,
+    };
     use crate::embed::EMBED_DIM;
 
     fn open_temp() -> (tempfile::TempDir, VectorStore) {
@@ -439,6 +578,78 @@ mod tests {
         let path = dir.path().join("m.db");
         let store = VectorStore::open(path.to_str().unwrap()).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn migration_is_idempotent_and_adds_the_structured_columns() {
+        let (_d, s) = open_temp();
+        // open() already migrated; re-running migrate must be a no-op, never an error.
+        migrate(&s.conn).unwrap();
+        migrate(&s.conn).unwrap();
+        let cols: std::collections::HashSet<String> = {
+            let mut st = s.conn.prepare("PRAGMA table_info(memories)").unwrap();
+            st.query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        for (name, _) in MIGRATION_COLUMNS {
+            assert!(
+                cols.contains(*name),
+                "structured column {name} missing after migrate"
+            );
+        }
+    }
+
+    #[test]
+    fn content_id_is_stable_and_field_scoped() {
+        let a = content_id("the ball is blue", "semantic", "mneme");
+        assert_eq!(
+            a,
+            content_id("the ball is blue", "semantic", "mneme"),
+            "stable"
+        );
+        assert_ne!(
+            a,
+            content_id("the ball is blue", "episodic", "mneme"),
+            "type-scoped"
+        );
+        assert_ne!(
+            a,
+            content_id("the ball is blue", "semantic", "other"),
+            "agent-scoped"
+        );
+        assert_eq!(a.len(), 64, "sha256 hex length");
+    }
+
+    #[test]
+    fn supersede_by_key_retires_older_active_keeps_row_and_flips_current() {
+        let (_d, mut s) = open_temp();
+        let old = s
+            .insert("mneme", "ball is blue", &emb(0.1), 1.0, 100)
+            .unwrap();
+        s.set_structure(old, "semantic", Some("ball"), Some("color"), Some("blue"))
+            .unwrap();
+        let new = s
+            .insert("mneme", "ball is green", &emb(0.2), 1.0, 200)
+            .unwrap();
+        s.set_structure(new, "semantic", Some("ball"), Some("color"), Some("green"))
+            .unwrap();
+
+        let retired = s.supersede_by_key("mneme", "ball", "color", 200).unwrap();
+        assert_eq!(retired, 1, "only the older 'blue' fact is retired");
+        assert_eq!(
+            s.active_object("mneme", "ball", "color")
+                .unwrap()
+                .as_deref(),
+            Some("green"),
+            "the current value is the newest, deterministically"
+        );
+        assert_eq!(
+            s.count_memories().unwrap(),
+            2,
+            "the superseded row is KEPT (bi-temporal), not deleted"
+        );
     }
 
     /// A 384-dim vector distinguished by `seed` in slot 0 (and `1 - seed` in slot 1).
@@ -517,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn memories_has_the_eight_specified_columns() {
+    fn memories_has_the_base_and_structured_columns() {
         let (_d, s) = open_temp();
         let mut stmt = s
             .conn
@@ -528,19 +739,24 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(
-            cols,
-            [
-                "id",
-                "agent_id",
-                "text",
-                "created_at",
-                "last_used_at",
-                "use_count",
-                "base_score",
-                "superseded_by"
-            ]
-        );
+        // The original 8 base columns, in order, THEN the 0.2.0 structured/bi-temporal columns in
+        // MIGRATION_COLUMNS order (derived here so the test stays correct as the migration evolves).
+        let base = [
+            "id",
+            "agent_id",
+            "text",
+            "created_at",
+            "last_used_at",
+            "use_count",
+            "base_score",
+            "superseded_by",
+        ];
+        let expected: Vec<String> = base
+            .iter()
+            .map(|s| (*s).to_string())
+            .chain(MIGRATION_COLUMNS.iter().map(|(n, _)| (*n).to_string()))
+            .collect();
+        assert_eq!(cols, expected);
     }
 
     #[test]

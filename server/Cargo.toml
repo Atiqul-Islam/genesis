@@ -31,6 +31,10 @@ thiserror = "2"
 rusqlite   = { version = "=0.39.0", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 bytemuck   = "1"
+# content-addressed memory ids = sha256(normalized_text + type + agent_id) for idempotent dedup/sync (0.2.0
+# structured store). Runtime, not just tests — hence in [dependencies].
+sha2       = "0.10"
+hex        = "0.4"
 # embeddings — pure-Rust inference via the tract backend. `ort` keeps its API but the engine
 # is swapped from ONNX Runtime to tract via `alternative-backend` (= ort-sys/disable-linking):
 # NO download-binaries prebuilt, NO cmake, NO sidecar dylib, so the server builds for ALL
@@ -53,8 +57,6 @@ assert_cmd = "2.2"
 approx     = "0.5"
 insta      = "1"
 tempfile   = "3"
-sha2       = "0.10"
-hex        = "0.4"
 
 # --- ifs lint gate, verbatim from denier-rust/common-rust (crate-level; genesis has no workspace) ---
 [lints.rust]
