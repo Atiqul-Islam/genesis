@@ -294,6 +294,8 @@ impl ServerHandler for MemoryServer {
 ///
 /// - `genesis-memory-server export [db] [out.jsonl]` — mirror the DB to a JSONL export.
 /// - `genesis-memory-server import [in.jsonl] [db]` — rebuild the DB from a JSONL export.
+/// - `genesis-memory-server structure --agent <id> --id <n> [--type|--subject|--relation|--object|--db ...]`
+///   — Mneme's write-back (add structure + supersede + re-export); driven by the PostToolUse hook.
 /// - (no subcommand) — run the MCP memory server over stdio (the normal mode).
 ///
 /// # Errors
@@ -304,6 +306,7 @@ pub async fn run() -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("export") => cli_export(args.get(2).cloned(), args.get(3).cloned()),
         Some("import") => cli_import(args.get(2).cloned(), args.get(3).cloned()),
+        Some("structure") => cli_structure(&args),
         _ => serve_stdio().await,
     }
 }
@@ -339,6 +342,55 @@ fn cli_import(input: Option<String>, db: Option<String>) -> Result<()> {
     let mut embedder = Embedder::load(&model.to_string_lossy(), &tokenizer.to_string_lossy())?;
     let n = crate::persist::import_jsonl(&mut store, &mut embedder, &input)?;
     eprintln!("imported {n} memories from {} into {db}", input.display());
+    Ok(())
+}
+
+/// Finds `--name <value>` in a flat argv slice, returning the value that follows the flag.
+fn flag(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+/// `structure --agent <id> --id <n> [--type t] [--subject s] [--relation r] [--object o] [--db path]`
+///
+/// Mneme's write-back path, driven by the PostToolUse structuring hook: a raw `store` lands the text
+/// instantly, then this adds the structured `(type, subject, relation, object)` to memory `id` and
+/// deterministically supersedes the fact it replaces (see [`store::VectorStore::structure_memory`]), and
+/// re-exports the JSONL so the structure and any supersession travel with the repo. No ONNX model is loaded
+/// (structuring never changes the text or its embedding). Empty subject/relation/object are treated as absent.
+///
+/// # Errors
+/// Returns an error if required flags are missing/invalid, or the store open / structure / export fails.
+fn cli_structure(args: &[String]) -> Result<()> {
+    let db = flag(args, "--db").unwrap_or_else(crate::store::db_path_from_env);
+    let agent =
+        flag(args, "--agent").ok_or_else(|| anyhow::anyhow!("structure: --agent is required"))?;
+    let id: i64 = flag(args, "--id")
+        .ok_or_else(|| anyhow::anyhow!("structure: --id is required"))?
+        .parse()
+        .map_err(|e| anyhow::anyhow!("structure: --id must be an integer: {e}"))?;
+    let mem_type = flag(args, "--type").unwrap_or_else(|| "semantic".to_string());
+    let subject = flag(args, "--subject").filter(|s| !s.is_empty());
+    let relation = flag(args, "--relation").filter(|s| !s.is_empty());
+    let object = flag(args, "--object").filter(|s| !s.is_empty());
+
+    let store = VectorStore::open(&db)?;
+    let retired = store.structure_memory(
+        &agent,
+        id,
+        &mem_type,
+        subject.as_deref(),
+        relation.as_deref(),
+        object.as_deref(),
+    )?;
+    let out = crate::persist::export_path_from_env(&db);
+    crate::persist::export_jsonl(&store, &out)?;
+    eprintln!(
+        "structured memory {id} for {agent}; superseded {retired} prior fact(s); re-exported {}",
+        out.display()
+    );
     Ok(())
 }
 
@@ -383,10 +435,11 @@ pub async fn serve_stdio() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        do_recall, do_store, ConsolidateArgs, MemoryServer, RecallArgs, StoreArgs, DEFAULT_K,
+        cli_structure, do_recall, do_store, flag, ConsolidateArgs, MemoryServer, RecallArgs,
+        StoreArgs, DEFAULT_K,
     };
     use crate::consolidate::{ConsolidationConfig, FixedClock};
-    use crate::embed::{model_dir, model_paths, Embedder};
+    use crate::embed::{model_dir, model_paths, Embedder, EMBED_DIM};
     use crate::store::VectorStore;
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ProtocolVersion;
@@ -412,6 +465,90 @@ mod tests {
         let store = VectorStore::open(dir.path().join("m.db").to_str().unwrap()).unwrap();
         let server = MemoryServer::new(store, model_dir());
         (dir, server)
+    }
+
+    // ─── `structure` subcommand (Mneme's write-back path) ────────────────────
+
+    #[test]
+    fn flag_reads_the_value_after_a_named_flag() {
+        let args: Vec<String> = ["structure", "--agent", "mneme", "--id", "7"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(flag(&args, "--agent").as_deref(), Some("mneme"));
+        assert_eq!(flag(&args, "--id").as_deref(), Some("7"));
+        assert_eq!(flag(&args, "--missing"), None);
+    }
+
+    /// End-to-end `structure` subcommand (no ONNX needed — structuring never touches the embedding):
+    /// two facts about the same key are seeded, structured in order, and the newer supersedes the older;
+    /// the DB reflects the current value AND the re-exported JSONL carries the structure so it travels.
+    #[test]
+    fn cli_structure_writes_structure_supersedes_and_reexports_the_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("memory.db");
+        let dbs = db.to_string_lossy().to_string();
+        {
+            let mut s = VectorStore::open(&dbs).unwrap();
+            let e = vec![0.0f32; EMBED_DIM];
+            s.insert("mneme", "ball is blue", &e, 1.0, 100).unwrap();
+            s.insert("mneme", "ball is green", &e, 1.0, 200).unwrap();
+        }
+        let sv =
+            |parts: &[&str]| -> Vec<String> { parts.iter().map(ToString::to_string).collect() };
+        cli_structure(&sv(&[
+            "structure",
+            "--db",
+            &dbs,
+            "--agent",
+            "mneme",
+            "--id",
+            "1",
+            "--type",
+            "semantic",
+            "--subject",
+            "ball",
+            "--relation",
+            "color",
+            "--object",
+            "blue",
+        ]))
+        .unwrap();
+        cli_structure(&sv(&[
+            "structure",
+            "--db",
+            &dbs,
+            "--agent",
+            "mneme",
+            "--id",
+            "2",
+            "--subject",
+            "ball",
+            "--relation",
+            "color",
+            "--object",
+            "green",
+        ]))
+        .unwrap();
+
+        let s = VectorStore::open(&dbs).unwrap();
+        assert_eq!(
+            s.active_object("mneme", "ball", "color")
+                .unwrap()
+                .as_deref(),
+            Some("green"),
+            "the newer fact is the current value"
+        );
+        let export = crate::persist::export_path_from_env(&dbs);
+        let jsonl = std::fs::read_to_string(&export).unwrap();
+        assert!(
+            jsonl.contains("\"subject\":\"ball\""),
+            "structure travels: {jsonl}"
+        );
+        assert!(
+            jsonl.contains("\"object\":\"green\""),
+            "current object travels: {jsonl}"
+        );
     }
 
     // ─── Tool API (agent scoping) ────────────────────────────────────────────

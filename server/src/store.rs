@@ -354,6 +354,11 @@ impl VectorStore {
             }
         }
         let conn = Connection::open(path)?;
+        // WAL + a busy timeout so the live MCP server and the `structure`/`fix` CLI can hold concurrent
+        // connections to the same db: the PostToolUse structuring hook writes structure via the CLI while
+        // the server is running. WAL lets readers and a single writer proceed without blocking each other,
+        // and the timeout makes a second writer WAIT for the lock instead of failing with SQLITE_BUSY.
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS memories (
                  id            INTEGER PRIMARY KEY,
@@ -484,6 +489,50 @@ impl VectorStore {
             )
             .optional()?
             .flatten())
+    }
+
+    /// The `valid_from` of a memory row (unix seconds), or an error if the row is missing.
+    ///
+    /// # Errors
+    /// Returns an error on SQL failure or if no row has `id`.
+    pub fn valid_from_of(&self, id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT valid_from FROM memories WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, i64>(0),
+        )?)
+    }
+
+    /// Structure a stored memory (Mneme's write-back) and deterministically supersede prior ACTIVE facts
+    /// for its key. Sets `(type, subject, relation, object)` on `id`; then — only when BOTH `subject` and
+    /// `relation` are present — retires older active facts with the same `(agent_id, subject, relation)` by
+    /// setting their `valid_to` to this memory's `valid_from` (supersede-don't-delete; see
+    /// [`Self::supersede_by_key`]). An unstructurable memory (no subject/relation) is typed but supersedes
+    /// nothing. Returns the number of prior facts retired.
+    ///
+    /// This is the operation the PostToolUse structuring hook drives: a raw `store` lands the text
+    /// instantly, then Mneme calls this to add the structure and retire the fact it replaces — no
+    /// similarity, no LLM in the store (staleness is undetectable by embedding similarity — MemStrata).
+    ///
+    /// # Errors
+    /// Returns an error if the structure write, the `valid_from` lookup, or the supersession fails.
+    pub fn structure_memory(
+        &self,
+        agent_id: &str,
+        id: i64,
+        mem_type: &str,
+        subject: Option<&str>,
+        relation: Option<&str>,
+        object: Option<&str>,
+    ) -> Result<usize> {
+        self.set_structure(id, mem_type, subject, relation, object)?;
+        match (subject, relation) {
+            (Some(s), Some(r)) if !s.is_empty() && !r.is_empty() => {
+                let vf = self.valid_from_of(id)?;
+                self.supersede_by_key(agent_id, s, r, vf)
+            }
+            _ => Ok(0),
+        }
     }
 
     /// BM25 full-text recall for `agent_id` — the lexical leg of hybrid retrieval. Returns `(id, bm25_rank)`
@@ -927,6 +976,61 @@ mod tests {
             s.count_memories().unwrap(),
             2,
             "the superseded row is KEPT (bi-temporal), not deleted"
+        );
+    }
+
+    #[test]
+    fn structure_memory_sets_structure_then_supersedes_the_older_same_key_fact() {
+        let (_d, mut s) = open_temp();
+        let blue = s
+            .insert("mneme", "ball is blue", &emb(0.1), 1.0, 100)
+            .unwrap();
+        let green = s
+            .insert("mneme", "ball is green", &emb(0.2), 1.0, 200)
+            .unwrap();
+
+        // Structuring the older fact first supersedes nothing (no prior same-key fact).
+        assert_eq!(
+            s.structure_memory(
+                "mneme",
+                blue,
+                "semantic",
+                Some("ball"),
+                Some("color"),
+                Some("blue")
+            )
+            .unwrap(),
+            0,
+        );
+        // Structuring the newer fact retires exactly the older 'blue' — via its OWN valid_from (200).
+        assert_eq!(
+            s.structure_memory(
+                "mneme",
+                green,
+                "semantic",
+                Some("ball"),
+                Some("color"),
+                Some("green")
+            )
+            .unwrap(),
+            1,
+        );
+        assert_eq!(
+            s.active_object("mneme", "ball", "color")
+                .unwrap()
+                .as_deref(),
+            Some("green"),
+        );
+        assert_eq!(s.count_memories().unwrap(), 2, "the retired row is kept");
+
+        // An unstructurable memory (no subject/relation) is typed but supersedes nothing.
+        let vague = s
+            .insert("mneme", "hmm, unclear note", &emb(0.3), 1.0, 300)
+            .unwrap();
+        assert_eq!(
+            s.structure_memory("mneme", vague, "episodic", None, None, None)
+                .unwrap(),
+            0,
         );
     }
 
