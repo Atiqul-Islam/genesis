@@ -211,6 +211,16 @@ function main() {
           dt.indexOf("--run-cli demote") !== -1);
   }
 
+  const memoryCmd = path.join(REPO, "commands", "memory.md");
+  check("commands/memory.md exists (the /genesis:memory suite)", isFile(memoryCmd));
+  if (isFile(memoryCmd)) {
+    const mt = readText(memoryCmd);
+    check("commands/memory.md routes to the mneme agent", mt.toLowerCase().indexOf("mneme") !== -1);
+    check("commands/memory.md documents all five subcommands",
+          ["validate", "serialize", "deserialize", "merge", "migrate"].every((s) => mt.indexOf(s) !== -1));
+    check("commands/memory.md passes $ARGUMENTS (the subcommand)", mt.indexOf("$ARGUMENTS") !== -1);
+  }
+
   // (agent identity derivation — normalize / resolve_agent / split_args — is now the Rust genesis-hook
   //  binary, covered by hook/src/agent.rs unit tests; the Node port was removed with the other Node hooks.)
   // (drift: committed agents/*.md == genesis-cli build-plugin-agents output — now a Rust integration test

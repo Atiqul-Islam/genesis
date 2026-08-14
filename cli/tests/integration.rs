@@ -228,6 +228,28 @@ fn bootstrap_builds_self_contained_workspace() {
             "{n} installed"
         );
     }
+
+    // Repo-local SessionStart promote-offer hook (workspace-only — the plugin stays dormant-by-default).
+    let settings = read(&target.join(".claude").join("settings.json"));
+    assert!(
+        settings.contains("SessionStart") && settings.contains("--run-hook promote-offer"),
+        "bootstrap wires the repo-local promote-offer SessionStart hook"
+    );
+
+    // Idempotent: a second bootstrap must not duplicate the promote-offer hook.
+    assert_eq!(
+        bootstrap::run(&[
+            target.to_string_lossy().into_owned(),
+            repo_root().to_string_lossy().into_owned(),
+        ]),
+        0
+    );
+    let settings2 = read(&target.join(".claude").join("settings.json"));
+    assert_eq!(
+        settings2.matches("--run-hook promote-offer").count(),
+        1,
+        "promote-offer hook is not duplicated on re-bootstrap"
+    );
 }
 
 // ── drift: committed agents/*.md == what genesis-cli build-plugin-agents regenerates ────────

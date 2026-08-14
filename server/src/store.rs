@@ -535,6 +535,40 @@ impl VectorStore {
         }
     }
 
+    /// ACTIVE memories Mneme has NOT yet structured (no `subject`), as `(id, agent_id, text)` — the input to
+    /// the `/genesis:memory migrate` pass that backfills structure onto pre-0.2.0 flat memories. Optionally
+    /// scoped to one agent. Ordered by id.
+    ///
+    /// # Errors
+    /// Returns an error on any SQL failure.
+    pub fn unstructured(&self, agent: Option<&str>) -> Result<Vec<(i64, String, String)>> {
+        let base = "SELECT id, agent_id, text FROM memories \
+             WHERE (subject IS NULL OR subject = '') AND valid_to IS NULL AND expired_at IS NULL";
+        let map = |r: &rusqlite::Row| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        };
+        let rows = if let Some(a) = agent {
+            let mut stmt = self
+                .conn
+                .prepare(&format!("{base} AND agent_id = ?1 ORDER BY id"))?;
+            let out = stmt
+                .query_map(params![a], map)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            out
+        } else {
+            let mut stmt = self.conn.prepare(&format!("{base} ORDER BY id"))?;
+            let out = stmt
+                .query_map([], map)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            out
+        };
+        Ok(rows)
+    }
+
     /// BM25 full-text recall for `agent_id` — the lexical leg of hybrid retrieval. Returns `(id, bm25_rank)`
     /// (lower rank = better), ACTIVE memories only (same agent / `superseded_by` / bi-temporal filter as
     /// [`Self::knn`]). Empty or symbol-only queries return `[]`.
@@ -1031,6 +1065,37 @@ mod tests {
             s.structure_memory("mneme", vague, "episodic", None, None, None)
                 .unwrap(),
             0,
+        );
+    }
+
+    #[test]
+    fn unstructured_lists_active_unstructured_memories_scoped_by_agent() {
+        let (_d, mut s) = open_temp();
+        let flat = s.insert("a", "a flat memory", &emb(0.1), 1.0, 10).unwrap();
+        let done = s
+            .insert("a", "the ball is blue", &emb(0.2), 1.0, 20)
+            .unwrap();
+        s.structure_memory(
+            "a",
+            done,
+            "semantic",
+            Some("ball"),
+            Some("color"),
+            Some("blue"),
+        )
+        .unwrap();
+        s.insert("b", "other agent flat", &emb(0.3), 1.0, 30)
+            .unwrap();
+
+        let a_flat = s.unstructured(Some("a")).unwrap();
+        assert_eq!(a_flat.len(), 1, "only the still-unstructured 'a' memory");
+        assert_eq!(a_flat[0].0, flat);
+        assert_eq!(a_flat[0].2, "a flat memory");
+
+        assert_eq!(
+            s.unstructured(None).unwrap().len(),
+            2,
+            "both agents' unstructured memories, all-agent scope"
         );
     }
 

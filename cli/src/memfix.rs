@@ -477,29 +477,57 @@ pub fn read_db_memories(path: &Path) -> Result<Option<Vec<MemRecord>>, String> {
     if !has_table {
         return Ok(None);
     }
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by \
-             FROM memories ORDER BY id",
-        )
-        .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(MemRecord {
-                id: r.get(0)?,
-                agent_id: r.get(1)?,
-                text: r.get(2)?,
-                created_at: r.get(3)?,
-                last_used_at: r.get(4)?,
-                use_count: r.get(5)?,
-                base_score: r.get(6)?,
-                superseded_by: r.get(7)?,
-                ..Default::default()
+    // Structure-complete + schema-aware: a 0.2.0 canonical DB carries the structured/bi-temporal columns
+    // (needed for contradiction detection); a legacy 8-column DB does not — reading them there would fail.
+    let cols: HashSet<String> = {
+        let mut s = conn
+            .prepare("PRAGMA table_info(memories)")
+            .map_err(|e| format!("read schema {}: {e}", path.display()))?;
+        let names = s
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("read cols {}: {e}", path.display()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("collect cols {}: {e}", path.display()))?;
+        names
+    };
+    let rows = if cols.contains("subject") {
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {EXPORT_COLUMNS} FROM memories ORDER BY id"
+            ))
+            .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
+        let out = stmt
+            .query_map([], mem_record_from_row)
+            .map_err(|e| format!("query {}: {e}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+        out
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by \
+                 FROM memories ORDER BY id",
+            )
+            .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
+        let out = stmt
+            .query_map([], |r| {
+                Ok(MemRecord {
+                    id: r.get(0)?,
+                    agent_id: r.get(1)?,
+                    text: r.get(2)?,
+                    created_at: r.get(3)?,
+                    last_used_at: r.get(4)?,
+                    use_count: r.get(5)?,
+                    base_score: r.get(6)?,
+                    superseded_by: r.get(7)?,
+                    ..Default::default()
+                })
             })
-        })
-        .map_err(|e| format!("query {}: {e}", path.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+            .map_err(|e| format!("query {}: {e}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+        out
+    };
     Ok(Some(rows))
 }
 
@@ -974,14 +1002,17 @@ pub struct Contradiction {
 #[must_use]
 pub fn contradictions(records: &[MemRecord]) -> Vec<Contradiction> {
     // (agent, subject, relation) -> object -> asserting ids. BTreeMap for deterministic ordering.
-    let mut groups: BTreeMap<(String, String, String), BTreeMap<String, Vec<i64>>> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String, String), BTreeMap<String, Vec<i64>>> =
+        BTreeMap::new();
     for r in records {
         if r.valid_to.is_some() || r.expired_at.is_some() {
             continue; // not active — a retired fact cannot contradict the present
         }
-        let (Some(s), Some(rel), Some(o)) =
-            (r.subject.as_deref(), r.relation.as_deref(), r.object.as_deref())
-        else {
+        let (Some(s), Some(rel), Some(o)) = (
+            r.subject.as_deref(),
+            r.relation.as_deref(),
+            r.object.as_deref(),
+        ) else {
             continue; // unstructured — no identity triple to key on
         };
         if s.is_empty() || rel.is_empty() || o.is_empty() {

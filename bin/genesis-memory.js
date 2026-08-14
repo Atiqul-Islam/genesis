@@ -416,9 +416,10 @@ async function main() {
 
   // Model-free one-shot subcommands: resolve ONLY the server binary and exec it — skip the (potentially
   // large) ONNX model download the stdio server needs. `structure` is the PostToolUse hook's write-back
-  // (Mneme adds structure + supersedes; never embeds); `export` mirrors the DB to JSONL. NOT `import`,
-  // which re-embeds and so falls through to the default path that resolves the model.
-  if (argv[0] === "structure" || argv[0] === "export") {
+  // (Mneme adds structure + supersedes; never embeds); `export` mirrors the DB to JSONL; `unstructured`
+  // lists memories awaiting structure (the migrate input). NOT `import`, which re-embeds and so falls
+  // through to the default path that resolves the model.
+  if (argv[0] === "structure" || argv[0] === "export" || argv[0] === "unstructured") {
     let sbin;
     try {
       sbin = await ensureServerBin();

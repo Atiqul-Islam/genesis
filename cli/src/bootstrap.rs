@@ -116,6 +116,61 @@ fn write_mcp(target: &Path, launcher: &Path, mem_db: &Path, mem_export: &Path) -
     p
 }
 
+/// Install a REPO-LOCAL `SessionStart` promote-offer hook into `<target>/.claude/settings.json` (merge,
+/// preserving the user's own settings/hooks). This is how the "offer to promote on startup" works WITHOUT
+/// breaking the plugin's dormant-by-default posture: the offer lives in THIS workspace's project settings,
+/// so it fires only here; the plugin's own `hooks/hooks.json` still wires no main-thread SessionStart. The
+/// hook self-silences once a Genesis agent is promoted to main (see `genesis-hook promote-offer`), and it is
+/// fail-open. Idempotent: re-bootstrapping never duplicates it.
+fn write_promote_offer_hook(target: &Path, launcher: &Path) -> PathBuf {
+    let p = target.join(".claude").join("settings.json");
+    let command = format!(
+        "node \"{}\" --run-hook promote-offer",
+        launcher.to_string_lossy()
+    );
+    let mut settings = fsx::read_json(&p)
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    // `settings` is always an object here (the filter/unwrap above guarantees it), but the crate denies
+    // `expect_used`, so guard instead of asserting. The else branch is unreachable in practice.
+    let Some(obj) = settings.as_object_mut() else {
+        let _ = fsx::write_text(&p, &fsx::json_pretty(&settings));
+        return p;
+    };
+    let hooks = obj
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut();
+    if let Some(hooks) = hooks {
+        let sessionstart = hooks
+            .entry("SessionStart")
+            .or_insert_with(|| json!([]))
+            .as_array_mut();
+        if let Some(arr) = sessionstart {
+            // Idempotent: skip if a promote-offer command is already wired here.
+            let already = arr.iter().any(|blk| {
+                blk.get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hs| {
+                        hs.iter().any(|h| {
+                            h.get("command")
+                                .and_then(Value::as_str)
+                                .is_some_and(|c| c.contains("--run-hook promote-offer"))
+                        })
+                    })
+            });
+            if !already {
+                arr.push(json!({
+                    "matcher": "startup|resume|compact",
+                    "hooks": [{ "type": "command", "command": command }],
+                }));
+            }
+        }
+    }
+    let _ = fsx::write_text(&p, &fsx::json_pretty(&settings));
+    p
+}
+
 /// Entry point. Returns the process exit code.
 #[must_use]
 pub fn run(args: &[String]) -> i32 {
@@ -165,6 +220,9 @@ pub fn run(args: &[String]) -> i32 {
     let launcher = dest.join("bin").join("genesis-memory.js");
     let mcp_path = write_mcp(&target, &launcher, &mem_db, &mem_export);
 
+    // 3b. Install the repo-local SessionStart promote-offer hook (workspace-only; plugin stays dormant).
+    let settings_path = write_promote_offer_hook(&target, &launcher);
+
     // 4. Manage the .gitignore block (commit the brain + portable memory; ignore machine-local junk).
     merge_gitignore(&target);
 
@@ -189,6 +247,7 @@ pub fn run(args: &[String]) -> i32 {
             "memory_export": mem_export.to_string_lossy(),
             "mcp_json": mcp_path.to_string_lossy(),
             "mcp_server": format!("node {}", launcher.to_string_lossy()),
+            "promote_offer_settings": settings_path.to_string_lossy(),
             "next": "Open Claude Code in the repo; talk to Sensei to build agents.",
         }))
     );

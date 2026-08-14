@@ -339,6 +339,14 @@ function testModelFreeSubcommand() {
     });
     check("export: model-free fast-path exits 0 offline", p2.status === 0);
     check("export: subcommand forwarded", (p2.stdout || "").includes("ARGV=export"));
+
+    const p3 = spawnSync(NODE, [LAUNCHER, "unstructured", "--agent", "a"], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_MEMORY_BIN: bin }),
+    });
+    check("unstructured: model-free fast-path exits 0 offline", p3.status === 0);
+    check("unstructured: subcommand forwarded", (p3.stdout || "").includes("ARGV=unstructured,--agent,a"));
   });
 }
 

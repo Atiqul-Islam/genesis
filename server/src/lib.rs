@@ -296,6 +296,8 @@ impl ServerHandler for MemoryServer {
 /// - `genesis-memory-server import [in.jsonl] [db]` — rebuild the DB from a JSONL export.
 /// - `genesis-memory-server structure --agent <id> --id <n> [--type|--subject|--relation|--object|--db ...]`
 ///   — Mneme's write-back (add structure + supersede + re-export); driven by the PostToolUse hook.
+/// - `genesis-memory-server unstructured [--agent <id>] [--db ...]` — list memories awaiting structure (JSON
+///   on stdout); the input to `/genesis:memory migrate`.
 /// - (no subcommand) — run the MCP memory server over stdio (the normal mode).
 ///
 /// # Errors
@@ -307,6 +309,7 @@ pub async fn run() -> Result<()> {
         Some("export") => cli_export(args.get(2).cloned(), args.get(3).cloned()),
         Some("import") => cli_import(args.get(2).cloned(), args.get(3).cloned()),
         Some("structure") => cli_structure(&args),
+        Some("unstructured") => cli_unstructured(&args),
         _ => serve_stdio().await,
     }
 }
@@ -390,6 +393,29 @@ fn cli_structure(args: &[String]) -> Result<()> {
     eprintln!(
         "structured memory {id} for {agent}; superseded {retired} prior fact(s); re-exported {}",
         out.display()
+    );
+    Ok(())
+}
+
+/// `unstructured [--agent <id>] [--db path]` — list ACTIVE memories Mneme has not yet structured, as JSON on
+/// STDOUT: `{"count": N, "unstructured": [{id, agent_id, text}, ...]}`. The input to `/genesis:memory
+/// migrate`: Mneme reads this, then classifies + structures each one. Read-only, no ONNX model loaded.
+///
+/// # Errors
+/// Returns an error if the store open or the query fails.
+fn cli_unstructured(args: &[String]) -> Result<()> {
+    let db = flag(args, "--db").unwrap_or_else(crate::store::db_path_from_env);
+    let agent = flag(args, "--agent");
+    let store = VectorStore::open(&db)?;
+    let rows = store.unstructured(agent.as_deref())?;
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, agent_id, text)| serde_json::json!({"id": id, "agent_id": agent_id, "text": text}))
+        .collect();
+    // Result goes to STDOUT (Mneme parses it); diagnostics elsewhere go to stderr.
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({"count": items.len(), "unstructured": items}))?
     );
     Ok(())
 }
