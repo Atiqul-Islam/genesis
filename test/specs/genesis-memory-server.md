@@ -40,8 +40,8 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 1. An MCP client that completes `initialize` sees a server advertising a tools capability and protocol version `2024-11-05`.
 2. `tools/list` includes the tools `store`, `recall`, and `consolidate`.
 3. A memory sent to `store` for an agent is afterwards returned by a `recall` of closely related (paraphrased) text for that same agent, when that memory is the only one stored or is clearly nearest among deliberately dissimilar alternatives.
-4. `recall` returns at most `k` memories, ordered nearest first (ascending distance).
-5. `recall` of text identical to a stored memory returns that memory with distance `0.0`.
+4. `recall` returns at most `k` memories, ordered most relevant first (descending score). [0.2.0: was "ascending distance" under pure-KNN; now the hybrid pipeline's composite `score`, higher = better.]
+5. `recall` of text identical to a stored memory returns that memory first with a positive relevance score. [0.2.0: was "distance `0.0`" under pure-KNN.]
 6. `recall` for one `agent_id` never returns memories stored under a different `agent_id`.
 7. `recall` called without `k` still succeeds and returns at most 5 memories.
 8. `recall` never returns a memory that a previous `consolidate` retired as a duplicate.
@@ -52,7 +52,7 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 13. A near-duplicate memory stops being returned separately by `recall` only after an explicit `consolidate` call; storing it alone never retires anything.
 14. The server serves over stdio and exits cleanly when the client closes stdin.
 15. The server answers `store` / `recall` / `consolidate` calls with no network access at request time.
-16. `recall` reports each hit's identifier, original text, and distance in a machine-readable payload rather than as prose.
+16. `recall` reports each hit's identifier, original text, and relevance score in a machine-readable payload rather than as prose.
 17. The server reads its database location from the environment, so two clients configured with different locations never see each other's memories.
 
 ### Acceptance Criteria
@@ -60,8 +60,8 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 1. An `initialize` response advertises `tools` under `capabilities` and `protocolVersion == "2024-11-05"`.
 2. A `tools/list` response contains the tool names `store`, `recall`, and `consolidate`.
 3. Given an empty store, when `store` is called with `agent_id` A and text T and `recall` is then called with `agent_id` A and a paraphrase of T, the returned array contains an entry whose `text` equals T; the same holds when the store also contains the calibrated dissimilar-decoy fixture, in which case T's entry is first. No absolute similarity threshold is asserted.
-4. Given more stored memories than `k`, a `recall` with `k` returns exactly `k` entries whose `distance` values are non-decreasing.
-5. Given a memory stored with text T, a `recall` with query text T returns that memory first with `distance` exactly `0.0`.
+4. Given more stored memories than `k`, a `recall` with `k` returns exactly `k` entries whose `score` values are non-increasing.
+5. Given a memory stored with text T, a `recall` with query text T returns that memory first with a positive `score`.
 6. Given one memory under `agent_id` A and one under `agent_id` B, a `recall` for B contains no memory belonging to A.
 7. Given 6 or more memories for `agent_id` A, a `recall` for A whose arguments omit `k` returns exactly 5 entries.
 8. Given two memories merged by `consolidate`, a `recall` never returns the row whose `superseded_by` is non-null.
@@ -72,7 +72,7 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 13. Given two memories for the same `agent_id` whose cosine similarity is at or above `tau_merge`, a `recall` issued after `store` but before `consolidate` returns both, and a `recall` issued after `consolidate` returns exactly one of them and never the superseded one.
 14. A server child process that receives EOF on stdin terminates with exit status 0.
 15. With the model already present on disk, a `tools/call` for each of `store`, `recall`, and `consolidate` completes successfully while the suite runs with outbound network access unavailable.
-16. The text content block of a `recall` result parses as a JSON array whose every element has exactly the keys `id` (integer), `text` (string), and `distance` (number).
+16. The text content block of a `recall` result parses as a JSON array whose every element has exactly the keys `id` (integer), `text` (string), and `score` (number).
 17. Given two server processes launched with `GENESIS_MEMORY_DB` pointing at two different temporary files, a memory stored through the first is absent from a `recall` issued to the second for the same `agent_id`.
 
 ### Implementation Requirements
@@ -89,8 +89,8 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 **Recall response payload**
 
 - Serialize the `recall` result as a JSON array of objects (ratified choice — unsourced shape; rationale: §2.3a sources only the `ContentBlock::text` envelope, and a machine-readable body makes criteria 3/4/5/16 assertable instead of substring-sniffing prose).
-- Give each `recall` result object exactly the keys `id`, `text`, and `distance` (ratified choice — unsourced key names; rationale: same as above).
-- Order the `recall` result array by ascending `distance`, nearest first — honouring §2.3b's `ORDER BY distance LIMIT k`.
+- Give each `recall` result object exactly the keys `id`, `text`, and `score` (ratified choice — unsourced key names; rationale: same as above). [0.2.0: `distance` renamed to `score`, higher = better.]
+- Order the `recall` result array by descending `score`, most relevant first. [0.2.0: recall is now the hybrid pipeline (vector KNN + BM25 → RRF → recency/importance composite → MMR); the §2.3b `ORDER BY distance LIMIT k` remains the vector leg internally.]
 - Carry that JSON array as the string inside a single `ContentBlock::text`, keeping §2.3a's sourced `CallToolResult::success(vec![ContentBlock::text(..)])` envelope unchanged.
 
 **Database location**
