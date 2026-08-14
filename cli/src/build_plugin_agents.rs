@@ -1,5 +1,5 @@
-//! `genesis-cli build-plugin-agents [repo_root]` — regenerate the PLUGIN-shipped `agents/{sensei,method}.md`
-//! from the team sources. Port of build_plugin_agents.js.
+//! `genesis-cli build-plugin-agents [repo_root]` — regenerate the PLUGIN-shipped
+//! `agents/{sensei,method,mneme}.md` from the team sources. Port of build_plugin_agents.js.
 //!
 //! Different from `assemble`: a plugin-shipped agent CANNOT declare `hooks`/`mcpServers`/`permissionMode`
 //! in frontmatter (security-blocked), so these carry ONLY name/description/tools/skills, and their memory
@@ -60,7 +60,7 @@ pub fn run(args: &[String]) -> i32 {
     let mem = memory_tools(&plugin);
 
     let mut out = Vec::new();
-    for name in ["sensei", "method"] {
+    for name in ["sensei", "method", "mneme"] {
         let Some(meta) = render::builtin_meta(name) else {
             continue; // unreachable for the built-in team
         };

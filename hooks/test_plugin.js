@@ -92,7 +92,7 @@ function main() {
   check("plugin.json parses and name == genesis", pj.name === "genesis");
 
   // ---- agents/*.md ----
-  for (const [name, wants_agent] of [["sensei", true], ["method", false]]) {
+  for (const [name, wants_agent] of [["sensei", true], ["method", false], ["mneme", false]]) {
     const [fm, body] = frontmatter_and_body(path.join(REPO, "agents", name + ".md"));
     const keys = new Set(fm_keys(fm));
     check(name + ".md frontmatter has NO hooks/mcpServers/permissionMode",
@@ -114,7 +114,7 @@ function main() {
   const hj = JSON.parse(readText(path.join(REPO, "hooks", "hooks.json")));
   const H = hj.hooks || {};
   check("hooks.json parses with a 'hooks' object", H && typeof H === "object" && !Array.isArray(H) && Object.keys(H).length > 0);
-  for (const ev of ["SubagentStart", "PreToolUse", "SubagentStop"]) {
+  for (const ev of ["SubagentStart", "PreToolUse", "PostToolUse", "SubagentStop"]) {
     check("hooks.json wires " + ev, ev in H);
   }
   check("hooks.json does NOT wire main-thread SessionStart (dormant)", !("SessionStart" in H));
@@ -150,11 +150,20 @@ function main() {
   const pre_matchers = new Set((H.PreToolUse || []).map((blk) => blk.matcher));
   check("PreToolUse matches Write|Edit and Bash", ["Write|Edit", "Bash"].every((m) => pre_matchers.has(m)));
   const start_matchers = (H.SubagentStart || []).map((blk) => blk.matcher || "").join(" ");
-  check("SubagentStart injects for BOTH sensei and method",
-        start_matchers.indexOf("sensei") !== -1 && start_matchers.indexOf("method") !== -1);
+  check("SubagentStart injects for sensei, method, AND mneme",
+        ["sensei", "method", "mneme"].every((a) => start_matchers.indexOf(a) !== -1));
   const sub_matchers = (H.SubagentStop || []).map((blk) => blk.matcher || "").join(" ");
-  check("SubagentStop enforces on BOTH sensei and method",
-        sub_matchers.indexOf("sensei") !== -1 && sub_matchers.indexOf("method") !== -1);
+  check("SubagentStop enforces on sensei, method, AND mneme",
+        ["sensei", "method", "mneme"].every((a) => sub_matchers.indexOf(a) !== -1));
+  // PostToolUse: Mneme structures each memory the moment the genesis-memory `store` tool runs.
+  const post = H.PostToolUse || [];
+  const post_store = post.find((blk) => (blk.matcher || "").indexOf("genesis-memory__store") !== -1);
+  check("PostToolUse matches the genesis-memory store tool", !!post_store);
+  const structHooks = post_store ? (post_store.hooks || []) : [];
+  check("PostToolUse store hook is a fast Haiku agent hook that injects $ARGUMENTS",
+        structHooks.some((h) => h.type === "agent" && (h.model || "").indexOf("haiku") !== -1 && (h.prompt || "").indexOf("$ARGUMENTS") !== -1));
+  check("PostToolUse store hook drives the `structure` write-back via the launcher",
+        structHooks.some((h) => (h.prompt || "").indexOf("structure --db") !== -1 && (h.prompt || "").indexOf("bin/genesis-memory.js") !== -1));
   const subHooks = [];
   for (const blk of H.SubagentStop) for (const h of blk.hooks) subHooks.push(h);
   check("SubagentStop runs validate (command) THEN review (built-in agent hook)",

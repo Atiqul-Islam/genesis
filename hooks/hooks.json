@@ -3,7 +3,7 @@
   "hooks": {
     "SubagentStart": [
       {
-        "matcher": "sensei|genesis:sensei|method|genesis:method",
+        "matcher": "sensei|genesis:sensei|method|genesis:method|mneme|genesis:mneme",
         "hooks": [
           {
             "type": "command",
@@ -36,9 +36,22 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_genesis_genesis-memory__store",
+        "hooks": [
+          {
+            "type": "agent",
+            "model": "claude-haiku-4-5-20251001",
+            "timeout": 60,
+            "prompt": "You are Mneme, the Genesis memory structurer, running immediately after ONE memory was stored via the genesis-memory `store` tool. Structure that one memory so the store stays contradiction-free, then stop. FAIL-OPEN: if anything is unclear or a step errors, stop quietly and output nothing — never block the session.\n\nFrom the hook input (in $ARGUMENTS): take the memory `text` and `agent_id` from `tool_input`, and the new memory's integer id from `tool_response` (the `store` tool returns the id as its text output — parse the integer). If you cannot determine the id, agent_id, or text, stop.\n\nClassify the memory:\n1. type — one of semantic (a durable fact or preference), episodic (a specific past event), procedural (how to do something), or working (a transient note). Default to semantic.\n2. Does it state ONE clear fact as (subject, relation, object)? e.g. 'the ball is blue' -> subject=ball relation=color object=blue; 'Atiqul prefers Rust' -> subject=Atiqul relation=prefers object=Rust. If it does NOT clearly state a single such fact, do NOT invent one — use type only.\n\nWrite the structure back by running EXACTLY this ONCE via the Bash tool (fill the placeholders; include --subject/--relation/--object ONLY when you extracted a clear fact; quote every value):\nnode \"${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js\" structure --db \"${CLAUDE_PROJECT_DIR}/.genesis/memory.db\" --agent \"<agent_id>\" --id <id> --type <type> [--subject \"<subject>\" --relation \"<relation>\" --object \"<object>\"]\n\nSupersession of any older contradicting fact for the same (agent, subject, relation) is done for you by that command — never delete anything, never re-store, never call the memory MCP tools, never edit files. Run the command once, then stop. $ARGUMENTS"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
-        "matcher": "sensei|genesis:sensei|method|genesis:method",
+        "matcher": "sensei|genesis:sensei|method|genesis:method|mneme|genesis:mneme",
         "hooks": [
           {
             "type": "command",

@@ -9,5 +9,9 @@
     "persona-creation",
     "prompt-engineering",
     "expertise-application"
+  ],
+  "mneme": [
+    "memory-management",
+    "expertise-application"
   ]
 }

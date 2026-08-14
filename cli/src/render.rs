@@ -64,6 +64,16 @@ pub fn builtin_meta(name: &str) -> Option<Meta> {
             expertise: strs(&["persona-creation", "prompt-engineering", "expertise-application"]),
             skills: strs(&[]),
         }),
+        "mneme" => Some(Meta {
+            description:
+                "Genesis memory specialist - structures each memory the moment it is written, keeps the store \
+                 contradiction-free via deterministic bi-temporal supersession, and owns the memory suite \
+                 (validate/serialize/deserialize/merge). Never orchestrates."
+                    .to_string(),
+            tools: strs(&["Read", "Write", "Edit", "Bash", "Glob", "Grep"]),
+            expertise: strs(&["memory-management", "expertise-application"]),
+            skills: strs(&[]),
+        }),
         _ => None,
     }
 }

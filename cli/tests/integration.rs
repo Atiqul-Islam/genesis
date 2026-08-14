@@ -244,7 +244,7 @@ fn build_plugin_agents_matches_committed_no_drift() {
     let code = build_plugin_agents::run(&[work.to_string_lossy().into_owned()]);
     assert_eq!(code, 0, "build-plugin-agents exits 0");
 
-    for n in ["sensei", "method"] {
+    for n in ["sensei", "method", "mneme"] {
         let regenerated = read(&work.join("agents").join(format!("{n}.md")));
         let committed = read(&src.join("agents").join(format!("{n}.md")));
         assert_eq!(
