@@ -286,6 +286,62 @@ function testSync() {
   });
 }
 
+// A tiny REAL executable that forwards its argv to a Node "fake server" printing MODEL=<env> and ARGV=<...>.
+// Needed to test subcommand fast-paths: argv[0] is a keyword (`structure`/`export`), so the server binary is
+// spawned as `<bin> structure …` — GENESIS_MEMORY_BIN=NODE can't be used (node would treat `structure` as a
+// script). A shell/.cmd wrapper lets GENESIS_MEMORY_BIN be an executable that execs node with the keyword.
+function makeExecWrapper(td) {
+  const fake = path.join(td, "fake_argv_server.js");
+  fs.writeFileSync(
+    fake,
+    [
+      "'use strict';",
+      "process.stdout.write('MODEL=' + (process.env.GENESIS_MODEL_DIR || '') + '\\n');",
+      "process.stdout.write('ARGV=' + process.argv.slice(2).join(',') + '\\n');",
+      "process.exit(0);",
+    ].join("\n")
+  );
+  if (process.platform === "win32") {
+    const bat = path.join(td, "server.cmd");
+    fs.writeFileSync(bat, '@echo off\r\n"' + process.execPath + '" "' + fake + '" %*\r\n');
+    return bat;
+  }
+  const sh = path.join(td, "server.sh");
+  fs.writeFileSync(sh, '#!/bin/sh\nexec "' + process.execPath + '" "' + fake + '" "$@"\n');
+  fs.chmodSync(sh, 0o755);
+  return sh;
+}
+
+// ── model-free fast-path: `structure` / `export` resolve ONLY the server binary (no model download) ──
+function testModelFreeSubcommand() {
+  withTempDir((td) => {
+    const bin = makeExecWrapper(td);
+    // `structure` with NO GENESIS_MODEL_DIR and NO network must still exit 0 — proving the launcher takes
+    // the model-free fast-path (the default path would try to download the ONNX model and fail offline).
+    const proc = spawnSync(NODE, [LAUNCHER, "structure", "--agent", "a", "--id", "1"], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_MEMORY_BIN: bin }), // deliberately no GENESIS_MODEL_DIR
+    });
+    check("structure: model-free fast-path exits 0 offline (no model download)", proc.status === 0);
+    check(
+      "structure: subcommand argv forwarded to the server binary",
+      (proc.stdout || "").includes("ARGV=structure,--agent,a,--id,1")
+    );
+    check(
+      "structure: GENESIS_MODEL_DIR not forced (env passthrough)",
+      (proc.stdout || "").includes("MODEL=\n")
+    );
+    const p2 = spawnSync(NODE, [LAUNCHER, "export"], {
+      encoding: "utf-8",
+      timeout: 60000,
+      env: baseEnv({ GENESIS_MEMORY_BIN: bin }),
+    });
+    check("export: model-free fast-path exits 0 offline", p2.status === 0);
+    check("export: subcommand forwarded", (p2.stdout || "").includes("ARGV=export"));
+  });
+}
+
 function main() {
   check("launcher file exists", fs.existsSync(LAUNCHER));
   testTransparentExec();
@@ -296,6 +352,7 @@ function main() {
   testRunHook();
   testRunCli();
   testSync();
+  testModelFreeSubcommand();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

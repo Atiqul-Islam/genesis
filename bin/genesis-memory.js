@@ -325,7 +325,9 @@ async function syncRepo(genesisHome) {
 }
 
 function execServer(binPath, modelDir) {
-  const env = Object.assign({}, process.env, { GENESIS_MODEL_DIR: modelDir });
+  // Only override GENESIS_MODEL_DIR when a model dir was actually resolved (the stdio server + `import`
+  // need it); model-free one-shots (`structure`, `export`) pass the environment through untouched.
+  const env = modelDir ? Object.assign({}, process.env, { GENESIS_MODEL_DIR: modelDir }) : process.env;
   const child = childProcess.spawn(binPath, process.argv.slice(2), { stdio: "inherit", env });
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGBREAK"];
@@ -409,6 +411,23 @@ async function main() {
       log("ERROR: " + (e instanceof LauncherError ? e.message : e && e.stack ? e.stack : String(e)));
       process.exit(1);
     }
+    return;
+  }
+
+  // Model-free one-shot subcommands: resolve ONLY the server binary and exec it — skip the (potentially
+  // large) ONNX model download the stdio server needs. `structure` is the PostToolUse hook's write-back
+  // (Mneme adds structure + supersedes; never embeds); `export` mirrors the DB to JSONL. NOT `import`,
+  // which re-embeds and so falls through to the default path that resolves the model.
+  if (argv[0] === "structure" || argv[0] === "export") {
+    let sbin;
+    try {
+      sbin = await ensureServerBin();
+    } catch (e) {
+      log("ERROR: " + (e instanceof LauncherError ? e.message : e && e.stack ? e.stack : String(e)));
+      process.exit(1);
+      return;
+    }
+    execServer(sbin); // no model dir — pass the environment through untouched
     return;
   }
 
