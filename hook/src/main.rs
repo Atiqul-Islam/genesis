@@ -13,6 +13,7 @@ fn main() {
         "inject" => genesis_hook::inject::run(&rest),
         "validate" => genesis_hook::validate::run(&rest),
         "session-pointer" => genesis_hook::session_pointer::run(&rest),
+        "promote-offer" => genesis_hook::promote_offer::run(&rest),
         // Unknown subcommand -> fail-open no-op (matches the Node hooks' "not our event -> allow").
         _ => std::process::exit(0),
     }
