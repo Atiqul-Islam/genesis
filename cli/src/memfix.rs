@@ -948,6 +948,125 @@ pub fn canonical_paths(repo: &Path) -> (PathBuf, PathBuf) {
     (db, jsonl)
 }
 
+/// A semantic contradiction: one `(agent_id, subject, relation)` key asserted with 2+ distinct objects
+/// among ACTIVE, fully-structured memories — "the ball is blue" vs "the ball is green". This is THE conflict
+/// Mneme surfaces. Detection is deterministic (keyed on the identity triple), never similarity/LLM — cosine
+/// similarity cannot tell a contradiction from agreement (MemStrata: AUROC ~= chance).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Contradiction {
+    /// The agent the contradicting memories belong to.
+    pub agent_id: String,
+    /// The shared subject.
+    pub subject: String,
+    /// The shared relation.
+    pub relation: String,
+    /// The distinct conflicting objects (sorted, deduped).
+    pub objects: Vec<String>,
+    /// The ids of the memories asserting them (sorted).
+    pub ids: Vec<i64>,
+}
+
+/// Find semantic contradictions among `records`: ACTIVE, fully-structured memories that share an
+/// `(agent_id, subject, relation)` key but assert DIFFERENT objects. Only records with non-empty
+/// subject/relation/object AND active bi-temporal validity (`valid_to` and `expired_at` both null)
+/// participate — a superseded fact is history, not a live contradiction. Deterministic and sorted for
+/// stable output. No similarity, no LLM.
+#[must_use]
+pub fn contradictions(records: &[MemRecord]) -> Vec<Contradiction> {
+    // (agent, subject, relation) -> object -> asserting ids. BTreeMap for deterministic ordering.
+    let mut groups: BTreeMap<(String, String, String), BTreeMap<String, Vec<i64>>> = BTreeMap::new();
+    for r in records {
+        if r.valid_to.is_some() || r.expired_at.is_some() {
+            continue; // not active — a retired fact cannot contradict the present
+        }
+        let (Some(s), Some(rel), Some(o)) =
+            (r.subject.as_deref(), r.relation.as_deref(), r.object.as_deref())
+        else {
+            continue; // unstructured — no identity triple to key on
+        };
+        if s.is_empty() || rel.is_empty() || o.is_empty() {
+            continue;
+        }
+        groups
+            .entry((r.agent_id.clone(), s.to_string(), rel.to_string()))
+            .or_default()
+            .entry(o.to_string())
+            .or_default()
+            .push(r.id);
+    }
+    let mut out = Vec::new();
+    for ((agent_id, subject, relation), objs) in groups {
+        if objs.len() < 2 {
+            continue; // one object (even asserted many times) agrees with itself — not a contradiction
+        }
+        let objects: Vec<String> = objs.keys().cloned().collect();
+        let mut ids: Vec<i64> = objs.values().flatten().copied().collect();
+        ids.sort_unstable();
+        out.push(Contradiction {
+            agent_id,
+            subject,
+            relation,
+            objects,
+            ids,
+        });
+    }
+    out
+}
+
+/// Minimal HTML-escape for text placed in element content / attribute values.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Render a self-contained (inline-CSS) HTML report of the semantic contradictions the user must resolve.
+/// Deterministic (no timestamp) so it is testable. Lists each conflict's agent, `subject relation`, the
+/// competing objects, and the memory ids — the substrate for Mneme's resolution conversation.
+#[must_use]
+pub fn contradictions_html(conflicts: &[Contradiction], repo: &Path) -> String {
+    use std::fmt::Write as _;
+    let mut rows = String::new();
+    for (i, c) in conflicts.iter().enumerate() {
+        let mut opts = String::new();
+        for o in &c.objects {
+            let _ = write!(opts, "<li><code>{}</code></li>", html_escape(o));
+        }
+        let ids = c
+            .ids
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            rows,
+            "<tr><td>{}</td><td>{}</td><td><code>{}</code> <code>{}</code></td><td><ul>{opts}</ul></td><td>{ids}</td></tr>",
+            i + 1,
+            html_escape(&c.agent_id),
+            html_escape(&c.subject),
+            html_escape(&c.relation),
+        );
+    }
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n\
+         <title>Genesis memory — contradictions to resolve</title>\n\
+         <style>body{{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#111}}\
+         h1{{font-size:1.4rem}}table{{border-collapse:collapse;width:100%}}\
+         th,td{{border:1px solid #ccc;padding:.5rem .6rem;text-align:left;vertical-align:top}}\
+         th{{background:#f4f4f4}}code{{background:#f0f0f0;padding:.05rem .3rem;border-radius:3px}}\
+         ul{{margin:0;padding-left:1.1rem}}.hint{{color:#555}}</style></head>\n<body>\n\
+         <h1>Memory contradictions to resolve</h1>\n\
+         <p class=\"hint\">Repo: <code>{}</code> — {} semantic contradiction(s). For each, the same \
+         <code>subject relation</code> asserts more than one object. Tell Mneme which object is correct for \
+         each; it will keep that one and supersede the rest (kept as history, never deleted).</p>\n\
+         <table><thead><tr><th>#</th><th>agent</th><th>subject / relation</th><th>competing objects</th>\
+         <th>memory ids</th></tr></thead><tbody>\n{rows}</tbody></table>\n</body></html>\n",
+        html_escape(&repo.to_string_lossy()),
+        conflicts.len(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1074,6 +1193,87 @@ mod tests {
             Some("semantic"),
             "type column defaults to 'semantic'"
         );
+    }
+
+    #[test]
+    fn contradictions_flags_same_key_different_object_active_only() {
+        let mk = |id: i64, agent: &str, subj: &str, rel: &str, obj: &str, valid_to: Option<i64>| {
+            MemRecord {
+                id,
+                agent_id: agent.into(),
+                text: format!("{subj} {rel} {obj}"),
+                created_at: id,
+                last_used_at: id,
+                use_count: 0,
+                base_score: 1.0,
+                superseded_by: None,
+                mem_type: Some("semantic".into()),
+                subject: Some(subj.into()),
+                relation: Some(rel.into()),
+                object: Some(obj.into()),
+                valid_from: Some(id),
+                valid_to,
+                ingested_at: Some(id),
+                ..Default::default()
+            }
+        };
+        let recs = vec![
+            mk(1, "a", "ball", "color", "blue", None),
+            mk(2, "a", "ball", "color", "green", None), // contradicts #1
+            mk(3, "a", "sky", "color", "blue", None),   // different subject — no conflict
+            mk(4, "a", "ball", "color", "red", Some(50)), // SUPERSEDED — excluded
+            mk(5, "b", "ball", "color", "green", None), // different agent — separate scope
+        ];
+        let c = contradictions(&recs);
+        assert_eq!(c.len(), 1, "exactly one ACTIVE contradiction");
+        assert_eq!(c[0].agent_id, "a");
+        assert_eq!(c[0].subject, "ball");
+        assert_eq!(c[0].relation, "color");
+        assert_eq!(c[0].objects, vec!["blue".to_string(), "green".to_string()]);
+        assert_eq!(c[0].ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn contradictions_ignores_agreement_and_unstructured() {
+        let base = |id: i64, subj: Option<&str>, rel: Option<&str>, obj: Option<&str>| MemRecord {
+            id,
+            agent_id: "a".into(),
+            text: "t".into(),
+            created_at: id,
+            last_used_at: id,
+            use_count: 0,
+            base_score: 1.0,
+            superseded_by: None,
+            subject: subj.map(Into::into),
+            relation: rel.map(Into::into),
+            object: obj.map(Into::into),
+            valid_from: Some(id),
+            ingested_at: Some(id),
+            ..Default::default()
+        };
+        let recs = vec![
+            base(1, Some("ball"), Some("color"), Some("blue")),
+            base(2, Some("ball"), Some("color"), Some("blue")), // same object — agreement
+            base(3, None, None, None),                          // unstructured — ignored
+            base(4, Some("ball"), Some("color"), None),         // partial — ignored
+        ];
+        assert!(contradictions(&recs).is_empty());
+    }
+
+    #[test]
+    fn contradictions_html_is_self_contained_and_escaped() {
+        let c = vec![Contradiction {
+            agent_id: "a".into(),
+            subject: "ball".into(),
+            relation: "color".into(),
+            objects: vec!["blue".into(), "gr<een>".into()],
+            ids: vec![1, 2],
+        }];
+        let html = contradictions_html(&c, Path::new("/repo"));
+        assert!(html.starts_with("<!doctype html>"));
+        assert!(html.contains("gr&lt;een&gt;"), "objects are HTML-escaped");
+        assert!(html.contains("/repo"));
+        assert!(html.contains("1 semantic contradiction"));
     }
 
     #[test]
