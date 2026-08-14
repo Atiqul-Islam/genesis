@@ -265,6 +265,7 @@ mod tests {
             use_count: 0,
             base_score: 1.0,
             superseded_by: None,
+            ..Default::default()
         }
     }
 

@@ -254,6 +254,7 @@ mod tests {
                 use_count: 2,
                 base_score: 3.5,
                 superseded_by: None,
+                ..Default::default()
             },
             &emb(0.5),
         )
@@ -285,6 +286,7 @@ mod tests {
             use_count: 0,
             base_score: 1.0,
             superseded_by: None,
+            ..Default::default()
         };
         let content = format!(
             "{}\n{}\n",

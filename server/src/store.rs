@@ -84,10 +84,18 @@ impl MemRow {
     }
 }
 
-/// A COMPLETE `memories` row — every column, so it round-trips losslessly through the
-/// JSONL export/import (see [`crate::persist`]). The embedding is deliberately absent:
-/// it is a derived index regenerated from `text` on import, not source data.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// A COMPLETE `memories` row — every SOURCE column, so it round-trips losslessly through the
+/// JSONL export/import (see [`crate::persist`]). The embedding and its metadata
+/// (`embedding_model`/`version`/`dim`/`metric`/`normalized`) are deliberately absent: they
+/// are a derived index regenerated from `text` with the CURRENT model on import, not source
+/// data. Every other column — including the structured `(type, subject, relation, object)`
+/// and the bi-temporal validity/provenance fields — travels, so Mneme's structuring and the
+/// supersede-don't-delete history survive a rebuild-from-JSONL.
+///
+/// The 13 structured/bi-temporal fields all carry `#[serde(default)]`, so a pre-0.2.0 JSONL
+/// export (which lacks them) still parses — they simply come back as `None`, and
+/// [`VectorStore::insert_with_id`] backfills `valid_from`/`ingested_at` from `created_at`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MemRecord {
     /// Row id (== `vec_items.rowid`). Preserved so `superseded_by` links stay valid.
     pub id: i64,
@@ -105,10 +113,50 @@ pub struct MemRecord {
     pub base_score: f64,
     /// The id of the memory that superseded this one, if any (null = active).
     pub superseded_by: Option<i64>,
+    /// The memory type from the taxonomy (semantic/episodic/procedural/...); set by Mneme.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub mem_type: Option<String>,
+    /// Structured subject of the fact `(subject, relation, object)`; set by Mneme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Structured relation of the fact; set by Mneme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
+    /// Structured object of the fact; set by Mneme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    /// Bi-temporal: unix seconds the fact became valid in the world (defaults to `created_at`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<i64>,
+    /// Bi-temporal: unix seconds the fact stopped being valid (null = still active/current).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<i64>,
+    /// Bi-temporal: unix seconds the fact was ingested into the store (defaults to `created_at`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingested_at: Option<i64>,
+    /// Bi-temporal: unix seconds the fact was retracted/expired (null = not expired).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_at: Option<i64>,
+    /// Provenance: where the fact came from (e.g. a session id, a document).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Provenance: the principal the fact is about/for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// Provenance: who asserted the fact (the writing agent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asserted_by: Option<String>,
+    /// Confidence in the fact, 0.0–1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    /// Content-addressed id: `sha256(normalized_text \x1e type \x1e agent_id)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
 }
 
 impl MemRecord {
-    /// Reads a full `MemRecord` from a query row selecting all eight columns in schema order.
+    /// Reads a full `MemRecord` from a query row selecting all columns in [`EXPORT_COLUMNS`] order:
+    /// the 8 base columns (0–7) then the 13 structured/bi-temporal columns (8–20).
     fn from_row(r: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(Self {
             id: r.get(0)?,
@@ -119,6 +167,19 @@ impl MemRecord {
             use_count: r.get(5)?,
             base_score: r.get(6)?,
             superseded_by: r.get(7)?,
+            mem_type: r.get(8)?,
+            subject: r.get(9)?,
+            relation: r.get(10)?,
+            object: r.get(11)?,
+            valid_from: r.get(12)?,
+            valid_to: r.get(13)?,
+            ingested_at: r.get(14)?,
+            expired_at: r.get(15)?,
+            source: r.get(16)?,
+            principal: r.get(17)?,
+            asserted_by: r.get(18)?,
+            confidence: r.get(19)?,
+            content_id: r.get(20)?,
         })
     }
 }
@@ -151,6 +212,17 @@ const MIGRATION_COLUMNS: &[(&str, &str)] = &[
     ("metric", "TEXT"),
     ("normalized", "INTEGER"),
 ];
+
+/// The SOURCE columns that travel in the JSONL export, in [`MemRecord::from_row`] index order:
+/// the 8 base columns then the 13 structured/bi-temporal columns. The 5 embedding-metadata
+/// columns (`embedding_model`/`version`/`dim`/`metric`/`normalized`) are intentionally excluded —
+/// they describe the derived embedding index, which is regenerated with the CURRENT model on
+/// import, so they are not source data. `export_all` and `insert_with_id` share this list so a
+/// round-trip stays lossless and column-aligned.
+const EXPORT_COLUMNS: &str =
+    "id, agent_id, text, created_at, last_used_at, use_count, base_score, \
+     superseded_by, type, subject, relation, object, valid_from, valid_to, ingested_at, \
+     expired_at, source, principal, asserted_by, confidence, content_id";
 
 /// Idempotently bring an existing `memories` table up to the 0.2.0 structured / bi-temporal schema: add ONLY
 /// the columns that are missing (checked via `PRAGMA table_info`), then backfill bi-temporal defaults from
@@ -696,10 +768,9 @@ impl VectorStore {
     /// # Errors
     /// Returns an error if SQL fails.
     pub fn export_all(&self) -> Result<Vec<MemRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by
-               FROM memories ORDER BY id",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {EXPORT_COLUMNS} FROM memories ORDER BY id"
+        ))?;
         let rows = stmt.query_map([], MemRecord::from_row)?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -714,11 +785,22 @@ impl VectorStore {
     /// Returns an error on dimension mismatch or any SQL failure.
     pub fn insert_with_id(&mut self, rec: &MemRecord, embedding: &[f32]) -> Result<()> {
         Self::check_dim(embedding)?;
+        // `type` is NOT NULL DEFAULT 'semantic'; a pre-0.2.0 record carries None -> use the default.
+        let mem_type = rec
+            .mem_type
+            .clone()
+            .unwrap_or_else(|| "semantic".to_string());
+        // Bi-temporal invariants: an active row must have a valid_from/ingested_at. A pre-0.2.0
+        // record lacks them, so backfill from created_at (same rule as `migrate`).
+        let valid_from = rec.valid_from.unwrap_or(rec.created_at);
+        let ingested_at = rec.ingested_at.unwrap_or(rec.created_at);
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO memories
-                 (id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by,
+                  type, subject, relation, object, valid_from, valid_to, ingested_at, expired_at,
+                  source, principal, asserted_by, confidence, content_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 rec.id,
                 rec.agent_id,
@@ -728,11 +810,30 @@ impl VectorStore {
                 rec.use_count,
                 rec.base_score,
                 rec.superseded_by,
+                mem_type,
+                rec.subject,
+                rec.relation,
+                rec.object,
+                valid_from,
+                rec.valid_to,
+                ingested_at,
+                rec.expired_at,
+                rec.source,
+                rec.principal,
+                rec.asserted_by,
+                rec.confidence,
+                rec.content_id,
             ],
         )?;
         tx.execute(
             "INSERT INTO vec_items(rowid, embedding) VALUES (?1, ?2)",
             params![rec.id, bytemuck::cast_slice::<f32, u8>(embedding)],
+        )?;
+        // Keep the FTS index in step so lexical (BM25) recall works after a rebuild-from-JSONL,
+        // not just after live inserts.
+        tx.execute(
+            "INSERT INTO memories_fts(rowid, text) VALUES (?1, ?2)",
+            params![rec.id, rec.text],
         )?;
         tx.commit()?;
         Ok(())
@@ -1238,6 +1339,7 @@ mod tests {
                 use_count: 4,
                 base_score: 1.25,
                 superseded_by: None,
+                ..Default::default()
             },
             &emb(0.3),
         )
@@ -1253,6 +1355,21 @@ mod tests {
                 use_count: 0,
                 base_score: -0.5,
                 superseded_by: Some(1),
+                // The 0.2.0 structured + bi-temporal fields must travel too — a superseded fact
+                // with a full (subject, relation, object) triple, closed validity, and provenance.
+                mem_type: Some("semantic".into()),
+                subject: Some("ball".into()),
+                relation: Some("color".into()),
+                object: Some("blue".into()),
+                valid_from: Some(1500),
+                valid_to: Some(1800),
+                ingested_at: Some(2000),
+                expired_at: None,
+                source: Some("session-42".into()),
+                principal: Some("atiqul".into()),
+                asserted_by: Some("atlas".into()),
+                confidence: Some(0.9),
+                content_id: Some("deadbeef".into()),
             },
             &emb(0.4),
         )

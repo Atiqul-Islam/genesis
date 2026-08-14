@@ -18,7 +18,7 @@ use rusqlite::ffi::sqlite3_auto_extension;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sqlite_vec::sqlite3_vec_init;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Directory names never worth descending into while scanning for stray memory DBs. Includes OS junk
@@ -49,9 +49,12 @@ const ARCHIVE_DIRNAME: &str = "archived-strays";
 /// Bound on scan recursion depth — a backstop against pathological or symlinked trees.
 const MAX_SCAN_DEPTH: usize = 16;
 
-/// A committed memory record. Field names AND order are byte-compatible with the memory server's JSONL
-/// export line (`genesis_memory::store::MemRecord`), so a JSONL written here imports cleanly server-side.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A committed memory record. Field names, order, AND serde attributes are byte-compatible with the memory
+/// server's JSONL export line (`genesis_memory::store::MemRecord`), so a JSONL written here imports cleanly
+/// server-side and, crucially, `read_jsonl`/`db_records` here do NOT silently DROP the 0.2.0 structured +
+/// bi-temporal fields when `fix`/`reconcile`/`sync` round-trips the mirror. Keep this in lock-step with the
+/// server struct (the cli duplicates it because it does not depend on the server crate).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MemRecord {
     /// Row id. Rewritten to a stable 1..N on consolidation (see [`consolidate`]).
     pub id: i64,
@@ -71,6 +74,104 @@ pub struct MemRecord {
     /// rewritten across a cross-DB union so old links cannot be preserved unambiguously — matching the
     /// server's own non-empty union, which also drops the link. Nothing is lost: the memory text stays.
     pub superseded_by: Option<i64>,
+    /// The memory type from the taxonomy (semantic/episodic/procedural/...); set by Mneme.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub mem_type: Option<String>,
+    /// Structured subject of the fact `(subject, relation, object)`; set by Mneme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Structured relation of the fact; set by Mneme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
+    /// Structured object of the fact; set by Mneme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<String>,
+    /// Bi-temporal: unix seconds the fact became valid in the world (defaults to `created_at`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<i64>,
+    /// Bi-temporal: unix seconds the fact stopped being valid (null = still active/current).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<i64>,
+    /// Bi-temporal: unix seconds the fact was ingested into the store (defaults to `created_at`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingested_at: Option<i64>,
+    /// Bi-temporal: unix seconds the fact was retracted/expired (null = not expired).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_at: Option<i64>,
+    /// Provenance: where the fact came from (e.g. a session id, a document).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Provenance: the principal the fact is about/for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// Provenance: who asserted the fact (the writing agent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asserted_by: Option<String>,
+    /// Confidence in the fact, 0.0–1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    /// Content-addressed id: `sha256(normalized_text \x1e type \x1e agent_id)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
+}
+
+/// The SOURCE columns that travel in the JSONL export, in the same order as
+/// `genesis_memory::store`'s `EXPORT_COLUMNS` and [`MemRecord`]'s fields. Shared by [`db_records`]
+/// and [`read_active_with_embeddings`] so the cli's read paths preserve structure.
+const EXPORT_COLUMNS: &str =
+    "id, agent_id, text, created_at, last_used_at, use_count, base_score, \
+     superseded_by, type, subject, relation, object, valid_from, valid_to, ingested_at, \
+     expired_at, source, principal, asserted_by, confidence, content_id";
+
+/// Column name + DDL that bring a memory DB up to the 0.2.0 structured / bi-temporal schema. MUST stay
+/// identical to `genesis_memory::store`'s `MIGRATION_COLUMNS` so the cli and server agree on the canonical
+/// schema (duplicated because the cli does not depend on the server crate).
+const MIGRATION_COLUMNS: &[(&str, &str)] = &[
+    ("type", "TEXT NOT NULL DEFAULT 'semantic'"),
+    ("subject", "TEXT"),
+    ("relation", "TEXT"),
+    ("object", "TEXT"),
+    ("valid_from", "INTEGER"),
+    ("valid_to", "INTEGER"),
+    ("ingested_at", "INTEGER"),
+    ("expired_at", "INTEGER"),
+    ("source", "TEXT"),
+    ("principal", "TEXT"),
+    ("asserted_by", "TEXT"),
+    ("confidence", "REAL"),
+    ("content_id", "TEXT"),
+    ("embedding_model", "TEXT"),
+    ("embedding_version", "TEXT"),
+    ("dim", "INTEGER"),
+    ("metric", "TEXT"),
+    ("normalized", "INTEGER"),
+];
+
+/// Read a full [`MemRecord`] from a query row selecting [`EXPORT_COLUMNS`] (0–20).
+fn mem_record_from_row(r: &rusqlite::Row) -> rusqlite::Result<MemRecord> {
+    Ok(MemRecord {
+        id: r.get(0)?,
+        agent_id: r.get(1)?,
+        text: r.get(2)?,
+        created_at: r.get(3)?,
+        last_used_at: r.get(4)?,
+        use_count: r.get(5)?,
+        base_score: r.get(6)?,
+        superseded_by: r.get(7)?,
+        mem_type: r.get(8)?,
+        subject: r.get(9)?,
+        relation: r.get(10)?,
+        object: r.get(11)?,
+        valid_from: r.get(12)?,
+        valid_to: r.get(13)?,
+        ingested_at: r.get(14)?,
+        expired_at: r.get(15)?,
+        source: r.get(16)?,
+        principal: r.get(17)?,
+        asserted_by: r.get(18)?,
+        confidence: r.get(19)?,
+        content_id: r.get(20)?,
+    })
 }
 
 /// Per-agent memory counts, for the diagnosis report.
@@ -393,6 +494,7 @@ pub fn read_db_memories(path: &Path) -> Result<Option<Vec<MemRecord>>, String> {
                 use_count: r.get(5)?,
                 base_score: r.get(6)?,
                 superseded_by: r.get(7)?,
+                ..Default::default()
             })
         })
         .map_err(|e| format!("query {}: {e}", path.display()))?
@@ -452,7 +554,43 @@ pub fn open_memory_db(path: &Path) -> Result<Connection, String> {
          CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(embedding float[384]);",
     )
     .map_err(|e| format!("ensure schema {}: {e}", path.display()))?;
+    migrate_memories(&conn)?;
     Ok(conn)
+}
+
+/// Idempotently bring the `memories` table up to the 0.2.0 structured / bi-temporal schema: add ONLY the
+/// missing columns (checked via `PRAGMA table_info`), then backfill `valid_from`/`ingested_at` from
+/// `created_at`. Mirrors the server's `migrate` so the cli's read/write paths (`db_records`,
+/// `insert_embedded`) can carry the structured fields without stripping them. The FTS index is left to the
+/// server, which rebuilds/backfills it on its next open.
+///
+/// # Errors
+/// Returns a message if the pragma read or any `ALTER`/`UPDATE` fails.
+fn migrate_memories(conn: &Connection) -> Result<(), String> {
+    let existing: HashSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(memories)")
+            .map_err(|e| format!("read schema: {e}"))?;
+        let cols = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("read schema cols: {e}"))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("collect schema cols: {e}"))?;
+        cols
+    };
+    for (name, decl) in MIGRATION_COLUMNS {
+        if !existing.contains(*name) {
+            // Column names/decls are compile-time constants, never user input — no injection surface.
+            conn.execute_batch(&format!("ALTER TABLE memories ADD COLUMN {name} {decl};"))
+                .map_err(|e| format!("add column {name}: {e}"))?;
+        }
+    }
+    conn.execute_batch(
+        "UPDATE memories SET valid_from = created_at WHERE valid_from IS NULL;
+         UPDATE memories SET ingested_at = created_at WHERE ingested_at IS NULL;",
+    )
+    .map_err(|e| format!("backfill bi-temporal defaults: {e}"))?;
+    Ok(())
 }
 
 /// Read a DB's ACTIVE memories (`superseded_by IS NULL`) together with their embedding blobs, READ-ONLY.
@@ -476,33 +614,73 @@ pub fn read_active_with_embeddings(path: &Path) -> Result<Option<Vec<EmbeddedRec
     if !has_table {
         return Ok(None);
     }
-    let mut stmt = conn
-        .prepare(
-            "SELECT m.id, m.agent_id, m.text, m.created_at, m.last_used_at, m.use_count, m.base_score, \
-             v.embedding \
-             FROM memories m JOIN vec_items v ON v.rowid = m.id \
-             WHERE m.superseded_by IS NULL ORDER BY m.id",
-        )
-        .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(EmbeddedRecord {
-                rec: MemRecord {
-                    id: r.get(0)?,
-                    agent_id: r.get(1)?,
-                    text: r.get(2)?,
-                    created_at: r.get(3)?,
-                    last_used_at: r.get(4)?,
-                    use_count: r.get(5)?,
-                    base_score: r.get(6)?,
-                    superseded_by: None,
-                },
-                embedding: r.get(7)?,
+    // A stray can be legacy (8-col) or already 0.2.0 (structured). Detect the schema so a 0.2.0 stray's
+    // structure is carried into the consolidation losslessly, while a legacy stray still reads (its
+    // structured fields simply come back `None`). Reading structured columns from a legacy stray would fail.
+    let cols: HashSet<String> = {
+        let mut s = conn
+            .prepare("PRAGMA table_info(memories)")
+            .map_err(|e| format!("read stray schema {}: {e}", path.display()))?;
+        let names = s
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("read stray cols {}: {e}", path.display()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("collect stray cols {}: {e}", path.display()))?;
+        names
+    };
+    let rows = if cols.contains("subject") {
+        // Structured stray: carry every source field + the bi-temporal ACTIVE filter.
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {EXPORT_COLUMNS}, v.embedding \
+                 FROM memories JOIN vec_items v ON v.rowid = memories.id \
+                 WHERE superseded_by IS NULL AND valid_to IS NULL AND expired_at IS NULL \
+                 ORDER BY id",
+            ))
+            .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
+        let out = stmt
+            .query_map([], |r| {
+                Ok(EmbeddedRecord {
+                    rec: mem_record_from_row(r)?,
+                    embedding: r.get(21)?,
+                })
             })
-        })
-        .map_err(|e| format!("query {}: {e}", path.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+            .map_err(|e| format!("query {}: {e}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+        out
+    } else {
+        // Legacy 8-column stray: base fields only, structured fields default to None.
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.agent_id, m.text, m.created_at, m.last_used_at, m.use_count, m.base_score, \
+                 v.embedding \
+                 FROM memories m JOIN vec_items v ON v.rowid = m.id \
+                 WHERE m.superseded_by IS NULL ORDER BY m.id",
+            )
+            .map_err(|e| format!("prepare read {}: {e}", path.display()))?;
+        let out = stmt
+            .query_map([], |r| {
+                Ok(EmbeddedRecord {
+                    rec: MemRecord {
+                        id: r.get(0)?,
+                        agent_id: r.get(1)?,
+                        text: r.get(2)?,
+                        created_at: r.get(3)?,
+                        last_used_at: r.get(4)?,
+                        use_count: r.get(5)?,
+                        base_score: r.get(6)?,
+                        superseded_by: None,
+                        ..Default::default()
+                    },
+                    embedding: r.get(7)?,
+                })
+            })
+            .map_err(|e| format!("query {}: {e}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read rows {}: {e}", path.display()))?;
+        out
+    };
     Ok(Some(rows))
 }
 
@@ -530,16 +708,42 @@ pub fn existing_keys(
 /// # Errors
 /// Returns a message if either insert fails.
 pub fn insert_embedded(conn: &Connection, e: &EmbeddedRecord) -> Result<(), String> {
+    // `type` is NOT NULL DEFAULT 'semantic'; a legacy record carries None -> use the default. Bi-temporal
+    // invariants: a row must have valid_from/ingested_at, so backfill from created_at (mirrors the server).
+    let mem_type = e
+        .rec
+        .mem_type
+        .clone()
+        .unwrap_or_else(|| "semantic".to_string());
+    let valid_from = e.rec.valid_from.unwrap_or(e.rec.created_at);
+    let ingested_at = e.rec.ingested_at.unwrap_or(e.rec.created_at);
     conn.execute(
-        "INSERT INTO memories (agent_id, text, created_at, last_used_at, use_count, base_score) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO memories
+             (agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by,
+              type, subject, relation, object, valid_from, valid_to, ingested_at, expired_at,
+              source, principal, asserted_by, confidence, content_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             e.rec.agent_id,
             e.rec.text,
             e.rec.created_at,
             e.rec.last_used_at,
             e.rec.use_count,
-            e.rec.base_score
+            e.rec.base_score,
+            e.rec.superseded_by,
+            mem_type,
+            e.rec.subject,
+            e.rec.relation,
+            e.rec.object,
+            valid_from,
+            e.rec.valid_to,
+            ingested_at,
+            e.rec.expired_at,
+            e.rec.source,
+            e.rec.principal,
+            e.rec.asserted_by,
+            e.rec.confidence,
+            e.rec.content_id,
         ],
     )
     .map_err(|err| format!("insert memory: {err}"))?;
@@ -558,24 +762,12 @@ pub fn insert_embedded(conn: &Connection, e: &EmbeddedRecord) -> Result<(), Stri
 /// Returns a message if the query fails.
 pub fn db_records(conn: &Connection) -> Result<Vec<MemRecord>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, agent_id, text, created_at, last_used_at, use_count, base_score, superseded_by \
-             FROM memories ORDER BY id",
-        )
+        .prepare(&format!(
+            "SELECT {EXPORT_COLUMNS} FROM memories ORDER BY id"
+        ))
         .map_err(|e| format!("prepare db_records: {e}"))?;
     let rows = stmt
-        .query_map([], |r| {
-            Ok(MemRecord {
-                id: r.get(0)?,
-                agent_id: r.get(1)?,
-                text: r.get(2)?,
-                created_at: r.get(3)?,
-                last_used_at: r.get(4)?,
-                use_count: r.get(5)?,
-                base_score: r.get(6)?,
-                superseded_by: r.get(7)?,
-            })
-        })
+        .query_map([], mem_record_from_row)
         .map_err(|e| format!("query db_records: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("read db_records: {e}"))?;
@@ -770,6 +962,7 @@ mod tests {
             use_count: 0,
             base_score: 1.0,
             superseded_by: None,
+            ..Default::default()
         }
     }
 
@@ -797,6 +990,90 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    /// P1b: a structured, bi-temporal memory written via `insert_embedded` must come back with EVERY
+    /// structured/provenance field intact through `db_records` — the path `fix`/`sync` uses to re-export the
+    /// JSONL. If any field were dropped here, Mneme's structuring would silently die on the next round-trip.
+    #[test]
+    fn insert_embedded_and_db_records_round_trip_structured_fields() {
+        let td = tempfile::tempdir().unwrap();
+        let db = td.path().join(".genesis/memory.db");
+        let conn = open_memory_db(&db).unwrap();
+        let rec = MemRecord {
+            id: 0,
+            agent_id: "atlas".into(),
+            text: "the ball is blue".into(),
+            created_at: 100,
+            last_used_at: 100,
+            use_count: 0,
+            base_score: 1.0,
+            superseded_by: None,
+            mem_type: Some("semantic".into()),
+            subject: Some("ball".into()),
+            relation: Some("color".into()),
+            object: Some("blue".into()),
+            valid_from: Some(100),
+            valid_to: None,
+            ingested_at: Some(100),
+            expired_at: None,
+            source: Some("session-1".into()),
+            principal: Some("atiqul".into()),
+            asserted_by: Some("atlas".into()),
+            confidence: Some(0.8),
+            content_id: Some("abc123".into()),
+        };
+        insert_embedded(
+            &conn,
+            &EmbeddedRecord {
+                rec,
+                embedding: vec![0u8; 384 * 4], // dummy 384-dim f32 blob
+            },
+        )
+        .unwrap();
+
+        let back = db_records(&conn).unwrap();
+        assert_eq!(back.len(), 1);
+        let g = &back[0];
+        assert_eq!(g.mem_type.as_deref(), Some("semantic"));
+        assert_eq!(g.subject.as_deref(), Some("ball"));
+        assert_eq!(g.relation.as_deref(), Some("color"));
+        assert_eq!(g.object.as_deref(), Some("blue"));
+        assert_eq!(g.valid_from, Some(100));
+        assert_eq!(g.ingested_at, Some(100));
+        assert_eq!(g.source.as_deref(), Some("session-1"));
+        assert_eq!(g.principal.as_deref(), Some("atiqul"));
+        assert_eq!(g.asserted_by.as_deref(), Some("atlas"));
+        assert_eq!(g.confidence, Some(0.8));
+        assert_eq!(g.content_id.as_deref(), Some("abc123"));
+    }
+
+    /// P1b: opening a pre-0.2.0 (8-column) DB must migrate it in place — add the structured/bi-temporal
+    /// columns and backfill `valid_from`/`ingested_at` from `created_at` — so the 21-column `db_records`
+    /// read then succeeds instead of failing on the missing columns.
+    #[test]
+    fn open_memory_db_migrates_a_legacy_eight_column_db_and_backfills_bitemporal() {
+        let td = tempfile::tempdir().unwrap();
+        let db = td.path().join("legacy.db");
+        make_db(&db, &[rec(1, "a", "old memory", 50)]); // legacy 8-column schema
+        let conn = open_memory_db(&db).unwrap(); // must ALTER-add the 0.2.0 columns + backfill
+        let recs = db_records(&conn).unwrap(); // 21-column SELECT now works
+        assert_eq!(recs.len(), 1);
+        assert_eq!(
+            recs[0].valid_from,
+            Some(50),
+            "valid_from backfilled from created_at"
+        );
+        assert_eq!(
+            recs[0].ingested_at,
+            Some(50),
+            "ingested_at backfilled from created_at"
+        );
+        assert_eq!(
+            recs[0].mem_type.as_deref(),
+            Some("semantic"),
+            "type column defaults to 'semantic'"
+        );
     }
 
     #[test]
