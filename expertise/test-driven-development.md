@@ -4,17 +4,24 @@
 > (TDD)** and the testing craft around it — the red-green-refactor cycle, Kent Beck's three laws, test-first
 > as a design technique, the test pyramid, test doubles (dummy/fake/stub/spy/mock), arrange-act-assert,
 > one-assertion-per-behavior, coverage as a tool, property-based and snapshot testing, test determinism, and
-> regression-test discipline. It contains no language- or framework-specific syntax — every rule applies to
-> any codebase, in any language, using any xUnit-style or property-based test runner.
+> regression-test discipline. Every rule applies to any codebase, in any language, using any xUnit-style or
+> property-based test runner; where a concrete illustration helps (§12's snapshot-matcher syntax, §11's
+> Hypothesis seed flag), the guide names at most one framework as a *labelled example* per rule and states
+> explicitly that the underlying technique is not specific to it.
 >
 > **Primary sources (this file is a faithful distillation — do not contradict):** Martin Fowler's testing
 > articles and bliki entries (`martinfowler.com`), Gerard Meszaros's **xUnit Test Patterns** reference site
-> (`xunitpatterns.com`), Robert C. Martin's **Three Laws of TDD** (`blog.cleancoder.com`, itself citing
-> `97 Things Every Programmer Should Know`), Kent Beck's own **Test Desiderata** essay, the **Hypothesis**
-> property-based testing docs, and the **Jest** snapshot-testing docs — all fetched and read in full for this
-> guide, 2026-08-16. Wikipedia's Test-Driven Development article is used only where it directly quotes Kent
-> Beck or cites *Test-Driven Development by Example* / peer-reviewed meta-analyses, and is flagged as a
-> secondary source each time.
+> (`xunitpatterns.com`), Robert C. Martin's **Three Laws of TDD** — the verbatim wording is his original
+> statement of the rule, `butunclebob.com/ArticleS.UncleBob.TheThreeRulesOfTdd` ("The Three Laws of TDD"),
+> distinct from his later reworded retelling of the same three rules in *The Cycles of TDD*
+> (`blog.cleancoder.com`, itself citing `97 Things Every Programmer Should Know`) — Kent Beck's own **Test
+> Desiderata** essay, the **Hypothesis** property-based testing docs (including its seed/replay mechanism),
+> and snapshot/golden-testing tooling verified across ecosystems (Jest for JS as this guide's one labelled
+> example; `insta.rs` for Rust and `approvaltests.com` as a multi-language family, both fetched and read to
+> confirm the technique is not Jest-specific) — all fetched and read in full for this guide, 2026-08-16.
+> Wikipedia's Test-Driven Development article is used only where it directly quotes Kent Beck or cites
+> *Test-Driven Development by Example* / peer-reviewed meta-analyses, and is flagged as a secondary source
+> each time.
 >
 > **Evidence discipline.** **[VERIFIED]** = taken directly from a fetched primary- or reputable
 > practitioner-source page, cited inline by URL. **[INFERRED]** = this guide's synthesis across two or more
@@ -25,8 +32,8 @@
 > **Every actionable rule has a stable id (`tdd-N`).** The companion manifest
 > `manifests/test-driven-development.json` indexes each, typed `checkable | judgment | principle`.
 >
-> Status: **v1 — red-green-refactor through refactor-under-green, 70 rules (tdd-1…tdd-70). No section
-> dropped. Date: 2026-08-16.**
+> Status: **v1.1 — red-green-refactor through refactor-under-green, 71 rules (tdd-1…tdd-71). No section
+> dropped. Date: 2026-08-16 (review-fix pass applied same date).**
 
 ---
 
@@ -91,12 +98,22 @@ TheCyclesOfTDD.html — the quote is Martin's citation of Beck, not Martin's own
 
 ## 2. Kent Beck's Three Laws of TDD — the nano-cycle
 
-**tdd-8 (checkable).** The **Three Laws of TDD**, verbatim:
-1. You must write a failing test before you write any production code.
-2. You must not write more of a test than is sufficient to fail, or fail to compile.
-3. You must not write more production code than is sufficient to make the currently failing test pass.
+**tdd-8 (checkable).** The **Three Laws of TDD**, verbatim, from Robert C. Martin's original statement of the
+rule (titled, in his own words, "The Three Laws of TDD"):
+1. "You are not allowed to write any production code unless it is to make a failing unit test pass."
+2. "You are not allowed to write any more of a unit test than is sufficient to fail; and compilation failures
+   are failures."
+3. "You are not allowed to write any more production code than is sufficient to pass the one failing unit
+   test."
 
-*[VERIFIED, blog.cleancoder.com/uncle-bob/2014/12/17/TheCyclesOfTDD.html, citing
+*[VERIFIED, butunclebob.com/ArticleS.UncleBob.TheThreeRulesOfTdd — "The Three Laws of TDD.", quoted exactly.]*
+
+Martin later retold these same three rules, reworded rather than requoted, in *The Cycles of TDD*: "You must
+write a failing test before you write any production code... You must not write more of a test than is
+sufficient to fail, or fail to compile... You must not write more production code than is sufficient to make
+the currently failing test pass." Treat this second wording as a **paraphrase of the same rule**, not a second
+independent verbatim source — the guide previously conflated the two. *[VERIFIED,
+blog.cleancoder.com/uncle-bob/2014/12/17/TheCyclesOfTDD.html, citing
 programmer.97things.oreilly.com/wiki/index.php/The_Three_Laws_of_Test-Driven_Development.]*
 
 **tdd-9 (principle).** Attribute precisely: the Three Laws were **codified by Robert C. Martin** as a
@@ -154,10 +171,14 @@ Clearly separating the four phases makes a test's intent far easier to see. *[VE
 xunitpatterns.com/Four%20Phase%20Test.html — "How It Works" and "Why We Do This".]*
 
 **tdd-17 (checkable).** A common shorthand for the first three phases is the **"Arrange, Act, Assert"**
-mnemonic: set up the test data, call the method under test, assert the expected results. A BDD-flavored
+mnemonic: set up the test data, call the method under test, assert the expected results. Fowler attributes the
+mnemonic to Bill Wake's originating article "3A – Arrange, Act, Assert" (`xp123.com`). A BDD-flavored
 alternative is the **given / when / then** triad, where *given* is the setup, *when* is the call, and *then*
-is the assertion. Both keep tests short, consistent, and easy to read regardless of test level.
-*[VERIFIED, martinfowler.com/articles/practical-test-pyramid.html — "Test Structure".]*
+is the assertion. Both keep tests short, consistent, and easy to read regardless of test level. *[VERIFIED,
+martinfowler.com/articles/practical-test-pyramid.html — "Test Structure", which links the mnemonic directly to
+xp123.com/articles/3a-arrange-act-assert/ as Wake's article; xp123.com itself returned a fetch-tool error in
+this session (DNS-handling bug in the fetch sandbox, not a dead page), so the Wake/xp123.com attribution is
+verified via Fowler's citation of it, not a direct read of Wake's page.]*
 
 **tdd-18 (judgment).** Do not let setup or teardown logic obscure the exercise/verify lines that actually
 carry the test's meaning — from a "tests as documentation" standpoint, the housekeeping phases are
@@ -234,12 +255,22 @@ driven by browser quirks, timing issues, animations, and unexpected popup dialog
 UI, the flakier they tend to get. *[VERIFIED, martinfowler.com/articles/practical-test-pyramid.html —
 "End-to-End Tests".]*
 
-**tdd-29 (checkable).** This is exactly why the pyramid shape matters operationally, not just
-aesthetically: Fowler explicitly points readers to the **Google Testing Blog's** case against leaning on more
-end-to-end tests as further support for the pyramid's shape — the practical argument being fewer, cheaper,
-faster low-level tests catch more, sooner, more reliably than a large end-to-end layer can.
-*[VERIFIED, martinfowler.com/bliki/TestPyramid.html — "Further Reading", summarizing
+**tdd-29 (checkable).** Fowler's Test Pyramid bliki explicitly points readers, in its own "Further Reading"
+section, to the **Google Testing Blog's** "Just Say No to More End-to-End Tests" (Mike Wacker, 2015) as
+further support for the pyramid's shape. That cross-reference itself — title, author, and Fowler's one-line
+summary — is what this guide directly verified on Fowler's page; the Google post's own extended body text was
+not independently fetched and re-verified in this session, so it is not presented as a directly-verified
+argument here. *[VERIFIED, martinfowler.com/bliki/TestPyramid.html — "Further Reading": "The Google Testing
+Blog expands on why you shouldn't rely on end-to-end tests," linking to
 testing.googleblog.com/2015/04/just-say-no-to-more-end-to-end-tests.html by Mike Wacker.]*
+
+The stronger characterization sometimes attached to this reference — that fewer, cheaper, faster low-level
+tests catch more, sooner, more reliably than a large end-to-end layer can — is this guide's own synthesis of
+Fowler's stated rationale *elsewhere* in his testing corpus (Fast Feedback as a deployment-pipeline value, and
+"push your tests as far down the test pyramid as you can" from the duplication-avoidance rule of thumb), not a
+verified quotation of the Google Testing Blog post's own argument. *[INFERRED, synthesizing
+martinfowler.com/articles/practical-test-pyramid.html — "Putting Tests Into Your Deployment Pipeline" and
+"Avoid Test Duplication" — explicitly not the Google post's own verified body text.]*
 
 ---
 
@@ -378,6 +409,22 @@ might use to know when to stop), and always pair any wait with a **timeout**, si
 simply never arrive. *[VERIFIED, martinfowler.com/articles/nonDeterminism.html — footnotes on async
 completion hooks and timeouts.]*
 
+**tdd-71 (checkable).** **Randomized and property-based tests must record — and be able to replay — the seed
+that produced a failure.** A failure surfaced by generated/random input is only as trustworthy as the suite's
+other guarantees (tdd-3, tdd-43) if it is deterministically reproducible rather than a one-off you can never
+see again; a randomized test that fails, is re-run, and passes without anyone capturing what input caused the
+failure is a non-determinism problem wearing a different hat. Property-based frameworks provide this directly:
+Hypothesis (this rule's labelled example) prints the failing seed and lets you pin it with `@seed(...)` or
+pytest's `--hypothesis-seed`, and separately auto-saves failing examples to a local database so they replay on
+their own via `@example` / `@reproduce_failure` (see §11) — the same expectation (print/record the failing
+seed or example, provide a replay mechanism) generalizes to any other property-based or fuzz-style test
+runner, not just Hypothesis. *[VERIFIED, hypothesis.readthedocs.io/en/latest/reference/api.html —
+`hypothesis.seed(seed)`: "Seed the randomness for this test... for a fixed seed value Hypothesis will produce
+the same test cases... If using pytest, you can alternatively pass --hypothesis-seed on the command line";
+VERIFIED, hypothesis.readthedocs.io/en/latest/tutorial/replaying-failures.html — "When a test fails,
+Hypothesis automatically saves the failure so it can be replayed later," via its `ExampleDatabase`, `@example`,
+and `@reproduce_failure`.]*
+
 ---
 
 ## 10. Coverage as a tool, not a target
@@ -431,28 +478,46 @@ spell out the shrinking algorithm in the text retrieved.
 
 ## 12. Snapshot and golden testing
 
-**tdd-57 (checkable).** **Snapshot testing** captures a serialized rendering of some output (a component tree,
-a data structure) the first time a test runs, storing it as a **snapshot file**; on every later run, the
-current output is compared against that stored file and any difference fails the test — "a very useful tool
-whenever you want to make sure your UI [or other output] does not change unexpectedly."
-*[VERIFIED, jestjs.io/docs/snapshot-testing.]*
+**tdd-57 (checkable).** **Snapshot testing** (also called **golden-file** or **approval** testing) captures a
+serialized rendering of some output (a component tree, a data structure, a rendered document) the first time
+a test runs, storing it as a **snapshot/golden file**; on every later run, the current output is compared
+against that stored file and any difference fails the test. This is a general technique implemented across
+many ecosystems under compatible names, not a Jest-only idea: **Jest** for JavaScript/TypeScript
+(`jestjs.io/docs/snapshot-testing` — used below as this guide's *one labelled example*), **insta** for Rust
+(`insta.rs`), pytest snapshot/syntax-tree plugins for Python, and **ApprovalTests** — a multi-language family
+(Java, .NET, C++, Python, Ruby, Go, and more) built on exactly this idea. *[VERIFIED, jestjs.io/docs/
+snapshot-testing — "a very useful tool whenever you want to make sure your UI [or other output] does not
+change unexpectedly"; VERIFIED, insta.rs — "Snapshots tests (also sometimes called approval tests) are tests
+that assert values against a reference value (the snapshot)"; VERIFIED, approvaltests.com — "Approvaltests is
+in many languages," listing Java/C#/C++/PHP/Python/Swift/JS/Perl/Go/Lua/Objective-C/Ruby/LabVIEW/Dart/Elixir
+implementations.]*
 
-**tdd-58 (checkable).** Treat the snapshot artifact as code: **commit it alongside the change that produced
-it, and review it as part of code review** — Jest deliberately renders snapshots in a human-readable format
-(via `pretty-format`) specifically so a reviewer can read the diff, not just trust that "the test still
-passes." *[VERIFIED, jestjs.io/docs/snapshot-testing.]*
+**tdd-58 (checkable).** Treat the snapshot/golden artifact as code: **commit it alongside the change that
+produced it, and review it as part of code review.** Good snapshot tooling deliberately renders the stored
+value in a human-readable format so a reviewer can read the diff, not just trust that "the test still
+passes" — Jest's version of this is `pretty-format` (this rule's labelled example); the same
+human-readable-diff discipline is not Jest-specific — insta, for instance, independently documents rendering
+"beautiful snapshot diffs right in your terminal." *[VERIFIED, jestjs.io/docs/snapshot-testing, as the
+labelled example; VERIFIED, insta.rs — "Pretty Diffs: insta renders beautiful snapshot diffs right in your
+terminal," confirming the discipline generalizes beyond Jest.]*
 
 **tdd-59 (checkable).** Any **non-deterministic field** in the snapshotted value (generated ids, timestamps)
-will fail the snapshot on every run unless normalized — use an asymmetric property matcher (e.g.
-`expect.any(Date)`) so the matcher, not the literal generated value, is what gets checked and stored.
-*[VERIFIED, jestjs.io/docs/snapshot-testing — "Property Matchers".]*
+will fail the snapshot on every run unless normalized — snapshot tooling generally provides some form of
+placeholder/redaction mechanism so a matcher, not the literal generated value, is what gets checked and
+stored. Jest's version is an asymmetric property matcher (e.g. `expect.any(Date)`, this rule's labelled
+example); insta calls the equivalent mechanism a **redaction**. *[VERIFIED, jestjs.io/docs/snapshot-testing —
+"Property Matchers", as the labelled example; VERIFIED, insta.rs — "Redactions: if you have output which can
+change between test runs (such as random identifiers, timestamps or others) you can instruct insta to redact
+these parts," confirming the same normalization need recurs outside Jest.]*
 
 **tdd-60 (judgment).** A snapshot test verifies **"did the output change,"** not **"is the output correct."**
-Because tooling offers an interactive mode to step through and accept/reject each failed snapshot, it is easy
-to rubber-stamp every diff without reading it — which defeats the entire purpose. A human must judge each
-diff at the moment it's created, not merely at the moment the snapshot was first captured. *[INFERRED, drawn
-from Jest's own documented review workflow (commit + code-review + interactive per-snapshot accept/reject) —
-the docs describe the mechanism; the discipline required to use it correctly is this guide's synthesis.]*
+Because tooling commonly offers an interactive mode to step through and accept/reject each failed snapshot
+(Jest's Interactive Snapshot Mode is this rule's labelled example; insta's `cargo-insta` review flow is the
+equivalent in Rust), it is easy to rubber-stamp every diff without reading it — which defeats the entire
+purpose. A human must judge each diff at the moment it's created, not merely at the moment the snapshot was
+first captured. *[INFERRED, drawn from Jest's and insta's own documented review workflows (commit +
+code-review + interactive per-snapshot accept/reject) — the docs describe the mechanism; the discipline
+required to use it correctly is this guide's synthesis.]*
 
 ---
 
@@ -531,7 +596,8 @@ outputs, verified after) · **mock** (expectations set before exercise, verifies
 state verification (classical/stub) vs. behavior verification (mockist/mock) (tdd-36) · pyramid shape = many
 unit → some service/integration → few end-to-end/UI (tdd-23–tdd-24) · anti-shape = ice-cream cone (tdd-25) ·
 dedup thresholds n/a — determinism gates: isolate (rebuild > cleanup), stub the clock, double the network +
-contract-test the double, pool-limit-1 for leak detection, hook + timeout for async (tdd-45–tdd-49) ·
+contract-test the double, pool-limit-1 for leak detection, hook + timeout for async (tdd-45–tdd-49) · seeded
+randomness — record/print the failing seed or example, replay it, never just re-run until green (tdd-71) ·
 quarantine bound = count or time limit, never unbounded (tdd-44, tdd-67) · coverage = diagnostic tool, never a
 pass/fail gate number (tdd-50–tdd-52) · property-based testing = addition not replacement; round-trip /
 equivalence / invariant / no-crash properties (tdd-54) · snapshot = commit + human-reviewed diff + normalize
@@ -550,17 +616,26 @@ generated fields (tdd-58–tdd-59) · every bug → reproducing test first, then
 - Gerard Meszaros, *xUnit Test Patterns*, hosted at `xunitpatterns.com`: *Test Double*; *Test Double
   Patterns*; *Four-Phase Test*; *Assertion Roulette*; *Dummy Object*; *Fake Object*; *Test Stub*; *Mock
   Object*; *Test Spy*.
-- Robert C. Martin, *The Cycles of TDD*, `blog.cleancoder.com/uncle-bob/2014/12/17/TheCyclesOfTDD.html` —
-  quoting/citing the Three Laws of TDD from *97 Things Every Programmer Should Know*
+- Robert C. Martin, *The Three Laws of TDD*, `butunclebob.com/ArticleS.UncleBob.TheThreeRulesOfTdd` — the
+  verbatim source of tdd-8's quoted rule text.
+- Robert C. Martin, *The Cycles of TDD*, `blog.cleancoder.com/uncle-bob/2014/12/17/TheCyclesOfTDD.html` — his
+  later, reworded retelling of the same three rules (used for tdd-6/7/9/10/69, not treated as a second
+  verbatim source of the rule text itself); citing *97 Things Every Programmer Should Know*
   (`programmer.97things.oreilly.com`).
 - Kent Beck, *Test Desiderata*, `medium.com/@kentbeck_7670/test-desiderata-94150638a4b3`.
-- Hypothesis documentation, `hypothesis.readthedocs.io/en/latest/` — index page and *Introduction to
-  Hypothesis* tutorial page.
-- Jest documentation, `jestjs.io/docs/snapshot-testing`.
+- Hypothesis documentation, `hypothesis.readthedocs.io/en/latest/` — index page, *Introduction to Hypothesis*
+  tutorial page, the API Reference (`reference/api.html`, for `hypothesis.seed`/`--hypothesis-seed`), and
+  *Replaying failed tests* (`tutorial/replaying-failures.html`, for the `ExampleDatabase`/`@example`/
+  `@reproduce_failure` mechanism) — all read for tdd-53–tdd-56 and the new tdd-71.
+- Jest documentation, `jestjs.io/docs/snapshot-testing` — used as §12's one labelled framework example.
+- insta documentation, `insta.rs`, and ApprovalTests, `approvaltests.com` — fetched and read to confirm
+  snapshot/golden/approval testing is a cross-ecosystem technique (Rust and a 15-language family,
+  respectively), not Jest-specific; used to de-Jest-lock §12.
 - Google Testing Blog, *Just Say No to More End-to-End Tests* (Mike Wacker, 2015-04-22,
   `testing.googleblog.com`) — cited only via Fowler's own summary of its argument (title, author, and thrust
   verified directly on the page; the article's own extended body text was not independently re-verified
-  beyond that in this session).
+  beyond that in this session — re-confirmed on this review-fix pass, where the fetched page returned only
+  the post's header/comments, not its body).
 
 **Secondary source used carefully, always flagged:** Wikipedia, *Test-driven development*
 (`en.wikipedia.org/wiki/Test-driven_development`) — used only for passages that themselves directly quote Kent
@@ -568,14 +643,21 @@ Beck (the "rediscovery" quote) or cite *Test-Driven Development by Example* (Bec
 studies; every rule sourced from it says "Wikipedia" and names what it is citing, never presented as if
 independently verified from Beck's book text.
 
-**Evidence flags carried in this guide:** tdd-9 corrects a common misattribution (the Three Laws are Martin's
-formulation of Beck's practice, not Beck's own words) rather than silently repeating the popular shorthand;
-tdd-29's Google Testing Blog claim is scoped to what Fowler's own page verifiably says about it, not the full
-body of the Google post; tdd-56 and tdd-60 are explicitly labeled [INFERRED] rather than presented as directly
-quoted, because the specific pages fetched this session illustrate but do not spell out those claims in the
-retrieved text.
+**Evidence flags carried in this guide:** tdd-8's Three Laws quote is sourced verbatim from
+`butunclebob.com/ArticleS.UncleBob.TheThreeRulesOfTdd`, not from the reworded `blog.cleancoder.com` retelling
+that an earlier pass of this guide mislabeled as the verbatim text; tdd-9 corrects a common misattribution (the
+Three Laws are Martin's formulation of Beck's practice, not Beck's own words) rather than silently repeating
+the popular shorthand; tdd-29 is split into a directly-verified clause (Fowler's own cross-reference to the
+Google Testing Blog post) and a separately-flagged [INFERRED] clause (the "fewer, cheaper, faster" practical
+characterization, synthesized from Fowler's own stated rationale elsewhere, not the Google post's body); tdd-56
+and tdd-60 are explicitly labeled [INFERRED] rather than presented as directly quoted, because the specific
+pages fetched this session illustrate but do not spell out those claims in the retrieved text; tdd-71 (seeded/
+replayable randomness) is fully [VERIFIED] against current Hypothesis docs.
 
-*Colophon: v1, 2026-08-16. Distilled with zero shortcuts from Fowler's testing corpus, Meszaros's xUnit Test
-Patterns, Robert C. Martin's Three Laws, Kent Beck's Test Desiderata, and the Hypothesis/Jest practitioner
-docs, fetched and read in full; 70 rules (tdd-1…tdd-70); no section dropped; verified vs. inference labeling
-carried throughout.*
+*Colophon: v1.1, 2026-08-16. Distilled with zero shortcuts from Fowler's testing corpus, Meszaros's xUnit Test
+Patterns, Robert C. Martin's Three Laws (verbatim from butunclebob.com), Kent Beck's Test Desiderata, the
+Hypothesis practitioner docs (including seed/replay), and snapshot-testing docs verified across Jest, insta,
+and ApprovalTests, fetched and read in full; 71 rules (tdd-1…tdd-71); no section dropped; verified vs.
+inference labeling carried throughout. This v1.1 pass corrected a mislabeled paraphrase (tdd-8), re-scoped an
+oversold citation (tdd-29), de-Jest-locked snapshot testing (§12), added seeded-determinism coverage (tdd-71),
+and sourced the AAA mnemonic's originator (tdd-17).*
