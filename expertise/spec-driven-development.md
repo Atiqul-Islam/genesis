@@ -356,11 +356,13 @@ changing specifications, validating frequently, evolving a documentation system*
 the book directly before treating any one pattern's detailed mechanics as settled fact.
 
 **sdd-34 (checkable).** **"Living documentation"** is the convergence point of specification-by-example and
-BDD's own stated goal: documentation "**automatically checked against the system's behaviour**." Unlike a
-wiki page or a design doc, a living-documentation scenario cannot silently drift out of date — if the system
-stops matching it, the scenario **fails** (a red test) rather than quietly becoming wrong. *[VERIFIED,
+BDD's own stated goal: documentation "**automatically checked against the system's behaviour**." *[VERIFIED,
 cucumber.io/docs/bdd/ — "What is BDD?"; corroborated by manning.com/books/specification-by-example's "living,
-reliable documentation" framing.]*
+reliable documentation" framing.]* Unlike a wiki page or a design doc, a living-documentation scenario cannot
+silently drift out of date — if the system stops matching it, the scenario **fails** (a red test) rather than
+quietly becoming wrong. *[INFERRED — the source verifies documentation is "automatically checked against the
+system's behaviour," not the literal "fails (a red test)" framing; that specific drift-elaboration is this
+guide's synthesis, applying the sourced "checked against behaviour" claim to test-runner red/green semantics.]*
 <br>*predicate: the formulated specs are wired to automation such that a behaviour change with no matching
 spec update produces a failing (red) run — not merely an unreviewed diff.*
 
@@ -369,11 +371,13 @@ spec update produces a failing (red) run — not merely an unreviewed diff.*
 ## 9. Keeping spec, code, and tests synchronized — drift is the enemy
 
 **sdd-35 (checkable).** Because automation (§2) ties the formulated spec **directly** to live system
-behaviour, an out-of-date scenario doesn't rot silently the way a comment or a wiki page does — it goes
-**red**. This is the concrete mechanism that makes "keep the spec current" enforceable rather than aspirational:
-the same executable-specification property that makes an example a test (sdd-1, sdd-12) is what makes drift
-detectable at all. *[VERIFIED, cucumber.io/docs/bdd/ — "Producing system documentation that is automatically
-checked against the system's behaviour" (§0 mechanism), applied to the drift question.]*
+behaviour, an out-of-date scenario doesn't rot silently the way a comment or a wiki page does. *[VERIFIED,
+cucumber.io/docs/bdd/ — "Producing system documentation that is automatically checked against the system's
+behaviour" (§0 mechanism).]* This guide elaborates that the scenario specifically goes **red** — the concrete
+mechanism that makes "keep the spec current" enforceable rather than aspirational, since the same
+executable-specification property that makes an example a test (sdd-1, sdd-12) is what makes drift detectable
+at all — but that red/green test-runner framing is **[INFERRED]**: the source verifies specs are "checked
+against behaviour," not that literal framing, which this guide applies to the drift question.
 <br>*predicate: CI (or an equivalent gate) runs the formulated specs on every change, so a spec/behaviour
 mismatch is caught as a failing run, not discovered later by inspection.*
 
@@ -399,26 +403,33 @@ implementation, rather than derived from the finished code by a single author af
 
 ## 10. Anti-patterns
 
-**sdd-38 (checkable — gotcha).** A `Then` step that queries the database (or other internal storage) instead
+**sdd-38 (judgment — gotcha).** A `Then` step that queries the database (or other internal storage) instead
 of asserting an observable output is an explicit, named anti-pattern: "resist that temptation." It looks
 precise but binds the spec to an **implementation detail** (the schema) rather than behaviour, so a pure
 refactor of the storage layer — no behaviour change at all — breaks specs that were never describing behaviour
 in the first place. *[VERIFIED, cucumber.io/docs/gherkin/reference — "Then".]* (Mechanism: sdd-20.)
+<br>*reviewer_criterion: does any `Then` step assert directly against internal storage (a database row,
+internal object state) instead of an output observable to a user or external system?*
 
-**sdd-39 (checkable — gotcha).** A `When` step written as a UI script ("click the blue button," "fill in the
+**sdd-39 (judgment — gotcha).** A `When` step written as a UI script ("click the blue button," "fill in the
 Name field then the Address field") rather than a domain action ("Withdraw money") fails the **"imagine it's
 1922"** test and smuggles technology/implementation assumptions into the plain-English layer, where they
 don't belong (they belong in the step definition). The reference gives the concrete fix for a step that
 already reads as two actions joined by "and": split it into two `When`/`And` steps, one action each.
 *[VERIFIED, cucumber.io/docs/gherkin/reference — "When" and "Scenarios" (who-does-what) example of splitting
 a multi-field step.]* (Mechanism: sdd-19.)
+<br>*reviewer_criterion: does any `When` step read as a UI mechanic (a click, a named field) or join two
+actions with "and," rather than naming one domain-level action a person could take without a computer?*
 
-**sdd-40 (checkable — gotcha).** Two steps whose wording collides once the leading keyword is stripped (§4,
+**sdd-40 (judgment — gotcha).** Two steps whose wording collides once the leading keyword is stripped (§4,
 sdd-21) — most often a `Given` and a `Then` that describe "the same fact" in different tenses, e.g. "there is
 money in my account" used both ways — are a **vague-domain-language** anti-pattern, not a tooling problem;
 the fix is more precise, business-specific phrasing ("my account has a balance of £430"), never a workaround
 bolted onto the automation layer to force two different meanings out of identical text. *[VERIFIED,
 cucumber.io/docs/gherkin/reference — "Steps".]*
+<br>*reviewer_criterion: does this spec contain a `Given`/`Then` (or other) step pair whose wording collides
+once the leading keyword is stripped — and if so, was it fixed with more precise domain language rather than
+a hidden workaround in the step-definition layer?*
 
 **sdd-41 (judgment — scenario bloat).** A scenario padded well past the recommended 3-5 steps (sdd-12) has
 usually stopped being *one example of one rule* and started narrating a procedure — split it into multiple
@@ -428,13 +439,15 @@ excess steps destroy.
 <br>*reviewer_criterion: does this scenario stay close to 3-5 steps and illustrate one rule — and if not, has
 it been reviewed for a split or a `Background` extraction rather than left to grow?*
 
-**sdd-42 (checkable — gotcha).** Using `Background` to set up **complicated state the reader actually needs
+**sdd-42 (judgment — gotcha).** Using `Background` to set up **complicated state the reader actually needs
 to evaluate the scenario** is a misuse of the keyword — the explicit guidance is "don't use Background to set
 up complicated states, unless that state is actually something the client needs to know," preferring a
 higher-level step ("Given I am logged in as a site owner") that hides irrelevant detail instead. A
 `Background` that has "scrolled off the screen" defeats its own purpose: the reader loses the overview it was
 meant to provide. *[VERIFIED, cucumber.io/docs/gherkin/reference — "Tips for using Background".]* (Rule:
 sdd-13.)
+<br>*reviewer_criterion: does any `Background` contain steps that are not shared, harmless context — i.e.
+hidden setup a reader would miss?*
 
 **sdd-43 (judgment — gold-plating).** Example Mapping's own discipline (§7, sdd-31) is the countermeasure to
 gold-plating: any scenario that cannot be traced back to a blue rule card that itself traces back to the
