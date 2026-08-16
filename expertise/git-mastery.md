@@ -93,7 +93,10 @@ git-scm.com/book/en/v2/Git-Internals-Git-Objects — "Object Storage".]*
 **packfiles** with delta compression; `git gc --auto` fires a real gc only past a threshold (roughly 7,000
 loose objects or 50 packfiles by default, tunable via `gc.auto`/`gc.autopacklimit`). Packing is a storage-
 layer optimization only — it changes nothing about reachability or content addressing. *[VERIFIED,
-git-scm.com/book/en/v2/Git-Internals-Maintenance-and-Data-Recovery — "Maintenance".]*
+git-scm.com/book/en/v2/Git-Internals-Maintenance-and-Data-Recovery — "Maintenance".]* Footnote: Pro Git's
+prose rounds this to "~7,000 loose objects"; the `git-gc`/`git-config` reference docs give the exact
+`gc.auto` default as **6700** — same threshold, more precise number. *[VERIFIED, git-scm.com/docs/git-gc and
+git-scm.com/docs/git-config — `gc.auto`.]*
 
 **git-9 (checkable).** A **tag** is a fourth object type, structurally like a commit (tagger, date, message,
 one pointer) but pointing at a commit instead of a tree, giving it a permanent friendly name. There are two
@@ -152,9 +155,11 @@ branch's tip is a direct ancestor of the current branch's tip — histories neve
 If histories diverged, git performs a **three-way merge** (the default strategy is `ort`, using the two tips
 plus their common ancestor), producing a **new commit with two parents**. When more than one common ancestor
 exists, `ort` builds a merged tree of the ancestors first to use as the 3-way reference, which reduces
-spurious conflicts versus the older `recursive` strategy it replaced. *[VERIFIED,
-git-scm.com/book/en/v2/Git-Branching-Basic-Branching-and-Merging, and git-scm.com/docs/git-rebase —
-"MERGE STRATEGIES" (`ort`).]*
+spurious conflicts versus the older `recursive` strategy it replaced. **`ort` has been the default merge
+strategy only since Git 2.34** — `recursive` was the default for resolving two heads from Git v0.99.9k
+through v2.33.0 inclusive; a pre-2.34 git binary defaults to `recursive` instead. *[VERIFIED,
+git-scm.com/book/en/v2/Git-Branching-Basic-Branching-and-Merging, and git-scm.com/docs/merge-strategies —
+`ort` and `recursive`.]*
 
 **git-16 (checkable).** When the same region of the same file was changed differently on both sides, the
 merge **pauses** instead of committing: `git status` lists the file under "Unmerged paths," and git writes
@@ -278,11 +283,14 @@ it again) or `git stash pop` (applies **then drops** it — use once you're conf
 to reapply a stash whose target has diverged enough to conflict. *[VERIFIED, git-scm.com/docs/git-stash —
 SYNOPSIS, `apply`/`pop`/`branch`.]*
 
-**git-31 (principle — [INFERRED]).** A stash entry is itself backed by commit object(s) referenced by
-`refs/stash` plus that ref's reflog — it is not a separate, magical storage class. Treat `git stash drop` and
-especially `git stash clear` with the same caution as deleting a branch: the content is gc-eligible the
-moment nothing references it, recoverable (if at all) only through the **same** reflog/`fsck` techniques as
-any other commit (§10), and only within the local reflog's retention window.
+**git-31 (principle).** The **latest stash you created is stored in `refs/stash`; older stashes are found in
+the reflog of this reference** and can be named via the usual reflog syntax (`stash@{0}` is the most recent,
+`stash@{1}` the one before it, `stash@{2.hours.ago}` also works). *[VERIFIED, git-scm.com/docs/git-stash —
+DESCRIPTION.]* In other words a stash entry is backed by ordinary commit object(s) reachable through that
+ref/reflog, not a separate, magical storage class **[INFERRED]**. Treat `git stash drop` and especially
+`git stash clear` with the same caution as deleting a branch: the content is gc-eligible the moment nothing
+references it, recoverable (if at all) only through the **same** reflog/`fsck` techniques as any other commit
+(§10), and only within the local reflog's retention window.
 
 ---
 
@@ -329,11 +337,12 @@ leaves checked out and recorded at `refs/bisect/bad`. *[VERIFIED, git-scm.com/do
 bisect commands: start, bad, good".]*
 
 **git-37 (checkable).** `git bisect run <cmd> [<args>...]` fully automates the good/bad loop against any
-script or command: exit code 0 means good, any nonzero-but-125 means bad, and exit 125 tells bisect this
-revision is untestable (auto-skip). Custom vocabulary — `--term-bad=<word>` / `--term-good=<word>` (e.g.
-`new`/`old`) — replaces the good/bad wording, useful when "bad" is semantically backwards (bisecting when a
-**fix** was introduced, not a regression). *[VERIFIED, git-scm.com/docs/git-bisect — SYNOPSIS and
-`--term-*`.]*
+script or command: exit code **0** means good; exit code **1–127 inclusive, except 125,** means bad; exit
+**125** tells bisect this revision is untestable (auto-skip, see `git bisect skip`); **any other exit code
+aborts the bisect process** entirely rather than being interpreted as good/bad/skip. Custom vocabulary —
+`--term-bad=<word>` / `--term-good=<word>` (e.g. `new`/`old`) — replaces the good/bad wording, useful when
+"bad" is semantically backwards (bisecting when a **fix** was introduced, not a regression). *[VERIFIED,
+git-scm.com/docs/git-bisect — "Bisect run" and `--term-*`.]*
 
 **git-38 (checkable).** `git bisect reset` ends the session and returns you to the branch/commit you started
 from (do this even after finding the answer — bisect leaves you on a detached-HEAD checkout otherwise, see
@@ -379,7 +388,8 @@ existed on a machine you don't have access to.
 
 **git-43 (checkable).** `git gc --auto` is the mechanism, and its thresholds are the actual bound on the
 recovery window above: it does nothing until roughly **7,000 loose objects** or **50 packfiles** accumulate
-(tunable via `gc.auto`/`gc.autopacklimit`), at which point it packs loose objects, consolidates packfiles,
+(tunable via `gc.auto`/`gc.autopacklimit`; footnote — the `git-gc`/`git-config` docs give the exact
+`gc.auto` default as **6700**, see git-8), at which point it packs loose objects, consolidates packfiles,
 prunes objects unreachable-and-past-expiry, and rolls per-file refs into `.git/packed-refs` (git-12). Know
 that an explicit `git gc` (not just the auto-triggered one) can run this immediately and shrink the recovery
 window on demand — don't run it reflexively on a repo where you might still need git-41. *[VERIFIED,
@@ -548,8 +558,9 @@ alone.
 
 Object header format `"<type> <byte-len>\0" + content`, id = SHA-1 of that · loose object path
 `.git/objects/<sha[0:2]>/<sha[2:]>` · `git gc --auto` fires past **~7,000 loose objects / 50 packfiles**
-(git-8, git-43) · reflog retention **90 days reachable / 30 days unreachable** (`gc.reflogExpire` /
-`gc.reflogExpireUnreachable`, git-39) · default merge strategy = **`ort`** (git-15) · conflict marker default
+(exact `gc.auto` default: **6700**, git-8, git-43) · reflog retention **90 days reachable / 30 days
+unreachable** (`gc.reflogExpire` / `gc.reflogExpireUnreachable`, git-39) · default merge strategy =
+**`ort`** (since Git 2.34; `recursive` before that, git-15) · conflict marker default
 width = **7 characters**, override via `conflict-marker-size` (git-54) · interactive-rebase todo verbs =
 **pick / reword / edit / squash / fixup / drop** (git-22) · reset stop points = **`--soft`**(HEAD only) /
 **`--mixed`**(+index, default) / **`--hard`**(+working dir) (git-14) · gitignore precedence = **CLI >
@@ -569,15 +580,19 @@ push safety = **`--force-with-lease` over `--force`** (git-62) · recovery order
   Maintenance and Data Recovery*.
 - Git reference documentation (`git-scm.com/docs/<cmd>`): `git-rebase` (INTERACTIVE MODE, MERGE STRATEGIES,
   `--onto`, `--exec`, `--autosquash`, REBASING MERGES); `git-cherry-pick` (SYNOPSIS, SEQUENCER SUBCOMMANDS);
-  `git-stash` (SYNOPSIS, COMMANDS); `git-worktree` (DESCRIPTION, COMMANDS); `git-bisect` (SYNOPSIS,
-  DESCRIPTION); `git-reflog` (SYNOPSIS, expire options); `gitattributes` (`text`/`eol`, `export-ignore`,
-  merge drivers, `conflict-marker-size`); `gitignore` (DESCRIPTION, PATTERN FORMAT); `git-reset`
-  (DISCUSSION); `git-push` (`--force-with-lease`, `--force`).
+  `git-stash` (DESCRIPTION, SYNOPSIS, COMMANDS); `git-worktree` (DESCRIPTION, COMMANDS); `git-bisect`
+  (SYNOPSIS, DESCRIPTION, "Bisect run"); `git-reflog` (SYNOPSIS, expire options); `gitattributes`
+  (`text`/`eol`, `export-ignore`, merge drivers, `conflict-marker-size`); `gitignore` (DESCRIPTION, PATTERN
+  FORMAT); `git-reset` (DISCUSSION); `git-push` (`--force-with-lease`, `--force`); `merge-strategies` (`ort`,
+  `recursive`); `git-gc` and `git-config` (`gc.auto` CONFIGURATION).
 
-**Evidence flags carried from the research:** rules marked `[INFERRED]` (git-31, git-51, git-61) are
+**Evidence flags carried from the research:** rules marked `[INFERRED]` in full are git-51 and git-61 —
 well-established community convention or a config knob referenced only in passing on a fetched page, not the
-literal subject of primary-source prose quoted above — flagged rather than presented as an official
-mandate. Every other checkable/principle rule cites the specific fetched page it comes from.
+literal subject of primary-source prose quoted above, flagged rather than presented as an official mandate.
+git-31's core claim (the latest stash lives at `refs/stash`, older stashes in that ref's reflog) is directly
+quoted from the fetched `git-stash` DESCRIPTION and is **[VERIFIED]**; only its closing editorial gloss ("not
+a separate, magical storage class") remains a labeled inference. Every other checkable/principle rule cites
+the specific fetched page it comes from.
 
 *Colophon: v1, 2026-08-16. Distilled with zero shortcuts from the Pro Git book and the official git
 reference docs, fetched and read in full; 63 rules (git-1…git-63); no section dropped; verified vs
