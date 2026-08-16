@@ -18,6 +18,8 @@ assert.equal(m.expertise, name, 'expertise field must equal name');
 assert.equal(m.source, `expertise/${name}.md`, 'source must point at the guide');
 assert.ok(Array.isArray(m.rules) && m.rules.length > 0, 'rules non-empty');
 assert.ok(m.sections_accounted && typeof m.sections_accounted === 'object', 'sections_accounted object');
+assert.ok(typeof m.note === 'string' && m.note.trim().length > 0, 'note must be a non-empty string');
+assert.ok(m.schema && typeof m.schema === 'object' && !Array.isArray(m.schema), 'schema must be an object');
 
 const ids = new Set();
 for (const r of m.rules) {
@@ -33,15 +35,34 @@ const banned = ['chain', 'of', 'thought'].join('-');
 assert.ok(!guide.includes(banned) && !JSON.stringify(m).includes(banned), 'banned reasoning-trace phrase present');
 
 // every "## " / "§" guide header appears as a sections_accounted key (report gaps)
+// Match by NORMALIZED TEXT: strip a leading section marker/number (e.g. "§0", "0."),
+// strip punctuation, lowercase both sides, then require a genuine substring or
+// significant-keyword overlap between the normalized header and the normalized key.
+// The marker is only stripped (never compared as a standalone number), so a manifest
+// cannot pass by matching the section number alone while describing the wrong content.
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'and', 'or', 'to', 'in', 'for', 'on', 'with', 'by', 'at',
+  'from', 'as', 'is', 'are', 'this', 'that', 'these', 'those', 'about', 'one', 'it',
+  'its', 'be', 'do', 'not', 'no', 'nor', 'so', 'if', 'then', 'than', 'into', 'onto',
+  'per', 'via', 'vs', 'what',
+]);
+const normalizeSection = (s) => s
+  .replace(/^§?\s*\d+[.)]?\s*/, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim()
+  .replace(/\s+/g, ' ');
+const contentWords = (s) => normalizeSection(s).split(' ').filter(w => w.length > 2 && !STOPWORDS.has(w));
 const headers = [...guide.matchAll(/^##+\s+(.+)$/gm)].map(x => x[1].trim());
 const keys = Object.keys(m.sections_accounted);
 const missing = headers.filter(h => {
-  const headerNum = h.match(/^(\d+)/)?.[1];
+  const hNorm = normalizeSection(h);
+  const hWords = new Set(contentWords(h));
   return !keys.some(k => {
-    const keyNum = k.match(/§?(\d+)/)?.[1];
-    if (headerNum && keyNum && headerNum === keyNum) return true;
-    if (k.includes(h) || h.includes(k.replace(/^§?\s*/, ''))) return true;
-    return false;
+    const kNorm = normalizeSection(k);
+    if (!hNorm || !kNorm) return false;
+    if (hNorm.includes(kNorm) || kNorm.includes(hNorm)) return true;
+    return contentWords(k).some(w => hWords.has(w));
   });
 });
 assert.equal(missing.length, 0, `sections_accounted missing headers: ${missing.join(' | ')}`);
@@ -52,14 +73,11 @@ const accStr = JSON.stringify(m.sections_accounted);
 for (const r of m.rules) {
   const found = accStr.includes(r.id) ||
     Object.values(m.sections_accounted).some(v => {
-      // Check for range notation like "ea-1..ea-6"
-      const rangeMatch = String(v).match(new RegExp(`${r.id.replace(/\d+$/, '')}(\\d+)\\.\\.${r.id.replace(/.*-/, '')}`));
-      if (rangeMatch) return true;
-      // Also check ranges in reverse or with the id in the middle
+      // Check ranges like "prefix-N..prefix-M" (inclusive) covering r.id's number
       const prefix = r.id.replace(/-\d+$/, '');
       const num = parseInt(r.id.replace(/.*-/, ''));
       const ranges = [...String(v).matchAll(new RegExp(`${prefix}-(\\d+)\\.\\.${prefix}-(\\d+)`, 'g'))];
-      return ranges.some(m => parseInt(m[1]) <= num && num <= parseInt(m[2]));
+      return ranges.some(range => parseInt(range[1]) <= num && num <= parseInt(range[2]));
     });
   assert.ok(found, `${r.id} not referenced in sections_accounted`);
 }
