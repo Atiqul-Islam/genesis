@@ -120,6 +120,17 @@ jobs:
             if [ -f "$t" ]; then echo "== $t =="; node "$t"; else echo "skip (absent): $t"; fi
           done
 
+      - name: build-engineer expertise-manifest + skill/mode-detection tests
+        shell: bash
+        run: |
+          set -e
+          for m in git-mastery engineering-leadership test-driven-development spec-driven-development system-operation-maintenance; do
+            echo "== manifest: $m =="
+            node expertise/manifests/tests/_manifest_check.mjs "$m" expertise
+          done
+          echo "== build-engineer skill_structure =="; node test/tools/build-engineer/skill_structure.test.mjs
+          echo "== build-engineer integration =="; node test/tools/build-engineer/integration.test.mjs
+
       - name: Assert the plugin is Python-free (no runtime .py)
         shell: bash
         run: |
