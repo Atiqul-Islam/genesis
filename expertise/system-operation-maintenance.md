@@ -150,7 +150,7 @@ branches/about-protected-branches — "About branch protection rules" tip.]*
 admin permissions on the repository. Decide **explicitly** whether admins are actually bound by the same
 required checks as everyone else, rather than leaving this permissive default unexamined — an unreviewed
 admin-bypass is a standing hole in a gate everyone else believes is enforced. *[VERIFIED, docs.github.com/en/
-repositories/.../about-protected-branches — "About branch protection rules".]*
+repositories/.../about-protected-branches — "Do not allow bypassing the above settings".]*
 
 **som-14 (checkable).** Sequence dependent CI jobs with `jobs.<job_id>.needs` (a string or array): a job
 runs only once every job it needs has **completed successfully**. If a needed job fails or is skipped, every
@@ -175,12 +175,12 @@ workflow-syntax — `jobs.<job_id>.secrets.inherit`.]*
 
 **som-17 (checkable).** Prevent overlapping or racing runs with `concurrency`: group runs under a key (e.g.
 `${{ github.workflow }}-${{ github.ref }}`) and set `cancel-in-progress` deliberately. GitHub Actions'
-**default behavior with no `concurrency` block is to allow unlimited concurrent runs/jobs** — `true` auto-
-cancels a superseded in-progress run (right for CI on a fast-moving branch), `false` lets an already-running
-job finish undisturbed (right for a production deploy you never want interrupted mid-flight). Concurrency-group
-names must be unique across workflows, or an unrelated workflow's in-progress run can be cancelled by mistake.
-*[VERIFIED, docs.github.com/.../workflow-syntax — `concurrency`, "the default behavior... is to allow multiple
-jobs or workflow runs to run concurrently".]*
+**default behavior with no `concurrency` block is to allow multiple (uncapped by default) concurrent
+runs/jobs** — `true` auto-cancels a superseded in-progress run (right for CI on a fast-moving branch), `false`
+lets an already-running job finish undisturbed (right for a production deploy you never want interrupted
+mid-flight). Concurrency-group names must be unique across workflows, or an unrelated workflow's in-progress
+run can be cancelled by mistake. *[VERIFIED, docs.github.com/.../workflow-syntax — `concurrency`, "the default
+behavior... is to allow multiple jobs or workflow runs to run concurrently".]*
 
 **som-18 (checkable).** Never weaken or skip a required check, a branch-protection rule, or a `needs` gate to
 get a red build merged — fix the underlying failure, or change the check itself through the same review
@@ -258,9 +258,10 @@ instead of) triggering a full deployment rollback?
 ## 6. Artifact integrity — checksums, signing, provenance
 
 **som-27 (checkable).** Establish build **provenance** for a release artifact with a GitHub Actions
-attestation: grant the building job the `id-token`, `contents`, and `attestations` write permissions (add the
-`packages` write permission when the artifact is a container image), then run `actions/attest@v4` **after**
-the build step — a `subject-path` input for a binary, or a `subject-name` (fully-qualified image name, no
+attestation: grant the building job three permissions — `id-token` (write), `contents` (**read**, not write),
+and `attestations` (write) — adding `packages` (write) only when the artifact is a container image, then run
+`actions/attest@v4` **after** the build step — a `subject-path` input for a binary, or a `subject-name`
+(fully-qualified image name, no
 tag) plus a `subject-digest` input (the artifact's own SHA-256 digest) for a container image. *[VERIFIED,
 docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations —
 "Generating artifact attestations for your builds".]*
@@ -413,7 +414,8 @@ non-numeric, larger identifier-set wins on a tie) (`som-7`) · Yanked marker = `
 [YANKED]` (`som-9`) · environment protection = required reviewers (≤6, 1 approval, optional prevent-self-
 review) + wait timer + deployment branch policy + admin-bypass toggle (`som-20`–`21`) · concurrency default =
 **unlimited concurrent runs** unless a `concurrency:` block is set (`som-17`) · attestation permissions =
-`id-token`, `contents`, `attestations` write (+`packages` write for images) via `actions/attest@v4` (`som-27`)
+`id-token` write, `contents` **read**, `attestations` write (+`packages` write for images) via
+`actions/attest@v4` (`som-27`)
 · rollback = redeploy the last-known-good artifact, never renumber a published version (`som-24`–`25`) · the
 one always-confirm class = **deploy / publish / push-or-force-push / delete** (`som-35`).
 
