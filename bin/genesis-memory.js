@@ -42,7 +42,7 @@ const childProcess = require("child_process");
 
 // The GitHub Release tag (minus the leading "v") to fetch, and the repo. BUMP RELEASE_VERSION per
 // release (same commit as the git tag). This is the single source of truth for which assets to pull.
-const RELEASE_VERSION = "0.2.0-beta.1";
+const RELEASE_VERSION = "0.2.0-beta.2";
 const REPO = "Atiqul-Islam/genesis";
 const SERVER_STEM = "genesis-memory-server";
 const HOOK_STEM = "genesis-hook";
@@ -316,6 +316,18 @@ async function syncRepo(genesisHome) {
       if (path.resolve(selfCopy) !== path.resolve(__filename)) fs.copyFileSync(__filename, selfCopy);
     } catch (_e) {
       // ignore — the binaries are what matter
+    }
+    // Heal the managed .gitignore block so a workspace bootstrapped with an OLDER template adopts the
+    // current one (e.g. the `!.genesis/memory.db` re-include that lets the vector DB travel with the repo).
+    // The block is single-sourced in the Rust cli; run it on the repo root (parent of the .genesis home).
+    // Fail-open: a gitignore heal must never break session start.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["sync-gitignore", path.dirname(genesisHome)], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on a gitignore heal
     }
     fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
     log("synced " + genesisHome + " -> v" + RELEASE_VERSION);

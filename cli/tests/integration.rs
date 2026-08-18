@@ -302,6 +302,43 @@ fn bootstrap_emits_portable_project_dir_paths_not_absolute() {
     );
 }
 
+// ── sync-gitignore: an update heals a stale managed block so memory.db can travel ────────────
+#[test]
+fn sync_gitignore_heals_stale_block_to_commit_memory_db() {
+    let tgt_dir = tempdir().unwrap();
+    let target = tgt_dir.path();
+    // A managed block from an OLDER template: correct sentinels, but NO `!.genesis/memory.db`.
+    let stale = "# my own rule\nnode_modules/\n\n\
+# >>> genesis runtime (managed by bootstrap) >>>\n\
+.genesis/*\n!.genesis/expertise/\n!.genesis/hooks/\n!.genesis/memory/\n*.db\n.mcp.json\n\
+# <<< genesis runtime <<<\n";
+    std::fs::write(target.join(".gitignore"), stale).unwrap();
+
+    let code = bootstrap::run_sync_gitignore(&[target.to_string_lossy().into_owned()]);
+    assert_eq!(code, 0, "sync-gitignore exits 0");
+
+    let gi = read(&target.join(".gitignore"));
+    assert!(
+        gi.contains("!.genesis/memory.db"),
+        "healed block re-includes the vector DB so memory.db can be committed, got:\n{gi}"
+    );
+    assert!(
+        gi.contains("# my own rule") && gi.contains("node_modules/"),
+        "the user's own lines outside the sentinels are preserved"
+    );
+
+    // idempotent: a second heal is byte-identical.
+    assert_eq!(
+        bootstrap::run_sync_gitignore(&[target.to_string_lossy().into_owned()]),
+        0
+    );
+    assert_eq!(
+        gi,
+        read(&target.join(".gitignore")),
+        "sync-gitignore is idempotent"
+    );
+}
+
 // ── drift: committed agents/*.md == what genesis-cli build-plugin-agents regenerates ────────
 #[test]
 fn build_plugin_agents_matches_committed_no_drift() {
