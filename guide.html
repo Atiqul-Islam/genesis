@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Genesis — building agents, in practice</title>
+<style>
+  /* Shared "ink & seal" identity — same tokens as the overview page. */
+  :root{
+    color-scheme:light dark;
+    --bg:#14110d; --bg2:#1b1712; --panel:#221d17; --line:#332c24;
+    --text:#f1ece3; --dim:#b0a595; --faint:#8a7f70;
+    --indigo:#7fa9e2; --indigo-hi:#a9c8ef;
+    --seal:#e2543c; --seal-hi:#f28a72;
+    --shadow:0 1px 0 rgba(255,255,255,.03), 0 22px 46px -28px rgba(0,0,0,.8);
+    --sans:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#e8e4dc; --bg2:#f3f1ec; --panel:#fffdf9; --line:#d5cfc3;
+      --text:#171309; --dim:#4e483d; --faint:#665f52;
+      --indigo:#2a4a90; --indigo-hi:#1c3670;
+      --seal:#b23a20; --seal-hi:#8f2a13;
+      --shadow:0 1px 0 rgba(255,255,255,.7), 0 18px 40px -28px rgba(40,28,12,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14110d; --bg2:#1b1712; --panel:#221d17; --line:#332c24;
+    --text:#f1ece3; --dim:#b0a595; --faint:#8a7f70;
+    --indigo:#7fa9e2; --indigo-hi:#a9c8ef;
+    --seal:#e2543c; --seal-hi:#f28a72;
+  }
+  :root[data-theme="light"]{
+    --bg:#e8e4dc; --bg2:#f3f1ec; --panel:#fffdf9; --line:#d5cfc3;
+    --text:#171309; --dim:#4e483d; --faint:#665f52;
+    --indigo:#2a4a90; --indigo-hi:#1c3670;
+    --seal:#b23a20; --seal-hi:#8f2a13;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0; padding:0;}
+  :focus-visible{outline:2px solid var(--seal); outline-offset:3px; border-radius:3px;}
+
+  .page{
+    background:
+      radial-gradient(85% 55% at 88% 2%, color-mix(in srgb, var(--indigo) 9%, transparent), transparent 62%),
+      radial-gradient(75% 50% at 4% 100%, color-mix(in srgb, var(--seal) 8%, transparent), transparent 58%),
+      var(--bg);
+    color:var(--text); font-family:var(--sans);
+    min-height:100vh; padding:clamp(28px,5vw,60px) clamp(18px,5vw,40px);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px; margin:0 auto; display:flex; flex-direction:column; gap:clamp(22px,3vw,34px);}
+
+  .topnav{display:flex; flex-wrap:wrap; align-items:baseline; gap:7px 16px; padding-bottom:13px; border-bottom:1px solid var(--line);}
+  .topnav .mark{font-family:var(--mono); font-size:1.02rem; font-weight:700; letter-spacing:-.01em; color:var(--text); margin-right:8px;}
+  .topnav .mark .slash{color:var(--seal);}
+  .topnav a{font-size:.84rem; color:var(--dim); text-decoration:none; border-bottom:1px solid transparent; padding-bottom:2px;}
+  .topnav a:hover{color:var(--text); border-bottom-color:var(--line);}
+  .topnav a.here{color:var(--seal-hi); border-bottom-color:var(--seal); font-weight:650;}
+
+  h1{margin:.2em 0 0; font-size:clamp(1.7rem,4.2vw,2.6rem); line-height:1.08; font-weight:800; letter-spacing:-.025em; text-wrap:balance; max-width:22ch;}
+  .lede{margin:.9em 0 0; font-size:clamp(.98rem,1.9vw,1.12rem); line-height:1.55; color:var(--dim); max-width:68ch;}
+  .lede b{color:var(--text); font-weight:650;}
+
+  /* ---- a worked example ---- */
+  .ex{
+    background:linear-gradient(180deg,var(--bg2),color-mix(in srgb,var(--bg2) 78%, var(--bg)));
+    border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
+    padding:clamp(18px,3vw,26px); display:flex; flex-direction:column; gap:14px;
+  }
+  .ex > header{display:flex; flex-direction:column; gap:6px;}
+  .ex .tagline{font-family:var(--mono); font-size:.62rem; letter-spacing:.2em; text-transform:uppercase; color:var(--indigo);}
+  .ex h2{margin:0; font-size:clamp(1.2rem,2.6vw,1.55rem); font-weight:800; letter-spacing:-.02em; line-height:1.2;}
+  .ex .intro{margin:0; font-size:.93rem; line-height:1.55; color:var(--dim); max-width:70ch;}
+  .ex .intro b{color:var(--text); font-weight:700;}
+
+  .steps{display:flex; flex-direction:column; gap:10px;}
+  .step{display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start;}
+  .step .num{
+    font-family:var(--mono); font-size:.66rem; font-weight:700; letter-spacing:.06em;
+    color:var(--panel); background:var(--indigo); border-radius:5px; padding:4px 7px; line-height:1;
+    min-width:26px; text-align:center;
+  }
+  .step .body{min-width:0; display:flex; flex-direction:column; gap:6px;}
+  .step h3{margin:0; font-size:.95rem; font-weight:750; letter-spacing:-.01em; line-height:1.3;}
+  .step p{margin:0; font-size:.87rem; line-height:1.5; color:var(--dim);}
+  .step p b{color:var(--text); font-weight:700;}
+  .step em{color:var(--text); font-style:italic;}
+
+  .say{
+    margin:2px 0 0; font-family:var(--mono); font-size:.78rem; line-height:1.75; color:var(--dim);
+    background:var(--panel); border:1px solid var(--line); border-radius:9px;
+    padding:11px 13px; overflow-x:auto; white-space:pre-wrap;
+  }
+  .say u{text-decoration:none; color:var(--indigo-hi);}
+  .say i{font-style:normal; color:var(--faint);}
+
+  /* a refusal / gate — the one accent, used only where Genesis says no */
+  .gate{
+    border:1px solid color-mix(in srgb,var(--seal) 42%, var(--line)); border-radius:10px;
+    background:color-mix(in srgb,var(--seal) 7%, transparent);
+    padding:11px 13px; display:flex; flex-direction:column; gap:4px;
+  }
+  .gate b{font-size:.85rem; font-weight:750; color:var(--seal-hi);}
+  .gate p{margin:0; font-size:.84rem; line-height:1.48; color:var(--dim);}
+
+  .tip{font-family:var(--mono); font-size:.65rem; line-height:1.55; color:var(--faint); margin:0;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .mini{border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--panel); display:flex; flex-direction:column; gap:5px;}
+  .mini b{font-size:.88rem; font-weight:750;}
+  .mini p{margin:0; font-size:.83rem; line-height:1.45; color:var(--dim);}
+
+  .foot{display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:15px;}
+  .foot p{margin:0; font-family:var(--mono); font-size:.65rem; line-height:1.65; color:var(--faint);}
+  .foot a{color:var(--indigo); text-decoration:none;}
+  .foot a:hover{text-decoration:underline;}
+
+  @media (max-width:620px){
+    .grid2{grid-template-columns:1fr;}
+    .step{grid-template-columns:1fr; gap:6px;}
+    .step .num{justify-self:start;}
+  }
+</style>
+</head>
+<body>
+
+<main class="page">
+  <div class="wrap">
+
+    <nav class="topnav" aria-label="Genesis documentation">
+      <span class="mark">genesis<span class="slash">/</span></span>
+      <a href="genesis.html">Overview</a>
+      <a href="functions.html">Functions</a>
+      <a href="guide.html" class="here" aria-current="page">Guide</a>
+      <a href="releases.html">Releases</a>
+    </nav>
+
+    <header>
+      <h1>Building agents, in practice</h1>
+      <p class="lede">Four worked examples: <b>one expert agent</b>, <b>a team</b>, <b>making an agent the folder's own Claude</b>, and <b>cloning the session you're already in</b>. You drive all of them from a single command — the rest is Sensei asking you questions and refusing to guess at the answers.</p>
+    </header>
+
+    <!-- ── EXAMPLE A ───────────────────────────────────────────── -->
+    <section class="ex">
+      <header>
+        <p class="tagline">Example one · the common case</p>
+        <h2>Build a single expert agent</h2>
+        <p class="intro">Say you want an agent that reviews your pull-request diffs for security problems — and you want it to actually know something about the subject, not just be told to "be careful". <b>This is the path most builds take.</b></p>
+      </header>
+
+      <div class="steps">
+
+        <div class="step"><span class="num">01</span><div class="body">
+          <h3>Ask for it</h3>
+          <p>One command, in the folder you want the agent to live in. You can put the whole request on the line, or type nothing and let Sensei start the interview.</p>
+          <p class="say"><u>/genesis:new</u> an agent that reviews my pull-request diffs for security issues</p>
+        </div></div>
+
+        <div class="step"><span class="num">02</span><div class="body">
+          <h3>Sensei interviews you — and restates it back</h3>
+          <p>It gathers the goal, what <em>done</em> looks like, the exact tools the agent may use, and when it should stop and escalate to you. Then it repeats every requirement back and builds only on what you confirm.</p>
+          <p>It also asks two questions it will <b>never answer for you</b>: is this one agent or a team, and does it install as a named subagent or as this folder's main Claude.</p>
+        </div></div>
+
+        <div class="step"><span class="num">03</span><div class="body">
+          <h3>You choose what it must know</h3>
+          <p>Sensei proposes the expertise the agent has to apply — for a security reviewer, that might be your threat model and your review standard. You add, drop or change it, and you decide whether to have it deep-researched now against sources you name.</p>
+          <div class="gate">
+            <b>This step cannot be skipped.</b>
+            <p>A hook blocks assembly outright unless the research step actually ran this session. The point is that no agent is ever built on expertise nobody chose.</p>
+          </div>
+        </div></div>
+
+        <div class="step"><span class="num">04</span><div class="body">
+          <h3>Method writes the tests first</h3>
+          <p>Sensei hands Method a task-spec. Method writes the agent's acceptance tests <em>before</em> the agent — must refuse this, must escalate that, must stay in its lane — proves they <b>fail</b> without the agent, then writes the smallest persona that makes them pass.</p>
+          <p class="tip">a persona that passes because the base model would have done it anyway is a test that proves nothing — hence the failing baseline</p>
+        </div></div>
+
+        <div class="step"><span class="num">05</span><div class="body">
+          <h3>It lands, wired</h3>
+          <p>The finished agent is written into your repo with its enforcement hooks attached and, if you asked for it, its own memory. Your teammates get it on a clone.</p>
+          <p class="say"><i># what you now have</i>
+.claude/agents/<u>security-reviewer</u>.md     <i>the agent</i>
+.genesis/expertise/                     <i>what it must apply</i>
+.genesis/bin/genesis-hook               <i>what enforces it</i></p>
+        </div></div>
+
+        <div class="step"><span class="num">06</span><div class="body">
+          <h3>Use it</h3>
+          <p>It is an ordinary Claude Code agent from here — call it by name. The difference is what happens while it runs: it cannot write a credential, cannot exceed its budget, and cannot finish a turn without citing the rules it applied.</p>
+          <p class="say"><u>&gt;</u> Use security-reviewer on the diff for this branch.</p>
+        </div></div>
+
+      </div>
+    </section>
+
+    <!-- ── EXAMPLE B ───────────────────────────────────────────── -->
+    <section class="ex">
+      <header>
+        <p class="tagline">Example two · when one isn't enough</p>
+        <h2>Build an agentic team</h2>
+        <p class="intro">A team is a supervisor plus specialists, each with its own narrow job and its own tools. It is <b>genuinely more expensive</b> — multi-agent work costs several times the tokens of a single agent — so Genesis makes you earn it.</p>
+      </header>
+
+      <div class="steps">
+
+        <div class="step"><span class="num">01</span><div class="body">
+          <h3>Ask for the outcome, not the org chart</h3>
+          <p>Describe what you want done. Sensei decomposes it; you are not expected to design the roster.</p>
+          <p class="say"><u>/genesis:new</u> a team that audits our repos: one pass per repo, then a single consolidated report</p>
+        </div></div>
+
+        <div class="step"><span class="num">02</span><div class="body">
+          <h3>The single-agent-first gate</h3>
+          <p>Before anything is built, Sensei applies a test drawn from its own teams expertise: <em>would one agent do?</em> A team is justified only by a named limitation of the single agent — work that exceeds one context, subtasks that are genuinely independent, parallelism that materially cuts latency.</p>
+          <div class="gate">
+            <b>If one agent suffices, you get one agent.</b>
+            <p>That halt is a feature, not a failure. And Sensei will still not decide team-vs-single <em>for</em> you — it puts the recommendation and the reason in front of you, and you choose.</p>
+          </div>
+        </div></div>
+
+        <div class="step"><span class="num">03</span><div class="body">
+          <h3>The roster gets decided with you</h3>
+          <p>One specialist per independent responsibility, each scoped to a job you could state in a sentence, each given only the tools that job needs. Sensei states the plan back before building anything.</p>
+          <div class="grid2">
+            <div class="mini"><b>The supervisor</b><p>Decomposes, delegates, verifies each result, synthesises, and decides when the work is done. It owns the outcome and does none of the specialist work itself.</p></div>
+            <div class="mini"><b>Each specialist</b><p>One coherent job, least-privilege tools, and an explicit out-of-scope rule so it hands work back rather than improvising outside its lane.</p></div>
+          </div>
+        </div></div>
+
+        <div class="step"><span class="num">04</span><div class="body">
+          <h3>Every member is built the same way</h3>
+          <p>Expertise chosen with you, tests written first, assembled with full enforcement. A team is not a shortcut around the discipline — it is the same discipline, several times.</p>
+          <p class="tip">delegation is a contract, not a sentence: each specialist receives an objective, its inputs, an output schema and acceptance criteria — and every result is untrusted until the supervisor checks it against them</p>
+        </div></div>
+
+        <div class="step"><span class="num">05</span><div class="body">
+          <h3>Genesis is itself the worked example</h3>
+          <p>Sensei and Method <em>are</em> a two-agent team built on this pattern: a coordinator that never authors, and a craftsman that never orchestrates — with the boundary enforced by the tool list, not by asking nicely. Method has no Agent tool, so it physically cannot delegate.</p>
+        </div></div>
+
+      </div>
+    </section>
+
+    <!-- ── EXAMPLE C ───────────────────────────────────────────── -->
+    <section class="ex">
+      <header>
+        <p class="tagline">Example three · promotion</p>
+        <h2>Make an agent the folder's own Claude — and undo it</h2>
+        <p class="intro">A subagent is something you summon by name. A <b>promoted</b> agent simply <em>is</em> Claude Code in that folder: its persona becomes the folder's brief and its enforcement moves to the main thread. It stays available as a subagent too.</p>
+      </header>
+
+      <div class="steps">
+
+        <div class="step"><span class="num">01</span><div class="body">
+          <h3>Decide at build time — or change your mind later</h3>
+          <p>Sensei asks during the interview. If you said "subagent" then and want to switch now, one command does it. Only one agent is the folder's Claude at a time, so promoting a different one simply replaces the block.</p>
+          <p class="say"><u>/genesis:promote</u> security-reviewer</p>
+        </div></div>
+
+        <div class="step"><span class="num">02</span><div class="body">
+          <h3>What actually changes on disk</h3>
+          <p>Two files, both edited surgically. Genesis writes between its own sentinels and leaves everything else exactly as it found it.</p>
+          <p class="say">CLAUDE.md
+  <i># >>> genesis agent: security-reviewer (managed) >>></i>
+  <i>…the agent's persona…</i>
+  <i># &lt;&lt;&lt; genesis agent: security-reviewer &lt;&lt;&lt;</i>
+
+.claude/settings.json
+  <i>SessionStart / PreToolUse / Stop hooks, each carrying</i> <u>--main-agent security-reviewer</u></p>
+          <p><b>Your own CLAUDE.md content and your own hooks are preserved.</b> Re-running is idempotent — you get one block, not two.</p>
+        </div></div>
+
+        <div class="step"><span class="num">03</span><div class="body">
+          <h3>Reopen the folder</h3>
+          <p>The main-thread persona and hooks take effect on a fresh session. From then on there is nothing to invoke — the folder's Claude <em>is</em> your agent, with the same enforcement it had as a subagent.</p>
+        </div></div>
+
+        <div class="step"><span class="num">04</span><div class="body">
+          <h3>Undo it whenever</h3>
+          <p>No agent name needed — only one is ever main. The managed block and the main-thread hooks come out; your content and hooks stay; the agent remains available as a subagent. If nothing was promoted, it says so and changes nothing.</p>
+          <p class="say"><u>/genesis:demote</u></p>
+        </div></div>
+
+      </div>
+    </section>
+
+    <!-- ── EXAMPLE D ───────────────────────────────────────────── -->
+    <section class="ex">
+      <header>
+        <p class="tagline">Example four · the unusual one</p>
+        <h2>Turn the session you're in into an agent</h2>
+        <p class="intro">Sometimes the context you want an agent to have is <b>the conversation you are already having</b>. Genesis can capture the live session and hand it to a new agent as memory — then specialise it the normal way.</p>
+      </header>
+
+      <div class="steps">
+
+        <div class="step"><span class="num">01</span><div class="body">
+          <h3>Ask for a single agent, and say yes to the copy</h3>
+          <p>For single-agent builds Sensei offers the choice explicitly: a fresh agent, or a copy of your current session. It never assumes.</p>
+        </div></div>
+
+        <div class="step"><span class="num">02</span><div class="body">
+          <h3>Everything is captured — and scrubbed</h3>
+          <p>Six stores are read: the transcript, auto-memory, the context-mode database, claude-mem, the Genesis database and your user config. <b>Credentials are scrubbed on the way out</b>, and you can name specific secret values for guaranteed removal.</p>
+          <div class="gate">
+            <b>Credentials are never copied.</b>
+            <p>Scrubbing runs over six credential shapes plus anything you list explicitly, and it has its own unit tests — this is the security-critical step in the pipeline.</p>
+          </div>
+        </div></div>
+
+        <div class="step"><span class="num">03</span><div class="body">
+          <h3>It becomes memory, not a transcript dump</h3>
+          <p>The captured history is embedded into the repo's memory under the new agent's id, plus a short digest it loads at the start of every session. The agent recalls the rest <em>by meaning</em>, on demand — it doesn't carry the whole conversation in its context.</p>
+          <p class="tip">the bundle lives in the repo and travels with a git clone — no dependency on your ~/.claude</p>
+        </div></div>
+
+        <div class="step"><span class="num">04</span><div class="body">
+          <h3>Then the normal build continues</h3>
+          <p>Method authors the specialised persona on top, and the assembler wires it. You end up with a named agent that already knows everything the two of you worked out.</p>
+        </div></div>
+
+      </div>
+    </section>
+
+    <!-- ── the refusals ────────────────────────────────────────── -->
+    <section class="ex">
+      <header>
+        <p class="tagline">Worth knowing up front</p>
+        <h2>Four things Genesis will refuse to do</h2>
+        <p class="intro">These are not rough edges. Each one is a deliberate decision, and each is enforced by something outside the model — so it holds even when the conversation gets long.</p>
+      </header>
+      <div class="grid2">
+        <div class="mini"><b>It won't decide for you</b><p>Single agent or a team, subagent or main Claude, what the agent must know — Sensei asks and waits. Tell it "you decide" and it will still put the choice back to you.</p></div>
+        <div class="mini"><b>It won't skip the research</b><p>A hook blocks assembly unless the expertise step ran. Being in a hurry is not an accepted reason.</p></div>
+        <div class="mini"><b>It won't ship untested</b><p>Method writes the tests before the agent and returns only when they pass. Ask it to skip them and it refuses.</p></div>
+        <div class="mini"><b>It won't let an agent finish quietly</b><p>An agent must cite the rules it applied, with evidence that resolves to something it actually wrote. Fabricate a rule id and the turn is blocked.</p></div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <p>v0.1.0-beta.8 · MIT · the procedures above are the ones in skills/build-agent, skills/research-expertise and the commands/ directory — read them if you want the exact wording the agents follow.</p>
+      <p><a href="genesis.html">← Overview</a> · <a href="functions.html">← Functions</a> · <a href="releases.html">Releases →</a></p>
+    </footer>
+
+  </div>
+</main>
+
+</body>
+</html>
