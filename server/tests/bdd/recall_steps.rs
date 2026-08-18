@@ -47,7 +47,10 @@ struct RecallWorld {
 /// Resolves the real model + tokenizer paths, FAILING (never skipping) if the model is absent.
 fn model() -> (String, String) {
     let (m, t) = genesis_memory::embed::model_paths();
-    assert!(m.exists(), "model missing: run `scripts/fetch-model`");
+    assert!(
+        m.exists(),
+        "model missing: run `node scripts/fetch-model.mjs`"
+    );
     (
         m.to_string_lossy().into_owned(),
         t.to_string_lossy().into_owned(),
@@ -157,14 +160,14 @@ async fn the_recall_result_contains_exactly_n_entries(w: &mut RecallWorld, n: us
     assert_eq!(items(w).len(), n);
 }
 
-#[then(regex = r"^the distance values in the recall result are non-decreasing$")]
-async fn distances_are_non_decreasing(w: &mut RecallWorld) {
-    let ds: Vec<f64> = items(w)
+#[then(regex = r"^the score values in the recall result are non-increasing$")]
+async fn scores_are_non_increasing(w: &mut RecallWorld) {
+    let ss: Vec<f64> = items(w)
         .iter()
-        .map(|it| it["distance"].as_f64().unwrap())
+        .map(|it| it["score"].as_f64().unwrap())
         .collect();
-    for win in ds.windows(2) {
-        assert!(win[0] <= win[1]);
+    for win in ss.windows(2) {
+        assert!(win[0] >= win[1], "scores must be ordered highest first");
     }
 }
 
@@ -173,12 +176,11 @@ async fn the_first_recall_entry_has_text(w: &mut RecallWorld, text: String) {
     assert_eq!(items(w)[0]["text"], text);
 }
 
-#[then(regex = r"^the first recall entry has distance exactly ([0-9.]+)$")]
-async fn the_first_recall_entry_has_distance(w: &mut RecallWorld, distance: f64) {
-    approx::assert_abs_diff_eq!(
-        items(w)[0]["distance"].as_f64().unwrap(),
-        distance,
-        epsilon = 1e-6
+#[then(regex = r"^the first recall entry has a positive score$")]
+async fn the_first_recall_entry_has_a_positive_score(w: &mut RecallWorld) {
+    assert!(
+        items(w)[0]["score"].as_f64().unwrap() > 0.0,
+        "the top hit has a positive composite relevance score"
     );
 }
 
@@ -193,19 +195,19 @@ async fn the_content_block_parses_as_a_json_array(w: &mut RecallWorld) {
     assert!(v.is_array());
 }
 
-#[then(regex = r"^every element of that array has exactly the keys id and text and distance$")]
+#[then(regex = r"^every element of that array has exactly the keys id and text and score$")]
 async fn every_element_has_exactly_the_three_keys(w: &mut RecallWorld) {
     for it in items(w) {
         let o = it.as_object().unwrap();
         assert_eq!(o.len(), 3);
-        assert!(o.contains_key("id") && o.contains_key("text") && o.contains_key("distance"));
+        assert!(o.contains_key("id") && o.contains_key("text") && o.contains_key("score"));
     }
 }
 
-#[then(regex = r"^in every element id is an integer, text is a string and distance is a number$")]
+#[then(regex = r"^in every element id is an integer, text is a string and score is a number$")]
 async fn every_element_has_the_right_types(w: &mut RecallWorld) {
     for it in items(w) {
-        assert!(it["id"].is_i64() && it["text"].is_string() && it["distance"].is_number());
+        assert!(it["id"].is_i64() && it["text"].is_string() && it["score"].is_number());
     }
 }
 

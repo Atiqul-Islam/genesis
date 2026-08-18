@@ -2,7 +2,7 @@
 
 > **Status: RATIFIED** (spec-forge run `20260719-052630-genesis-memory-server`, Phase 1).
 > Hallucination audit clean across 3 iterations (markers 34 → 9 → 0), then explicitly approved
-> by Atiqul. Grounded solely in `docs/SPEC_FORGE_RUST_UPDATE.md` §2/§5/§6.2 and the `server/`
+> by the maintainer. Grounded in the server design notes and the `server/`
 > scaffold. Read the Provenance legend below before treating any claim as sourced.
 
 ## Feature: Genesis MCP Memory Server
@@ -40,8 +40,8 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 1. An MCP client that completes `initialize` sees a server advertising a tools capability and protocol version `2024-11-05`.
 2. `tools/list` includes the tools `store`, `recall`, and `consolidate`.
 3. A memory sent to `store` for an agent is afterwards returned by a `recall` of closely related (paraphrased) text for that same agent, when that memory is the only one stored or is clearly nearest among deliberately dissimilar alternatives.
-4. `recall` returns at most `k` memories, ordered nearest first (ascending distance).
-5. `recall` of text identical to a stored memory returns that memory with distance `0.0`.
+4. `recall` returns at most `k` memories, ordered most relevant first (descending score). [0.2.0: was "ascending distance" under pure-KNN; now the hybrid pipeline's composite `score`, higher = better.]
+5. `recall` of text identical to a stored memory returns that memory first with a positive relevance score. [0.2.0: was "distance `0.0`" under pure-KNN.]
 6. `recall` for one `agent_id` never returns memories stored under a different `agent_id`.
 7. `recall` called without `k` still succeeds and returns at most 5 memories.
 8. `recall` never returns a memory that a previous `consolidate` retired as a duplicate.
@@ -52,7 +52,7 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 13. A near-duplicate memory stops being returned separately by `recall` only after an explicit `consolidate` call; storing it alone never retires anything.
 14. The server serves over stdio and exits cleanly when the client closes stdin.
 15. The server answers `store` / `recall` / `consolidate` calls with no network access at request time.
-16. `recall` reports each hit's identifier, original text, and distance in a machine-readable payload rather than as prose.
+16. `recall` reports each hit's identifier, original text, and relevance score in a machine-readable payload rather than as prose.
 17. The server reads its database location from the environment, so two clients configured with different locations never see each other's memories.
 
 ### Acceptance Criteria
@@ -60,8 +60,8 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 1. An `initialize` response advertises `tools` under `capabilities` and `protocolVersion == "2024-11-05"`.
 2. A `tools/list` response contains the tool names `store`, `recall`, and `consolidate`.
 3. Given an empty store, when `store` is called with `agent_id` A and text T and `recall` is then called with `agent_id` A and a paraphrase of T, the returned array contains an entry whose `text` equals T; the same holds when the store also contains the calibrated dissimilar-decoy fixture, in which case T's entry is first. No absolute similarity threshold is asserted.
-4. Given more stored memories than `k`, a `recall` with `k` returns exactly `k` entries whose `distance` values are non-decreasing.
-5. Given a memory stored with text T, a `recall` with query text T returns that memory first with `distance` exactly `0.0`.
+4. Given more stored memories than `k`, a `recall` with `k` returns exactly `k` entries whose `score` values are non-increasing.
+5. Given a memory stored with text T, a `recall` with query text T returns that memory first with a positive `score`.
 6. Given one memory under `agent_id` A and one under `agent_id` B, a `recall` for B contains no memory belonging to A.
 7. Given 6 or more memories for `agent_id` A, a `recall` for A whose arguments omit `k` returns exactly 5 entries.
 8. Given two memories merged by `consolidate`, a `recall` never returns the row whose `superseded_by` is non-null.
@@ -72,7 +72,7 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 13. Given two memories for the same `agent_id` whose cosine similarity is at or above `tau_merge`, a `recall` issued after `store` but before `consolidate` returns both, and a `recall` issued after `consolidate` returns exactly one of them and never the superseded one.
 14. A server child process that receives EOF on stdin terminates with exit status 0.
 15. With the model already present on disk, a `tools/call` for each of `store`, `recall`, and `consolidate` completes successfully while the suite runs with outbound network access unavailable.
-16. The text content block of a `recall` result parses as a JSON array whose every element has exactly the keys `id` (integer), `text` (string), and `distance` (number).
+16. The text content block of a `recall` result parses as a JSON array whose every element has exactly the keys `id` (integer), `text` (string), and `score` (number).
 17. Given two server processes launched with `GENESIS_MEMORY_DB` pointing at two different temporary files, a memory stored through the first is absent from a `recall` issued to the second for the same `agent_id`.
 
 ### Implementation Requirements
@@ -89,8 +89,8 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 **Recall response payload**
 
 - Serialize the `recall` result as a JSON array of objects (ratified choice — unsourced shape; rationale: §2.3a sources only the `ContentBlock::text` envelope, and a machine-readable body makes criteria 3/4/5/16 assertable instead of substring-sniffing prose).
-- Give each `recall` result object exactly the keys `id`, `text`, and `distance` (ratified choice — unsourced key names; rationale: same as above).
-- Order the `recall` result array by ascending `distance`, nearest first — honouring §2.3b's `ORDER BY distance LIMIT k`.
+- Give each `recall` result object exactly the keys `id`, `text`, and `score` (ratified choice — unsourced key names; rationale: same as above). [0.2.0: `distance` renamed to `score`, higher = better.]
+- Order the `recall` result array by descending `score`, most relevant first. [0.2.0: recall is now the hybrid pipeline (vector KNN + BM25 → RRF → recency/importance composite → MMR); the §2.3b `ORDER BY distance LIMIT k` remains the vector leg internally.]
 - Carry that JSON array as the string inside a single `ContentBlock::text`, keeping §2.3a's sourced `CallToolResult::success(vec![ContentBlock::text(..)])` envelope unchanged.
 
 **Database location**
@@ -140,18 +140,18 @@ dedup/merge at `store` time**, which §2.4 titles "Dedup/compress **on insert**"
 
 **Model provenance**
 
-- Provide `scripts/fetch-model`, which downloads the model and tokenizer into `server/models/` (ratified in iteration 2).
+- Provide `scripts/fetch-model.mjs`, which downloads the model and tokenizer into `server/models/` (ratified in iteration 2).
 - Fetch from the Hugging Face repository `sentence-transformers/all-MiniLM-L6-v2` — §2.3c names `all-MiniLM-L6-v2` as the primary model and §6.1 verifies its pooling mode from that repo's `1_Pooling/config.json`.
 - Fetch the files `onnx/model.onnx` and `tokenizer.json` — §2.3c refers to "the raw HF `onnx/model.onnx`".
-- Pin an explicit repository revision in `scripts/fetch-model`.
+- Pin an explicit repository revision in `scripts/fetch-model.mjs`.
 - Download only from that pinned revision.
-- Record in `scripts/fetch-model` that the revision is load-bearing because §6.2 #6 states ONNX exports of the same model differ in output shape (pooled output vs `last_hidden_state`) and in whether `token_type_ids` is required.
+- Record in `scripts/fetch-model.mjs` that the revision is load-bearing because §6.2 #6 states ONNX exports of the same model differ in output shape (pooled output vs `last_hidden_state`) and in whether `token_type_ids` is required.
 - Keep the model artifacts out of git (`.gitignore` already ignores `*.onnx`).
 - Assert the pinned SHA-256 of the fetched model file before running embedding tests.
 - Commit the pinned revision string as a constant, captured at first fetch — see "Bootstrap and calibration items".
 - Commit the pinned SHA-256 digest as a constant, captured at first fetch — see "Bootstrap and calibration items".
-- Make embedding tests fail — never skip — with a message directing the developer to run `scripts/fetch-model` when the model file is absent, because the BDD suites use the real model with no mocks (§5 #2).
-- Do not rely on `ort`'s `download-binaries` feature to supply the model: it fetches ONNX Runtime shared libraries at build time only, never the model weights.
+- Make embedding tests fail — never skip — with a message directing the developer to run `node scripts/fetch-model.mjs` when the model file is absent, because the BDD suites use the real model with no mocks (§5 #2).
+- The inference engine (pure-Rust **tract**, via `ort`'s `alternative-backend` + `ort-tract`) never supplies the model: it links no native runtime and downloads nothing at build time. The model weights ship separately — `node scripts/fetch-model.mjs` for dev, the `@xcidos/genesis-memory-model` package at runtime, or `GENESIS_MODEL_DIR`.
 
 **Consolidation (decay + dedup/merge only)**
 
@@ -200,7 +200,7 @@ implementation. They are not open spec questions; they are values that cannot ex
 the artifact does. Same shape as §1.1's CRAP-threshold calibration caveat.
 
 1. **Model revision string** — the explicit `sentence-transformers/all-MiniLM-L6-v2` revision
-   pinned in `scripts/fetch-model`, read from the repository at first fetch and committed.
+   pinned in `scripts/fetch-model.mjs`, read from the repository at first fetch and committed.
 2. **Model SHA-256 digest** — computed over the `onnx/model.onnx` fetched at that revision
    and committed as the fixture constant the embedding tests assert against.
 3. **Golden embedding vector** — the frozen output of `(model.onnx, tokenizer.json, mean
@@ -230,7 +230,7 @@ reading of the source — §2.4 says "on insert" and v1 does not.
   absorbed.
 
 **D9 — AC12 "syntactically invalid" → structurally-invalid-but-parseable.** (Discovered at
-implementation, Phase 9; recorded here for Atiqul's confirmation — it clarifies the *test* for a
+implementation, Phase 9; recorded here for maintainer confirmation — it clarifies the *test* for a
 ratified criterion, not the server's behavior.) Expected Behavior 12 / Acceptance Criterion 12 say a
 "**syntactically invalid** JSON-RPC request … yields a JSON-RPC error object". The chosen MCP SDK
 (`rmcp` 2.2.0) **silently ignores** byte-garbage that is not valid JSON (verified against
@@ -246,7 +246,7 @@ ratified criterion, not the server's behavior.) Expected Behavior 12 / Acceptanc
   structurally-invalid-but-parseable request.
 - Stakes: low. The distinction (`isError` result vs JSON-RPC error) that AC12 exists to pin is fully
   exercised; only the specific "syntactically invalid" input class is narrowed to what the transport
-  actually surfaces. **Flagged for Atiqul's sign-off** — if he wants the literal byte-garbage path,
+  actually surfaces. **Flagged for maintainer sign-off** — if the literal byte-garbage path is wanted,
   it requires a pre-parse guard around the transport (out of scope for v1).
 
 ### Changelog v2 → v3
@@ -263,7 +263,7 @@ ratified criterion, not the server's behavior.) Expected Behavior 12 / Acceptanc
   recency already carried by the `use_count` term.*
 - **D3 — model repo and revision.** Added requirements naming the HF repo
   `sentence-transformers/all-MiniLM-L6-v2` and the files `onnx/model.onnx` + `tokenizer.json`
-  (both traced to §2.3c/§6.1), plus an explicit pinned revision in `scripts/fetch-model` and a
+  (both traced to §2.3c/§6.1), plus an explicit pinned revision in `scripts/fetch-model.mjs` and a
   note that §6.2 #6 is why the revision is load-bearing. *Why: v2 fetched an unnamed artifact
   from an unnamed source, and exports of the same model differ in output shape.*
 - **M1 — SHA-256 digest.** Kept the requirement to pin the digest and moved the literal value

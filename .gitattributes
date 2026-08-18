@@ -1,0 +1,17 @@
+# Normalize line endings. Force LF on all scripts + extensionless launchers so they run under
+# git bash / node / python on Windows, where Git-for-Windows' default core.autocrlf=true would
+# otherwise rewrite them to CRLF and break shebangs and heredocs.
+* text=auto
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.js   text eol=lf
+*.cjs  text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+
+# Extensionless shell/python helpers that carry a shebang. (scripts/fetch-model.mjs is covered
+# by the `*.mjs eol=lf` rule above.)
+skills/subagent-driven-development/scripts/task-brief     text eol=lf
+skills/subagent-driven-development/scripts/review-package text eol=lf
+skills/subagent-driven-development/scripts/sdd-workspace  text eol=lf

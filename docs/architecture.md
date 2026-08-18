@@ -74,7 +74,7 @@ LIMIT k` — so the outer filter can never under-return.
 
 ### Embedding pipeline
 
-`all-MiniLM-L6-v2` (384-dim), fetched + SHA-256-pinned by `scripts/fetch-model` into
+`all-MiniLM-L6-v2` (384-dim), fetched + SHA-256-pinned by `scripts/fetch-model.mjs` into
 `server/models/` (never committed). Pipeline: tokenize (special tokens) → ONNX session run with
 three named inputs `input_ids` / `attention_mask` / **`token_type_ids`** (all-zeros — **required**
 by this export, confirmed empirically, §6.2 #6) → attention-mask-weighted **mean pool** over
@@ -123,7 +123,7 @@ eviction trigger, unused in v1.
 ## Build / run
 
 ```
-scripts/fetch-model                                       # one-time: fetch + pin the ONNX model
+node scripts/fetch-model.mjs                              # one-time: fetch + pin the ONNX model
 cargo run --manifest-path server/Cargo.toml --release     # serve MCP over stdio
 ```
 

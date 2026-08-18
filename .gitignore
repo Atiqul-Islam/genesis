@@ -3,8 +3,31 @@ test-results/
 __pycache__/
 *.pyc
 *.onnx
-# Model artifacts are fetched by scripts/fetch-model, never committed (weights + tokenizer).
+# Model artifacts are fetched by scripts/fetch-model.mjs, never committed (weights + tokenizer).
 server/models/
 .planning/builds/
 .claude/worktrees/
+# Machine-local Claude Code settings (per-user permissions) — never committed.
+.claude/settings.local.json
 .genesis/
+# Local runtime memory DB (the launched genesis-memory server creates it on use; never committed).
+*.db
+
+# >>> genesis runtime (managed by bootstrap) >>>
+# Commit the agent brain (expertise + hooks) AND its learned memory — both the vector DB
+# (memory.db, ready-to-use with embeddings) and the portable JSONL mirror (the diff-friendly
+# merge substrate) — so memory travels with the repo across systems. On `update remote`, git
+# takes the latest .db and `genesis-cli reconcile` unions the JSONL so nothing is ever lost.
+# Ignore only machine-local / regenerable junk (stray DBs, archived strays, temp exports).
+.genesis/*
+!.genesis/expertise/
+!.genesis/hooks/
+!.genesis/memory/
+.genesis/**/__pycache__/
+.genesis/expertise/.genesis/
+.genesis/memory/*.tmp
+.genesis/memory/archived-strays/
+*.db
+!.genesis/memory.db
+.mcp.json
+# <<< genesis runtime <<<

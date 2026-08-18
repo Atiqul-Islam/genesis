@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "genesis-memory": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "env": {
+        "GENESIS_MEMORY_DB": "${CLAUDE_PROJECT_DIR}/.genesis/memory.db",
+        "GENESIS_MEMORY_EXPORT": "${CLAUDE_PROJECT_DIR}/.genesis/memory/memory.jsonl"
+      }
+    }
+  }
+}

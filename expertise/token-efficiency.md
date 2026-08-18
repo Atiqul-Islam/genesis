@@ -5,7 +5,7 @@
 source ledger is the appendix at the bottom.
 
 **The concrete case that triggered this.** A workflow fanned out **69 review agents + 8 team-lead
-agents (77 agents)** over Atiqul's code portfolio. It burned **~3.6M subagent tokens**, hit the **Max
+agents (77 agents)** over a large code portfolio. It burned **~3.6M subagent tokens**, hit the **Max
 session limit** partway through, and **52 of 69 review agents failed** until the rolling window reset
 (~04:50). Recovery: finished reports were made to **replay from a passed-in `done` map at zero token
 cost**, so the re-run paid only for the 52 that were missing. This guide generalises that fix into the
@@ -332,7 +332,7 @@ tool output into its context.
   never-pushed / in-sync** with modified/untracked counts, *without fetching*.
 - **`make_briefs.py`** — fuse manifest + probe + clone-scan into **one `brief.json` per repo**:
   `loc_per_branch`, `all_branches`, `tip_commits`, `agent_surfaces`, `local_clones` (with the ahead/behind
-  verdict pre-labelled), `commits_atiqul`, `hazard_flag`.
+  verdict pre-labelled), `commits_author`, `hazard_flag`.
 
 ### 4.2 Quantifying it
 

@@ -1,0 +1,139 @@
+name: ci
+
+# Build + test on every push/PR (tags are handled by release.yml). Nothing is published here.
+# Gates: the Rust memory server compiles + its suite passes on all three primary OSes; the Rust
+# `genesis-hook` binary (the enforcement hooks) and the Rust `genesis-cli` binary (the installer/
+# orchestrator) each compile, pass their suites, and are clippy/fmt clean; and the Node surface that
+# remains (session-copy, the fetch-launcher, the plugin scaffold) parses + its unit tests pass. This
+# is the guard that catches cross-platform defects before a release.
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Rust: server + genesis-hook compile + test + a real launcher/hook smoke on each primary OS ──
+  rust:
+    name: rust ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        shell: bash
+        run: rustup show && rustc --version && cargo --version
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }   # the fetch-launcher + model fetch run under node (global fetch)
+
+      - name: Cache the pinned model
+        uses: actions/cache@v4
+        with:
+          path: server/models
+          key: model-${{ hashFiles('scripts/fetch-model.mjs') }}
+
+      - name: Fetch model (if not cached)
+        shell: bash
+        run: |
+          if [ ! -f server/models/onnx/model.onnx ]; then
+            node scripts/fetch-model.mjs
+          fi
+
+      - name: Build memory server
+        shell: bash
+        working-directory: server
+        run: cargo build --release
+
+      - name: Build genesis-hook binary
+        shell: bash
+        run: cargo build --release --manifest-path hook/Cargo.toml
+
+      - name: Test memory server
+        shell: bash
+        working-directory: server
+        run: cargo test --release
+
+      - name: Test genesis-hook (unit + CLI end-to-end)
+        shell: bash
+        run: cargo test --release --manifest-path hook/Cargo.toml
+
+      - name: genesis-hook lint gate (clippy -D warnings + fmt)
+        shell: bash
+        run: |
+          cargo clippy --manifest-path hook/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path hook/Cargo.toml --check
+
+      - name: Build genesis-cli binary
+        shell: bash
+        run: cargo build --release --manifest-path cli/Cargo.toml
+
+      - name: Test genesis-cli (unit + integration; real staging via the built binaries)
+        shell: bash
+        run: |
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          export GENESIS_HOOK_BIN="$PWD/hook/target/release/genesis-hook$ext"
+          export GENESIS_CLI_BIN="$PWD/cli/target/release/genesis-cli$ext"
+          cargo test --release --manifest-path cli/Cargo.toml
+
+      - name: genesis-cli lint gate (clippy -D warnings + fmt)
+        shell: bash
+        run: |
+          cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path cli/Cargo.toml --check
+        # NB: the cli suite includes the session-copy pipeline round-trip, which auto-runs here because the
+        # server binary (server/target/release) + model (server/models) were built/fetched in the steps above.
+
+  # ── Node plugin surface: parse-check everything + run the pure-Node unit tests ─────────
+  node:
+    name: node lint + unit tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }   # global fetch + current stdlib for the launcher
+
+      - name: Parse-check all JS/MJS (plugin hooks tests, launcher, scripts, tooling)
+        shell: bash
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            node --check "$f" || { echo "SYNTAX FAIL: $f"; fail=1; }
+          done < <(find hooks install scripts test bin -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          exit $fail
+
+      - name: Plugin + tooling unit tests (no native binary needed)
+        shell: bash
+        run: |
+          set -e
+          for t in \
+            hooks/test_plugin.js hooks/test_vendored_skills.js \
+            test/launcher.test.js; do
+            if [ -f "$t" ]; then echo "== $t =="; node "$t"; else echo "skip (absent): $t"; fi
+          done
+
+      - name: build-engineer expertise-manifest + skill/mode-detection tests
+        shell: bash
+        run: |
+          set -e
+          for m in git-mastery engineering-leadership test-driven-development spec-driven-development system-operation-maintenance; do
+            echo "== manifest: $m =="
+            node expertise/manifests/tests/_manifest_check.mjs "$m" expertise
+          done
+          echo "== build-engineer skill_structure =="; node test/tools/build-engineer/skill_structure.test.mjs
+          echo "== build-engineer integration =="; node test/tools/build-engineer/integration.test.mjs
+
+      - name: Assert the plugin is Python-free (no runtime .py)
+        shell: bash
+        run: |
+          hits="$(find hooks install scripts team bin commands agents -name '*.py' 2>/dev/null || true)"
+          if [ -n "$hits" ]; then echo "unexpected Python files:"; echo "$hits"; exit 1; fi
+          echo "ok: no runtime Python"

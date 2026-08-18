@@ -56,7 +56,10 @@ const NEAR_B: &str = "the release goes out on friday.";
 /// Resolves the real model + tokenizer paths, FAILING (never skipping) if the model is absent.
 fn model() -> (String, String) {
     let (m, t) = genesis_memory::embed::model_paths();
-    assert!(m.exists(), "model missing: run `scripts/fetch-model`");
+    assert!(
+        m.exists(),
+        "model missing: run `node scripts/fetch-model.mjs`"
+    );
     (
         m.to_string_lossy().into_owned(),
         t.to_string_lossy().into_owned(),

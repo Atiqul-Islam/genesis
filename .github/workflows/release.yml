@@ -1,0 +1,332 @@
+name: release
+
+# On a version tag (v*), build the self-contained genesis-memory-server + genesis-hook + genesis-cli for
+# every supported platform, fetch the pinned ONNX model, then publish them all as GitHub Release assets with
+# a SHA256SUMS manifest. The plugin launcher (bin/genesis-memory.js) downloads the matching assets for the
+# consumer's platform, SHA256-verifies them, caches them per-user, and runs (server via default, hook via
+# --run-hook/--stage-hook, cli via --run-cli/--stage-cli). NO npm, NO registry token — only GITHUB_TOKEN.
+#
+# RELEASE GATE: a release is REFUSED unless the tagged commit is on `main`. The flow is develop on a branch
+# -> merge to `main` -> tag on `main` -> release. A tag on any non-merged branch fails the `gate` job.
+#
+# The inference engine is the pure-Rust tract backend (ort `alternative-backend` + `ort-tract`), so EVERY
+# target builds from one path with no prebuilt runtime, no cmake, and no sidecar dylib. Each binary is
+# SELF-CONTAINED: inference compiled in (tract), SQLite compiled in (rusqlite `bundled`), Windows CRT
+# static (+crt-static via server/.cargo/config.toml). genesis-hook is pure Rust (serde_json + regex).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.1.0-beta.1)"
+        required: true
+
+permissions:
+  contents: write        # create the GitHub Release + upload assets
+
+env:
+  BIN_STEM: genesis-memory-server
+
+jobs:
+  # ── Gate: a release may only be cut from a commit that is on `main` ────────────────────
+  gate:
+    name: require tag on main
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0        # full history needed for the ancestry check
+      - name: Refuse a release not merged into main
+        shell: bash
+        run: |
+          git fetch -q origin main
+          if git merge-base --is-ancestor HEAD origin/main; then
+            echo "OK: the tagged commit is on main — release allowed."
+          else
+            echo "::error::Release refused — this tag is not on main. Merge to main, then tag on main."
+            exit 1
+          fi
+
+      - name: Refuse a release whose versions don't match the tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          WANT="${TAG#v}"                                   # strip leading v
+          PLUGIN="$(node -e "process.stdout.write(require('./.claude-plugin/plugin.json').version)")"
+          LAUNCHER="$(node -e "const s=require('fs').readFileSync('bin/genesis-memory.js','utf8');process.stdout.write((s.match(/RELEASE_VERSION = \"([^\"]+)\"/)||[])[1]||'')")"
+          echo "tag=$WANT  plugin.json=$PLUGIN  launcher=$LAUNCHER"
+          if [ "$PLUGIN" != "$WANT" ] || [ "$LAUNCHER" != "$WANT" ]; then
+            echo "::error::Version mismatch — run \`node scripts/bump-version.mjs $WANT\`, commit, then re-tag. (plugin.json=$PLUGIN launcher=$LAUNCHER tag=$WANT)"
+            exit 1
+          fi
+          echo "OK: plugin.json + launcher RELEASE_VERSION both match the tag."
+
+  # ── Build both self-contained binaries per platform; upload them as platform-named artifacts ──
+  build:
+    name: build ${{ matrix.key }}
+    needs: gate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60     # bound any single target so it can't hang the release
+    strategy:
+      fail-fast: false      # one platform failing never sinks the rest
+      matrix:
+        include:
+          - { key: darwin-arm64,     runner: macos-14,         target: aarch64-apple-darwin,       tool: cargo }
+          - { key: darwin-x64,       runner: macos-14,         target: x86_64-apple-darwin,        tool: cargo }
+          - { key: linux-x64-gnu,    runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,   tool: cargo }
+          - { key: linux-x64-musl,   runner: ubuntu-22.04,     target: x86_64-unknown-linux-musl,  tool: zigbuild }
+          - { key: win32-x64,        runner: windows-latest,   target: x86_64-pc-windows-msvc,     tool: cargo }
+          - { key: linux-arm64-gnu,  runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu,  tool: cargo }
+          - { key: linux-arm64-musl, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl, tool: cargo }
+          - { key: win32-arm64,      runner: windows-11-arm,   target: aarch64-pc-windows-msvc,    tool: cargo }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust (pinned by rust-toolchain.toml) + target
+        shell: bash
+        run: |
+          rustup show
+          rustup target add "${{ matrix.target }}"
+          rustc --version && cargo --version
+
+      - name: Install zig + cargo-zigbuild (cross + glibc-floor + musl)
+        if: matrix.tool == 'zigbuild'
+        shell: bash
+        run: |
+          ZIG=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG}/zig-linux-x86_64-${ZIG}.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p "$HOME/zig" && tar -xf /tmp/zig.tar.xz -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
+          "$HOME/zig/zig" version
+          cargo install --locked cargo-zigbuild
+
+      - name: Install musl toolchain (native arm64 musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          echo "CC_aarch64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+
+      - name: Build server (cargo)
+        if: matrix.tool == 'cargo'
+        shell: bash
+        working-directory: server
+        run: cargo build --release --target "${{ matrix.target }}" --bin "$BIN_STEM"
+
+      - name: Build server (zigbuild)
+        if: matrix.tool == 'zigbuild'
+        shell: bash
+        working-directory: server
+        run: |
+          case "${{ matrix.target }}" in
+            *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
+            *)           tgt="${{ matrix.target }}" ;;
+          esac
+          cargo zigbuild --release --target "$tgt" --bin "$BIN_STEM"
+
+      - name: Build hook (cargo)
+        if: matrix.tool == 'cargo'
+        shell: bash
+        run: cargo build --release --target "${{ matrix.target }}" --manifest-path hook/Cargo.toml
+
+      - name: Build hook (zigbuild)
+        if: matrix.tool == 'zigbuild'
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
+            *)           tgt="${{ matrix.target }}" ;;
+          esac
+          cargo zigbuild --release --target "$tgt" --manifest-path hook/Cargo.toml
+
+      - name: Build cli (cargo)
+        if: matrix.tool == 'cargo'
+        shell: bash
+        run: cargo build --release --target "${{ matrix.target }}" --manifest-path cli/Cargo.toml
+
+      - name: Build cli (zigbuild)
+        if: matrix.tool == 'zigbuild'
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
+            *)           tgt="${{ matrix.target }}" ;;
+          esac
+          cargo zigbuild --release --target "$tgt" --manifest-path cli/Cargo.toml
+
+      - name: Collect + rename all binaries to platform-suffixed asset names
+        id: assets
+        shell: bash
+        run: |
+          ext=""; [ "${{ startsWith(matrix.key, 'win32') }}" = "true" ] && ext=".exe"
+          srv="server/target/${{ matrix.target }}/release/${BIN_STEM}${ext}"
+          hk="hook/target/${{ matrix.target }}/release/genesis-hook${ext}"
+          cli="cli/target/${{ matrix.target }}/release/genesis-cli${ext}"
+          test -f "$srv" || { echo "missing server binary: $srv"; exit 1; }
+          test -f "$hk"  || { echo "missing hook binary: $hk"; exit 1; }
+          test -f "$cli" || { echo "missing cli binary: $cli"; exit 1; }
+          mkdir -p dist
+          cp "$srv" "dist/${BIN_STEM}-${{ matrix.key }}${ext}"
+          cp "$hk"  "dist/genesis-hook-${{ matrix.key }}${ext}"
+          cp "$cli" "dist/genesis-cli-${{ matrix.key }}${ext}"
+          chmod +x dist/* || true
+          echo "server=dist/${BIN_STEM}-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
+          echo "hook=dist/genesis-hook-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
+          echo "cli=dist/genesis-cli-${{ matrix.key }}${ext}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify server is self-contained (no inference-runtime sidecar)   # Linux/macOS best-effort
+        if: startsWith(matrix.key, 'win32') == false
+        shell: bash
+        run: |
+          f="${{ steps.assets.outputs.server }}"
+          if (otool -L "$f" 2>/dev/null || ldd "$f" 2>/dev/null) | grep -iE "onnxruntime|directml"; then
+            echo "ERROR: server binary links a dynamic inference runtime (expected pure-Rust tract)"; exit 1
+          fi
+          echo "ok: self-contained (pure-Rust tract inference, no sidecar)"
+
+      - name: Sign + notarize (macOS — both binaries)
+        if: startsWith(matrix.key, 'darwin')
+        shell: bash
+        env:
+          P12: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          P12_PW: ${{ secrets.APPLE_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+          NOTARY_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          NOTARY_TEAM: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          NOTARY_PW: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          f="${{ steps.assets.outputs.server }}"
+          h="${{ steps.assets.outputs.hook }}"
+          c="${{ steps.assets.outputs.cli }}"
+          if [ -n "$P12" ] && [ -n "$IDENTITY" ]; then
+            kc="$RUNNER_TEMP/build.keychain"; kp="ci-$RANDOM"
+            security create-keychain -p "$kp" "$kc"
+            security set-keychain-settings -lut 21600 "$kc"
+            security unlock-keychain -p "$kp" "$kc"
+            echo "$P12" | base64 -d > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$P12_PW" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kp" "$kc"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$h"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$c"
+            if [ -n "$NOTARY_ID" ]; then
+              ditto -c -k "$f" "$RUNNER_TEMP/nz.zip"
+              xcrun notarytool submit "$RUNNER_TEMP/nz.zip" --apple-id "$NOTARY_ID" \
+                --team-id "$NOTARY_TEAM" --password "$NOTARY_PW" --wait
+              # The hook + cli binaries are signed but not separately notarized (invoked locally, not
+              # downloaded standalone).
+            fi
+          else
+            echo "No Apple signing secrets — ad-hoc signing (runs locally; not Gatekeeper-cleared)."
+            codesign --force --sign - "$f"
+            codesign --force --sign - "$h"
+            codesign --force --sign - "$c"
+          fi
+
+      - name: Upload platform assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: assets-${{ matrix.key }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Fetch the pinned ONNX model once (platform-independent) ─────────────────────────────
+  model:
+    name: package model
+    needs: gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Cache the pinned model (avoids re-hitting HuggingFace every run)
+        uses: actions/cache@v4
+        with:
+          path: model-dist
+          key: model-rel-${{ hashFiles('scripts/fetch-model.mjs') }}
+      - name: Fetch + verify the pinned model
+        shell: bash
+        run: |
+          if [ -f model-dist/onnx/model.onnx ]; then
+            echo "model restored from cache — skipping download"
+          else
+            ok=""
+            for wait in 0 20 45 90 180; do
+              [ "$wait" = "0" ] || { echo "HF rate-limited; retrying in ${wait}s..."; sleep "$wait"; }
+              if node scripts/fetch-model.mjs --dest model-dist; then ok=1; break; fi
+            done
+            [ -n "$ok" ] || { echo "model fetch failed after retries"; exit 1; }
+          fi
+      - name: Flatten to release asset names
+        shell: bash
+        run: |
+          test -f model-dist/onnx/model.onnx
+          test -f model-dist/tokenizer.json
+          mkdir -p model-assets
+          cp model-dist/onnx/model.onnx model-assets/model.onnx
+          cp model-dist/tokenizer.json  model-assets/tokenizer.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-files
+          path: model-assets/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Collect everything, write SHA256SUMS, publish the GitHub Release ────────────────────
+  release:
+    name: publish GitHub Release
+    runs-on: ubuntu-22.04
+    needs: [build, model]
+    # Publish whatever built: a single straggler platform must not block the release. Runs as long as the
+    # model built; the launcher treats a missing platform asset as "build from source" (clear error).
+    if: ${{ always() && needs.model.result == 'success' }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Download platform assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: assets-*
+          path: staging
+      - name: Download model files
+        uses: actions/download-artifact@v4
+        with:
+          name: model-files
+          path: staging/model
+
+      - name: Assemble release dir + SHA256SUMS
+        shell: bash
+        run: |
+          mkdir -p release
+          # Flatten every downloaded artifact (assets-<key>/* and model/*) into release/.
+          find staging -type f -exec cp {} release/ \;
+          ls -la release
+          ( cd release && sha256sum * > ../SHA256SUMS && mv ../SHA256SUMS . )
+          echo "=== SHA256SUMS ==="; cat release/SHA256SUMS
+
+      - name: Create / update the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          case "$TAG" in *-*) PRE="--prerelease" ;; *) PRE="" ;; esac   # alpha/beta -> prerelease
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists — uploading assets with --clobber"
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "$TAG" --notes "Automated release $TAG." $PRE
+          fi
+          echo "published assets to release $TAG"

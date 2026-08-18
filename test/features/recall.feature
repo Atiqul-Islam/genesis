@@ -1,25 +1,25 @@
 # Source: test/specs/genesis-memory-server.md
 
 Feature: Recall memories
-  The recall tool embeds the query, runs a KNN search restricted to the caller's agent_id,
-  and returns at most k hits nearest first as a machine-readable JSON array of
-  {id, text, distance} objects carried inside a single text content block.
+  The recall tool embeds the query, runs the hybrid retrieval pipeline restricted to the caller's
+  agent_id, and returns at most k hits most relevant first as a machine-readable JSON array of
+  {id, text, score} objects (higher score = more relevant) carried inside a single text content block.
 
   # Acceptance Criterion 4
-  Scenario: Recall returns at most k memories ordered nearest first
+  Scenario: Recall returns at most k memories ordered most relevant first
     Given a memory server with an empty database
     And agent "alpha" has stored 10 distinct memories
     When agent "alpha" recalls "morning routine" with k of 3
     Then the recall result contains exactly 3 entries
-    And the distance values in the recall result are non-decreasing
+    And the score values in the recall result are non-increasing
 
   # Acceptance Criterion 5
-  Scenario: Recall of the exact stored text reports distance zero
+  Scenario: Recall of the exact stored text ranks it first with a positive score
     Given a memory server with an empty database
     And agent "alpha" has stored the memory "deploy on friday afternoons"
     When agent "alpha" recalls "deploy on friday afternoons" with k of 5
     Then the first recall entry has text "deploy on friday afternoons"
-    And the first recall entry has distance exactly 0.0
+    And the first recall entry has a positive score
 
   # Acceptance Criterion 6
   Scenario: Recall never returns a memory belonging to another agent
@@ -42,5 +42,5 @@ Feature: Recall memories
     And agent "alpha" has stored the memory "payload shape probe"
     When agent "alpha" recalls "payload shape probe" with k of 5
     Then the text content block of the recall result parses as a JSON array
-    And every element of that array has exactly the keys id and text and distance
-    And in every element id is an integer, text is a string and distance is a number
+    And every element of that array has exactly the keys id and text and score
+    And in every element id is an integer, text is a string and score is a number

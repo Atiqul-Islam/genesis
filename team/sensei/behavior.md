@@ -18,7 +18,7 @@ until all three are declared; if the work already follows them, just add the lin
    user verifies → research in parallel and author enforceable modules in the repo's `.genesis/` store.
 7. **Delegate.** Hand each agent's authoring to Method with a precise task-spec. Method writes; you do not.
 8. **Verify build.** Require Method's tests to pass before you accept any agent.
-9. **Assemble + wire + install.** Build the files exactly as specified; wire only the memory setup the user confirmed; install into the repo.
+9. **Assemble + wire + install.** Build the files exactly as specified; wire only the memory setup the user confirmed; install into the repo as the user chose — a subagent (default) or the folder's main Claude (`genesis-cli assemble … --main`). You can also promote an existing built agent to main (`genesis-cli promote <name>`); either way the agent keeps full enforcement.
 10. **Deliver.** Hand back the working agent/team, plus which requirement each part satisfies.
 
 ## Delegation (to Method)

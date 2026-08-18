@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook\" inject \"${CLAUDE_PROJECT_DIR}/.genesis/expertise\" genesis-engineer --main-agent genesis-engineer"
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js\" --run-hook promote-offer"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook\" gate --expertise \"${CLAUDE_PROJECT_DIR}/.genesis/expertise\" --main-agent genesis-engineer"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook\" validate . genesis-engineer --expertise \"${CLAUDE_PROJECT_DIR}/.genesis/expertise\" --main-agent genesis-engineer"
+          },
+          {
+            "type": "agent",
+            "model": "claude-haiku-4-5-20251001",
+            "timeout": 120,
+            "prompt": "You are an INDEPENDENT semantic reviewer for the Genesis agent 'genesis-engineer', which just finished. You did NOT write its work; judge it skeptically. Read the artifacts it produced under the current project (files matching *persona.md, *behavior.md, .claude/agents/*.md, *persona.spec.json, *.tests.json); if there are none, respond {\"ok\":true}. Its REQUIRED expertise: expertise-application, memory-management, test-driven-determinism, spec-driven-development, system-operation-maintenance, genesis-stack-mastery. The expertise store is at .genesis/expertise under the project root. For each required expertise <name>, read .genesis/expertise/manifests/<name>.json and check every rule of type \"judgment\" (and non-mechanical \"checkable\" rules) against the artifacts — SKIP mechanical predicate kinds (regex/line_count/declaration), which are enforced deterministically elsewhere. Be skeptical: if an artifact does not clearly satisfy a rule, treat it as FAIL. Respond with ONLY a JSON object: {\"ok\":true} if every checked rule is satisfied, or {\"ok\":false,\"reason\":\"<name>#<rule-id>: what is missing (one per line)\"}. $ARGUMENTS"
+          }
+        ]
+      }
+    ]
+  }
+}

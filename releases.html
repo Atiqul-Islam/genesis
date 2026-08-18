@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Genesis — releases</title>
+<style>
+  /* Shared "ink & seal" identity — same tokens as the overview page. */
+  :root{
+    color-scheme:light dark;
+    --bg:#14110d; --bg2:#1b1712; --panel:#221d17; --line:#332c24;
+    --text:#f1ece3; --dim:#b0a595; --faint:#8a7f70;
+    --indigo:#7fa9e2; --indigo-hi:#a9c8ef;
+    --seal:#e2543c; --seal-hi:#f28a72;
+    --shadow:0 1px 0 rgba(255,255,255,.03), 0 22px 46px -28px rgba(0,0,0,.8);
+    --sans:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#e8e4dc; --bg2:#f3f1ec; --panel:#fffdf9; --line:#d5cfc3;
+      --text:#171309; --dim:#4e483d; --faint:#665f52;
+      --indigo:#2a4a90; --indigo-hi:#1c3670;
+      --seal:#b23a20; --seal-hi:#8f2a13;
+      --shadow:0 1px 0 rgba(255,255,255,.7), 0 18px 40px -28px rgba(40,28,12,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14110d; --bg2:#1b1712; --panel:#221d17; --line:#332c24;
+    --text:#f1ece3; --dim:#b0a595; --faint:#8a7f70;
+    --indigo:#7fa9e2; --indigo-hi:#a9c8ef;
+    --seal:#e2543c; --seal-hi:#f28a72;
+  }
+  :root[data-theme="light"]{
+    --bg:#e8e4dc; --bg2:#f3f1ec; --panel:#fffdf9; --line:#d5cfc3;
+    --text:#171309; --dim:#4e483d; --faint:#665f52;
+    --indigo:#2a4a90; --indigo-hi:#1c3670;
+    --seal:#b23a20; --seal-hi:#8f2a13;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0; padding:0;}
+  :focus-visible{outline:2px solid var(--seal); outline-offset:3px; border-radius:3px;}
+
+  .page{
+    background:
+      radial-gradient(85% 55% at 88% 2%, color-mix(in srgb, var(--indigo) 9%, transparent), transparent 62%),
+      radial-gradient(75% 50% at 4% 100%, color-mix(in srgb, var(--seal) 8%, transparent), transparent 58%),
+      var(--bg);
+    color:var(--text); font-family:var(--sans);
+    min-height:100vh; padding:clamp(28px,5vw,60px) clamp(18px,5vw,40px);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:940px; margin:0 auto; display:flex; flex-direction:column; gap:clamp(20px,2.6vw,30px);}
+
+  .topnav{display:flex; flex-wrap:wrap; align-items:baseline; gap:7px 16px; padding-bottom:13px; border-bottom:1px solid var(--line);}
+  .topnav .mark{font-family:var(--mono); font-size:1.02rem; font-weight:700; letter-spacing:-.01em; color:var(--text); margin-right:8px;}
+  .topnav .mark .slash{color:var(--seal);}
+  .topnav a{font-size:.84rem; color:var(--dim); text-decoration:none; border-bottom:1px solid transparent; padding-bottom:2px;}
+  .topnav a:hover{color:var(--text); border-bottom-color:var(--line);}
+  .topnav a.here{color:var(--seal-hi); border-bottom-color:var(--seal); font-weight:650;}
+
+  h1{margin:.2em 0 0; font-size:clamp(1.7rem,4.2vw,2.6rem); line-height:1.08; font-weight:800; letter-spacing:-.025em; text-wrap:balance;}
+  .lede{margin:.9em 0 0; font-size:clamp(.98rem,1.9vw,1.12rem); line-height:1.55; color:var(--dim); max-width:68ch;}
+  .lede b{color:var(--text); font-weight:650;}
+
+  /* not-yet-published notice — the one accent on this page */
+  .notice{
+    border:1px solid color-mix(in srgb,var(--seal) 44%, var(--line)); border-radius:11px;
+    background:color-mix(in srgb,var(--seal) 7%, transparent);
+    padding:13px 15px; display:flex; flex-direction:column; gap:5px;
+  }
+  .notice b{font-size:.9rem; font-weight:800; color:var(--seal-hi);}
+  .notice p{margin:0; font-size:.86rem; line-height:1.5; color:var(--dim);}
+
+  /* ---- a release ---- */
+  .rel{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:15px 17px; display:flex; flex-direction:column; gap:9px;
+  }
+  .rel.current{
+    border-color:color-mix(in srgb,var(--indigo) 50%, var(--line));
+    box-shadow:0 0 0 1px color-mix(in srgb,var(--indigo) 18%, transparent);
+    background:color-mix(in srgb,var(--indigo) 5%, var(--panel));
+  }
+  .rel > header{display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px;}
+  .rel .tag{font-family:var(--mono); font-size:.85rem; font-weight:700; color:var(--indigo-hi); letter-spacing:-.01em;}
+  .rel .date{font-family:var(--mono); font-size:.65rem; color:var(--faint); letter-spacing:.04em;}
+  .rel .now{
+    font-family:var(--mono); font-size:.58rem; letter-spacing:.16em; text-transform:uppercase; font-weight:700;
+    color:var(--panel); background:var(--indigo); border-radius:4px; padding:3px 7px; line-height:1;
+  }
+  .rel .theme{
+    font-family:var(--mono); font-size:.58rem; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--bg2); background:var(--faint); border-radius:4px; padding:3px 7px; line-height:1;
+  }
+  .rel h2{margin:0; font-size:1.02rem; font-weight:800; letter-spacing:-.018em; line-height:1.3;}
+  .rel > p{margin:0; font-size:.88rem; line-height:1.5; color:var(--dim);}
+  .rel > p b{color:var(--text); font-weight:700;}
+  .rel ul{margin:2px 0 0; padding-left:1.1em; display:flex; flex-direction:column; gap:5px;}
+  .rel li{font-size:.85rem; line-height:1.5; color:var(--dim);}
+  .rel li b{color:var(--text); font-weight:700;}
+  .rel li code, .rel p code, .lede code{font-family:var(--mono); font-size:.9em; color:var(--indigo-hi);}
+  .rel .meta{margin:3px 0 0; font-family:var(--mono); font-size:.62rem; line-height:1.5; color:var(--faint);}
+
+  .foot{display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:15px;}
+  .foot p{margin:0; font-family:var(--mono); font-size:.65rem; line-height:1.65; color:var(--faint);}
+  .foot a{color:var(--indigo); text-decoration:none;}
+  .foot a:hover{text-decoration:underline;}
+</style>
+</head>
+<body>
+
+<main class="page">
+  <div class="wrap">
+
+    <nav class="topnav" aria-label="Genesis documentation">
+      <span class="mark">genesis<span class="slash">/</span></span>
+      <a href="genesis.html">Overview</a>
+      <a href="functions.html">Functions</a>
+      <a href="guide.html">Guide</a>
+      <a href="releases.html" class="here" aria-current="page">Releases</a>
+    </nav>
+
+    <header>
+      <h1>Releases</h1>
+      <p class="lede">Nine so far, all within one week — one alpha and eight betas. The arc is short and legible: <b>get off Node, get off npm, then make the gestures good.</b> Newest first.</p>
+    </header>
+
+    <div class="notice">
+      <b>The beta release assets are not published yet.</b>
+      <p>The version tags below exist and the code is built and tested, but the GitHub Release that carries the binaries and the model has not been cut. Until it is, the launcher's download will 404 — build from source and point it at your binaries with <code>GENESIS_MEMORY_BIN</code>, <code>GENESIS_HOOK_BIN</code> and <code>GENESIS_MODEL_DIR</code>.</p>
+    </div>
+
+    <!-- ── beta.8 ─────────────────────────────────────────────── -->
+    <article class="rel current">
+      <header><span class="tag">v0.1.0-beta.8</span><span class="date">2026-08-09</span><span class="now">current</span><span class="theme">rollup</span></header>
+      <h2>Promote / demote, a resume-safe gate, a working update, and honest docs</h2>
+      <p>A cumulative release that gathers everything since beta.3 into one version. <b>No code changed since beta.7</b> — only the version bump and the documentation corrections.</p>
+      <ul>
+        <li><code>/genesis:promote</code> and <code>/genesis:demote</code>, from beta.6 and beta.7.</li>
+        <li>The resume-safe research gate, from beta.4.</li>
+        <li><code>/plugin update</code> version lockstep and repo auto-sync, from beta.5.</li>
+        <li><b>Contributor docs corrected and made drift-proof</b> — the test counts had gone stale for the second time, so the docs now describe what each suite <em>covers</em> and point at <code>cargo test</code> as the source of truth, rather than pinning integers that rot.</li>
+      </ul>
+    </article>
+
+    <!-- ── beta.7 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.7</span><span class="date">2026-08-09</span><span class="theme">gesture</span></header>
+      <h2>Demote — the exact inverse of promote</h2>
+      <p>Promotion without a way back is a trap. This adds the undo, and makes it precise: it removes only what Genesis put there.</p>
+      <ul>
+        <li><code>genesis-cli demote</code> plus the <code>/genesis:demote</code> command. Strips the managed persona block from <code>CLAUDE.md</code> and the <code>--main-agent</code> hooks from <code>.claude/settings.json</code>, <b>preserving all your other content and hooks</b>. The agent stays a subagent.</li>
+        <li><b>No agent-name argument</b> — only one agent is ever the main Claude, so there is nothing to disambiguate. It reports which agent was demoted, or that none was promoted.</li>
+        <li>The removal is name-agnostic: it matches on the sentinels and the <code>--main-agent</code> marker, so it works even if you have forgotten which agent you promoted.</li>
+        <li>Verified with a demote round-trip that asserts your content and hooks survive, plus a live promote→demote smoke test.</li>
+      </ul>
+      <p class="meta">this release carries BOTH gestures — promote (beta.6) and demote</p>
+    </article>
+
+    <!-- ── beta.6 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.6</span><span class="date">2026-08-09</span><span class="theme">gesture</span></header>
+      <h2>Promote — make an existing agent the folder's main Claude</h2>
+      <p>The capability had existed since beta.2 as an installer flag. This turns it into something you can actually reach: a slash command, consistent with <code>/genesis:new</code>.</p>
+      <ul>
+        <li><code>/genesis:promote &lt;agent-name&gt;</code> runs the installer through the plugin launcher, so there is <b>no manual staging</b> — a bare plugin install can promote.</li>
+        <li>Merges the agent's persona into <code>CLAUDE.md</code> as a managed block and wires the main-thread enforcement hooks into <code>.claude/settings.json</code>. Non-destructive and idempotent.</li>
+        <li>The agent stays available as a subagent as well.</li>
+        <li>No demote command yet at this point — promoting a different agent simply replaced the block.</li>
+      </ul>
+    </article>
+
+    <!-- ── beta.5 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.5</span><span class="date">2026-08-06</span><span class="theme">reliability</span></header>
+      <h2><code>/plugin update</code> actually works now</h2>
+      <p>Updating the standard way was silently broken in two separate places. Both are fixed, and both are now impossible to regress.</p>
+      <ul>
+        <li><b>The plugin version was never bumped</b> — stuck at <code>0.1.0</code> across beta.1 through beta.4 — so the plugin manager saw no new version and the update was a no-op.</li>
+        <li><b>A repo's staged binaries never refreshed</b>, so an already-bootstrapped project kept running the old hook binary after an update.</li>
+        <li>Fix one: <code>scripts/bump-version.mjs</code> sets the plugin version and the launcher's release version in lockstep, and <b>the release job now refuses a tag whose versions disagree</b> — they can never drift apart again.</li>
+        <li>Fix two: the launcher's <code>--sync</code> refreshes a repo's staged binaries when a stamp shows they are stale, and the plugin runs it automatically. A one-file read when there is nothing to do.</li>
+      </ul>
+    </article>
+
+    <!-- ── beta.4 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.4</span><span class="date">2026-08-06</span><span class="theme">reliability</span></header>
+      <h2>The research gate stopped forgetting</h2>
+      <p>The gate that requires expertise research before a build proved it by scanning the current session's transcript. A resume or a compaction starts a <em>new</em> transcript — so research you had already done became invisible, and an in-progress build was wrongly blocked again.</p>
+      <ul>
+        <li><b>Defence one:</b> scan every transcript in the session's project directory, not just the active file — a resume leaves the earlier one sitting alongside it.</li>
+        <li><b>Defence two:</b> on first confirmation, write a durable per-agent marker, so a later session change, compaction or transcript pruning can never undo it.</li>
+        <li><b>The requirement itself is unchanged</b> — research is still mandatory. Only the forgetting was removed.</li>
+      </ul>
+    </article>
+
+    <!-- ── beta.3 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.3</span><span class="date">2026-08-04</span><span class="theme">port</span></header>
+      <h2>Session-copy goes native — the launcher is now the only Node file</h2>
+      <p>The last remaining Node pipeline becomes part of the Rust installer, finishing the "everything except the fetch-launcher is Rust" mandate.</p>
+      <ul>
+        <li><code>capture</code> extracts and credential-scrubs all six stores; <code>store</code> builds a portable history plus a deterministic digest; <code>embed</code> writes each record into the agent's memory; <code>build-session-agent</code> orchestrates all three.</li>
+        <li><b>Credential scrubbing is the security-critical part</b> — a faithful port of six credential shapes plus explicit known-secret redaction, with its own unit tests.</li>
+        <li>The Node session-copy scripts and their tests were deleted; the coverage moved to Rust, including a full round-trip against the real binaries.</li>
+      </ul>
+    </article>
+
+    <!-- ── beta.2 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.2</span><span class="date">2026-08-04</span><span class="theme">port · capability</span></header>
+      <h2>An all-Rust installer — and agents that can <em>be</em> the folder's Claude</h2>
+      <p>The whole install layer becomes one native binary, and the promotion capability appears for the first time.</p>
+      <ul>
+        <li>The Node installer becomes <code>genesis-cli</code>, <b>byte-identical to the version it replaced</b> — the subagent file, the main-Claude wiring, and the committed plugin agents were all verified by diff before the Node code was deleted.</li>
+        <li><b>New capability:</b> build an agent directly as the folder's main Claude, or promote an existing one. Persona into a managed <code>CLAUDE.md</code> block, enforcement onto the main thread, non-destructive and idempotent — with full enforcement retained.</li>
+        <li>The launcher gained <code>--stage-cli</code>, <code>--run-hook</code> and <code>--run-cli</code>, so a bare plugin install can run the orchestrator with no binary on disk yet.</li>
+        <li>Only the registry-free fetch-launcher stays in Node — the irreducible bootstrap.</li>
+      </ul>
+    </article>
+
+    <!-- ── beta.1 ─────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.1</span><span class="date">2026-08-03</span><span class="theme">the big one</span></header>
+      <h2>Native enforcement hooks, and goodbye to npm</h2>
+      <p>The release the rest of the beta line is built on: the enforcement layer stops being Node, and distribution stops needing a package registry at all.</p>
+      <ul>
+        <li>The Node hooks become one native binary, <code>genesis-hook</code>, with <code>gate</code> / <code>enforce-research</code> / <code>inject</code> / <code>validate</code> / <code>session-pointer</code> as subcommands — <b>byte-identical decisions, 17 of 17 verified before the old ones were deleted</b>.</li>
+        <li><b>The finish-check went from 62.5 seconds to 0.55</b> on a 21,000-file tree, by no longer walking build directories.</li>
+        <li>The semantic review moved onto a built-in agent hook — a fast, tool-capable model that reads the artifacts itself, instead of shelling out twice per expertise.</li>
+        <li><b>npm dropped entirely.</b> Binaries and the model now ship as GitHub Release assets, downloaded and SHA256-verified by a standard-library-only Node launcher and cached per user. Publishing needs only the token GitHub provides — <b>no registry account, no npm token</b>.</li>
+      </ul>
+    </article>
+
+    <!-- ── alpha.1 ────────────────────────────────────────────── -->
+    <article class="rel">
+      <header><span class="tag">v0.1.0-alpha.1</span><span class="date">2026-08-03</span><span class="theme">alpha · npm era</span></header>
+      <h2>ARM builds, on real ARM machines</h2>
+      <p>The last alpha, still on the npm distribution model that beta.1 replaced the same week.</p>
+      <ul>
+        <li>Linux ARM64 (both glibc and musl) and Windows ARM64 moved onto <b>native ARM runners</b> — the inference engine's hand-written ARM64 SIMD compiles there, where cross-compiling from x64 had failed.</li>
+        <li>Re-running at the same version added the three ARM platform packages while the six already published were skipped.</li>
+      </ul>
+      <p class="meta">two platforms remain deferred and are tracked in TODO.md — Alpine-on-ARM and Windows-on-ARM, both blocked upstream rather than by CI configuration</p>
+    </article>
+
+    <footer class="foot">
+      <p>Versions are kept in lockstep between the plugin manifest and the launcher, and the release job refuses any tag where they disagree. A release may only be cut from a commit on <code>main</code>.</p>
+      <p><a href="genesis.html">← Overview</a> · <a href="functions.html">← Functions</a> · <a href="guide.html">← Guide</a></p>
+    </footer>
+
+  </div>
+</main>
+
+</body>
+</html>

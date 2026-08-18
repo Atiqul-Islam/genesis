@@ -27,6 +27,7 @@
 
 pub mod consolidate;
 pub mod embed;
+pub mod persist;
 pub mod store;
 
 use std::path::{Path, PathBuf};
@@ -51,12 +52,13 @@ use crate::store::VectorStore;
 /// Default number of recall hits when `k` is omitted.
 pub const DEFAULT_K: usize = 5;
 
-/// One recall result: the memory id, its stored text, and its distance from the query.
+/// One recall result: the memory id, its stored text, and its composite relevance `score`
+/// (higher = better) from the hybrid retrieval pipeline.
 #[derive(Debug, Serialize)]
 struct Hit {
     id: i64,
     text: String,
-    distance: f64,
+    score: f64,
 }
 
 /// Embeds `text` and stores it under `agent_id`; returns the assigned id.
@@ -80,12 +82,13 @@ pub fn do_store(
     store.insert(agent_id, text, &vec, cfg.base_score, clock.now_unix())
 }
 
-/// Embeds `query`, runs agent-scoped KNN, bumps usage on each hit, and returns the JSON
-/// payload string (a `[{id, text, distance}]` array ordered by ascending distance).
+/// Embeds `query`, runs the full HYBRID retrieval pipeline (vector + BM25 → RRF fusion → recency/importance
+/// composite → MMR diversity, active memories only), bumps usage on each hit, and returns the JSON payload
+/// string (a `[{id, text, score}]` array ordered by descending relevance `score`).
 ///
 /// # Errors
 ///
-/// Returns an error if embedding, KNN, hydration, or serialization fails.
+/// Returns an error if embedding, retrieval, hydration, or serialization fails.
 pub fn do_recall(
     store: &mut VectorStore,
     embedder: &mut Embedder,
@@ -95,13 +98,13 @@ pub fn do_recall(
     k: usize,
 ) -> Result<String> {
     let vec = embedder.embed(query)?;
-    let hits = store.knn(agent_id, &vec, k)?;
     let now = clock.now_unix();
+    let hits = store.hybrid_recall(agent_id, query, &vec, k, now)?;
     let mut out = Vec::with_capacity(hits.len());
-    for (id, distance) in hits {
+    for (id, score) in hits {
         let text = store.text_of(id)?;
         store.touch(id, now)?; // on recall: use_count += 1, last_used_at = now
-        out.push(Hit { id, text, distance });
+        out.push(Hit { id, text, score });
     }
     Ok(serde_json::to_string(&out)?)
 }
@@ -148,10 +151,12 @@ pub struct MemoryServer {
     inner: Arc<Mutex<Inner>>,
     cfg: ConsolidationConfig,
     model_dir: PathBuf,
+    export_path: Option<PathBuf>,
 }
 
 impl MemoryServer {
     /// Builds a server over an already-open `store`; the embedder loads lazily from `model_dir`.
+    /// No JSONL export is written until [`MemoryServer::with_export`] sets a path.
     #[must_use]
     pub fn new(store: VectorStore, model_dir: PathBuf) -> Self {
         Self {
@@ -161,6 +166,26 @@ impl MemoryServer {
             })),
             cfg: ConsolidationConfig::default(),
             model_dir,
+            export_path: None,
+        }
+    }
+
+    /// Sets the committed JSONL export path the server snapshots to after every mutating tool
+    /// call (`store`, `consolidate`), so an agent's memory travels with the repo.
+    #[must_use]
+    pub fn with_export(mut self, path: PathBuf) -> Self {
+        self.export_path = Some(path);
+        self
+    }
+
+    /// Best-effort snapshot of the whole `memories` table to the JSONL export, if one is set.
+    /// A snapshot failure is logged but never fails the tool call: the memory is already durable
+    /// in the DB, and the next mutating call (or the shutdown flush) re-attempts the export.
+    fn snapshot(&self, store: &VectorStore) {
+        if let Some(path) = &self.export_path {
+            if let Err(e) = crate::persist::export_jsonl(store, path) {
+                tracing::warn!("memory snapshot to {} failed: {e:#}", path.display());
+            }
         }
     }
 
@@ -209,9 +234,12 @@ impl MemoryServer {
             &a.agent_id,
             &a.text,
         ) {
-            Ok(id) => Ok(CallToolResult::success(vec![ContentBlock::text(
-                id.to_string(),
-            )])),
+            Ok(id) => {
+                self.snapshot(store); // mirror to the committed JSONL export
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    id.to_string(),
+                )]))
+            }
             Err(e) => Ok(Self::err_result(&e)),
         }
     }
@@ -244,7 +272,10 @@ impl MemoryServer {
     ) -> Result<CallToolResult, McpError> {
         let mut g = self.inner.lock().await;
         match crate::consolidate::consolidate(&mut g.store, &a.agent_id, &self.cfg, &SystemClock) {
-            Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text("ok")])),
+            Ok(()) => {
+                self.snapshot(&g.store); // mirror to the committed JSONL export
+                Ok(CallToolResult::success(vec![ContentBlock::text("ok")]))
+            }
             Err(e) => Ok(Self::err_result(&e)),
         }
     }
@@ -259,20 +290,167 @@ impl ServerHandler for MemoryServer {
     }
 }
 
-/// Runs the MCP memory server over stdio until the client disconnects.
+/// Entry point: dispatches the migration subcommands or runs the MCP stdio server.
 ///
-/// Reads the database path from `GENESIS_MEMORY_DB` (fallback `genesis-memory.db`) and the
-/// model directory from `GENESIS_MODEL_DIR` (via [`embed::model_dir`]). Returns `Ok(())` on
-/// a clean shutdown so stdin EOF yields exit status 0.
+/// - `genesis-memory-server export [db] [out.jsonl]` — mirror the DB to a JSONL export.
+/// - `genesis-memory-server import [in.jsonl] [db]` — rebuild the DB from a JSONL export.
+/// - `genesis-memory-server structure --agent <id> --id <n> [--type|--subject|--relation|--object|--db ...]`
+///   — Mneme's write-back (add structure + supersede + re-export); driven by the PostToolUse hook.
+/// - `genesis-memory-server unstructured [--agent <id>] [--db ...]` — list memories awaiting structure (JSON
+///   on stdout); the input to `/genesis:memory migrate`.
+/// - (no subcommand) — run the MCP memory server over stdio (the normal mode).
 ///
 /// # Errors
 ///
-/// Returns an error if the store or stdio transport fails to initialise.
+/// Returns an error if the chosen subcommand or the server fails.
+pub async fn run() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("export") => cli_export(args.get(2).cloned(), args.get(3).cloned()),
+        Some("import") => cli_import(args.get(2).cloned(), args.get(3).cloned()),
+        Some("structure") => cli_structure(&args),
+        Some("unstructured") => cli_unstructured(&args),
+        _ => serve_stdio().await,
+    }
+}
+
+/// `export [db] [out]` — writes the whole `memories` table to a JSONL export (for migration).
+///
+/// # Errors
+/// Returns an error if the store cannot be opened or the export fails.
+fn cli_export(db: Option<String>, out: Option<String>) -> Result<()> {
+    let db = db.unwrap_or_else(crate::store::db_path_from_env);
+    let out = out.map_or_else(|| crate::persist::export_path_from_env(&db), PathBuf::from);
+    let store = VectorStore::open(&db)?;
+    crate::persist::export_jsonl(&store, &out)?;
+    eprintln!(
+        "exported {} memories to {}",
+        store.count_memories()?,
+        out.display()
+    );
+    Ok(())
+}
+
+/// `import [in] [db]` — rebuilds the DB from a JSONL export, re-embedding each memory.
+///
+/// # Errors
+/// Returns an error if the store/embedder cannot be opened or the import fails.
+fn cli_import(input: Option<String>, db: Option<String>) -> Result<()> {
+    let db = db.unwrap_or_else(crate::store::db_path_from_env);
+    let input = input.map_or_else(|| crate::persist::export_path_from_env(&db), PathBuf::from);
+    let model_dir = crate::embed::model_dir();
+    let model = model_dir.join("onnx/model.onnx");
+    let tokenizer = model_dir.join("tokenizer.json");
+    let mut store = VectorStore::open(&db)?;
+    let mut embedder = Embedder::load(&model.to_string_lossy(), &tokenizer.to_string_lossy())?;
+    let n = crate::persist::import_jsonl(&mut store, &mut embedder, &input)?;
+    eprintln!("imported {n} memories from {} into {db}", input.display());
+    Ok(())
+}
+
+/// Finds `--name <value>` in a flat argv slice, returning the value that follows the flag.
+fn flag(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+/// `structure --agent <id> --id <n> [--type t] [--subject s] [--relation r] [--object o] [--db path]`
+///
+/// Mneme's write-back path, driven by the PostToolUse structuring hook: a raw `store` lands the text
+/// instantly, then this adds the structured `(type, subject, relation, object)` to memory `id` and
+/// deterministically supersedes the fact it replaces (see [`store::VectorStore::structure_memory`]), and
+/// re-exports the JSONL so the structure and any supersession travel with the repo. No ONNX model is loaded
+/// (structuring never changes the text or its embedding). Empty subject/relation/object are treated as absent.
+///
+/// # Errors
+/// Returns an error if required flags are missing/invalid, or the store open / structure / export fails.
+fn cli_structure(args: &[String]) -> Result<()> {
+    let db = flag(args, "--db").unwrap_or_else(crate::store::db_path_from_env);
+    let agent =
+        flag(args, "--agent").ok_or_else(|| anyhow::anyhow!("structure: --agent is required"))?;
+    let id: i64 = flag(args, "--id")
+        .ok_or_else(|| anyhow::anyhow!("structure: --id is required"))?
+        .parse()
+        .map_err(|e| anyhow::anyhow!("structure: --id must be an integer: {e}"))?;
+    let mem_type = flag(args, "--type").unwrap_or_else(|| "semantic".to_string());
+    let subject = flag(args, "--subject").filter(|s| !s.is_empty());
+    let relation = flag(args, "--relation").filter(|s| !s.is_empty());
+    let object = flag(args, "--object").filter(|s| !s.is_empty());
+
+    let store = VectorStore::open(&db)?;
+    let retired = store.structure_memory(
+        &agent,
+        id,
+        &mem_type,
+        subject.as_deref(),
+        relation.as_deref(),
+        object.as_deref(),
+    )?;
+    let out = crate::persist::export_path_from_env(&db);
+    crate::persist::export_jsonl(&store, &out)?;
+    eprintln!(
+        "structured memory {id} for {agent}; superseded {retired} prior fact(s); re-exported {}",
+        out.display()
+    );
+    Ok(())
+}
+
+/// `unstructured [--agent <id>] [--db path]` — list ACTIVE memories Mneme has not yet structured, as JSON on
+/// STDOUT: `{"count": N, "unstructured": [{id, agent_id, text}, ...]}`. The input to `/genesis:memory
+/// migrate`: Mneme reads this, then classifies + structures each one. Read-only, no ONNX model loaded.
+///
+/// # Errors
+/// Returns an error if the store open or the query fails.
+fn cli_unstructured(args: &[String]) -> Result<()> {
+    let db = flag(args, "--db").unwrap_or_else(crate::store::db_path_from_env);
+    let agent = flag(args, "--agent");
+    let store = VectorStore::open(&db)?;
+    let rows = store.unstructured(agent.as_deref())?;
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, agent_id, text)| serde_json::json!({"id": id, "agent_id": agent_id, "text": text}))
+        .collect();
+    // Result goes to STDOUT (Mneme parses it); diagnostics elsewhere go to stderr.
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({"count": items.len(), "unstructured": items}))?
+    );
+    Ok(())
+}
+
+/// Runs the MCP memory server over stdio until the client disconnects.
+///
+/// Reads the database path from `GENESIS_MEMORY_DB` (fallback `genesis-memory.db`) and the
+/// model directory from `GENESIS_MODEL_DIR` (via [`embed::model_dir`]). On startup, if the DB
+/// is empty and a committed JSONL export exists, the memory is rebuilt from it (cross-system
+/// portability). On clean shutdown the DB is flushed back to the export so recall-updated
+/// counters are captured. Returns `Ok(())` on a clean shutdown so stdin EOF yields exit 0.
+///
+/// # Errors
+///
+/// Returns an error if the store, rebuild, or stdio transport fails to initialise.
 pub async fn serve_stdio() -> Result<()> {
-    let store = VectorStore::open(&crate::store::db_path_from_env())?;
-    let server = MemoryServer::new(store, crate::embed::model_dir());
+    let db = crate::store::db_path_from_env();
+    let export = crate::persist::export_path_from_env(&db);
+    let model_dir = crate::embed::model_dir();
+    let mut store = VectorStore::open(&db)?;
+    let restored = crate::persist::rebuild_if_needed(&mut store, &model_dir, &export)?;
+    if restored > 0 {
+        tracing::info!("restored {restored} memories from {}", export.display());
+    }
+    let server = MemoryServer::new(store, model_dir).with_export(export.clone());
+    let flush = server.clone(); // shares the same Arc<Mutex<Inner>> for the shutdown flush
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
+    let g = flush.inner.lock().await;
+    if let Err(e) = crate::persist::export_jsonl(&g.store, &export) {
+        tracing::warn!(
+            "final memory snapshot to {} failed: {e:#}",
+            export.display()
+        );
+    }
     Ok(())
 }
 
@@ -283,10 +461,11 @@ pub async fn serve_stdio() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        do_recall, do_store, ConsolidateArgs, MemoryServer, RecallArgs, StoreArgs, DEFAULT_K,
+        cli_structure, do_recall, do_store, flag, ConsolidateArgs, MemoryServer, RecallArgs,
+        StoreArgs, DEFAULT_K,
     };
     use crate::consolidate::{ConsolidationConfig, FixedClock};
-    use crate::embed::{model_dir, model_paths, Embedder};
+    use crate::embed::{model_dir, model_paths, Embedder, EMBED_DIM};
     use crate::store::VectorStore;
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ProtocolVersion;
@@ -297,7 +476,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = VectorStore::open(dir.path().join("m.db").to_str().unwrap()).unwrap();
         let (m, t) = model_paths();
-        assert!(m.exists(), "model missing: run `scripts/fetch-model`");
+        assert!(
+            m.exists(),
+            "model missing: run `node scripts/fetch-model.mjs`"
+        );
         let embedder = Embedder::load(m.to_str().unwrap(), t.to_str().unwrap()).unwrap();
         (dir, store, embedder)
     }
@@ -309,6 +491,90 @@ mod tests {
         let store = VectorStore::open(dir.path().join("m.db").to_str().unwrap()).unwrap();
         let server = MemoryServer::new(store, model_dir());
         (dir, server)
+    }
+
+    // ─── `structure` subcommand (Mneme's write-back path) ────────────────────
+
+    #[test]
+    fn flag_reads_the_value_after_a_named_flag() {
+        let args: Vec<String> = ["structure", "--agent", "mneme", "--id", "7"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(flag(&args, "--agent").as_deref(), Some("mneme"));
+        assert_eq!(flag(&args, "--id").as_deref(), Some("7"));
+        assert_eq!(flag(&args, "--missing"), None);
+    }
+
+    /// End-to-end `structure` subcommand (no ONNX needed — structuring never touches the embedding):
+    /// two facts about the same key are seeded, structured in order, and the newer supersedes the older;
+    /// the DB reflects the current value AND the re-exported JSONL carries the structure so it travels.
+    #[test]
+    fn cli_structure_writes_structure_supersedes_and_reexports_the_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("memory.db");
+        let dbs = db.to_string_lossy().to_string();
+        {
+            let mut s = VectorStore::open(&dbs).unwrap();
+            let e = vec![0.0f32; EMBED_DIM];
+            s.insert("mneme", "ball is blue", &e, 1.0, 100).unwrap();
+            s.insert("mneme", "ball is green", &e, 1.0, 200).unwrap();
+        }
+        let sv =
+            |parts: &[&str]| -> Vec<String> { parts.iter().map(ToString::to_string).collect() };
+        cli_structure(&sv(&[
+            "structure",
+            "--db",
+            &dbs,
+            "--agent",
+            "mneme",
+            "--id",
+            "1",
+            "--type",
+            "semantic",
+            "--subject",
+            "ball",
+            "--relation",
+            "color",
+            "--object",
+            "blue",
+        ]))
+        .unwrap();
+        cli_structure(&sv(&[
+            "structure",
+            "--db",
+            &dbs,
+            "--agent",
+            "mneme",
+            "--id",
+            "2",
+            "--subject",
+            "ball",
+            "--relation",
+            "color",
+            "--object",
+            "green",
+        ]))
+        .unwrap();
+
+        let s = VectorStore::open(&dbs).unwrap();
+        assert_eq!(
+            s.active_object("mneme", "ball", "color")
+                .unwrap()
+                .as_deref(),
+            Some("green"),
+            "the newer fact is the current value"
+        );
+        let export = crate::persist::export_path_from_env(&dbs);
+        let jsonl = std::fs::read_to_string(&export).unwrap();
+        assert!(
+            jsonl.contains("\"subject\":\"ball\""),
+            "structure travels: {jsonl}"
+        );
+        assert!(
+            jsonl.contains("\"object\":\"green\""),
+            "current object travels: {jsonl}"
+        );
     }
 
     // ─── Tool API (agent scoping) ────────────────────────────────────────────
@@ -392,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn recall_result_objects_have_exactly_id_text_and_distance() {
+    fn recall_result_objects_have_exactly_id_text_and_score() {
         let (_d, mut store, mut emb) = setup();
         let cfg = ConsolidationConfig::default();
         let clock = FixedClock(0);
@@ -403,11 +669,11 @@ mod tests {
         assert_eq!(obj.len(), 3);
         assert!(obj["id"].is_i64());
         assert!(obj["text"].is_string());
-        assert!(obj["distance"].is_number());
+        assert!(obj["score"].is_number());
     }
 
     #[test]
-    fn recall_result_array_is_ordered_by_ascending_distance() {
+    fn recall_result_array_is_ordered_by_descending_score() {
         let (_d, mut store, mut emb) = setup();
         let cfg = ConsolidationConfig::default();
         let clock = FixedClock(0);
@@ -431,17 +697,20 @@ mod tests {
         .unwrap();
         let json = do_recall(&mut store, &mut emb, &clock, "a", "the quick brown fox", 5).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let dists: Vec<f64> = v
+        let scores: Vec<f64> = v
             .as_array()
             .unwrap()
             .iter()
-            .map(|e| e["distance"].as_f64().unwrap())
+            .map(|e| e["score"].as_f64().unwrap())
             .collect();
         assert!(
-            dists.windows(2).all(|w| w[0] <= w[1]),
-            "ascending: {dists:?}"
+            scores.windows(2).all(|w| w[0] >= w[1]),
+            "descending relevance: {scores:?}"
         );
-        approx::assert_abs_diff_eq!(dists[0], 0.0, epsilon = 1e-6); // exact match first
+        assert!(
+            scores[0] > 0.0,
+            "the top hit has a positive composite score"
+        );
     }
 
     #[tokio::test]

@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Genesis — build AI agents like software</title>
+<meta name="description" content="Genesis is an agent-builder for Claude Code: it builds agents test-first, holds them to rules enforced outside the model, gives each its own vector memory, and can make any agent the folder's own Claude." />
+<style>
+  /* ===========================================================
+     IDENTITY: "ink & seal" — Sensei's by-the-book discipline and
+     the stamp that approves or denies.
+     Dark = sumi ink ground.  Light = paper (designed, not inverted).
+     --indigo = the build line, the memory, the docs
+     --seal   = the one thing that BLOCKS
+     =========================================================== */
+  :root{
+    color-scheme:light dark;
+    --bg:#14110d; --bg2:#1b1712; --panel:#221d17; --line:#332c24;
+    --text:#f1ece3; --dim:#b0a595; --faint:#8a7f70;
+    --indigo:#7fa9e2; --indigo-hi:#a9c8ef;
+    --seal:#e2543c; --seal-hi:#f28a72;
+    --shadow:0 1px 0 rgba(255,255,255,.03), 0 22px 46px -28px rgba(0,0,0,.8);
+    --sans:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#e8e4dc; --bg2:#f3f1ec; --panel:#fffdf9; --line:#d5cfc3;
+      --text:#171309; --dim:#4e483d; --faint:#665f52;
+      --indigo:#2a4a90; --indigo-hi:#1c3670;
+      --seal:#b23a20; --seal-hi:#8f2a13;
+      --shadow:0 1px 0 rgba(255,255,255,.7), 0 18px 40px -28px rgba(40,28,12,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14110d; --bg2:#1b1712; --panel:#221d17; --line:#332c24;
+    --text:#f1ece3; --dim:#b0a595; --faint:#8a7f70;
+    --indigo:#7fa9e2; --indigo-hi:#a9c8ef;
+    --seal:#e2543c; --seal-hi:#f28a72;
+    --shadow:0 1px 0 rgba(255,255,255,.03), 0 22px 46px -28px rgba(0,0,0,.8);
+  }
+  :root[data-theme="light"]{
+    --bg:#e8e4dc; --bg2:#f3f1ec; --panel:#fffdf9; --line:#d5cfc3;
+    --text:#171309; --dim:#4e483d; --faint:#665f52;
+    --indigo:#2a4a90; --indigo-hi:#1c3670;
+    --seal:#b23a20; --seal-hi:#8f2a13;
+    --shadow:0 1px 0 rgba(255,255,255,.7), 0 18px 40px -28px rgba(40,28,12,.35);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0; padding:0;}
+  @media (prefers-reduced-motion:no-preference){ html{scroll-behavior:smooth;} }
+  :focus-visible{outline:2px solid var(--seal); outline-offset:3px; border-radius:3px;}
+
+  .page{
+    background:
+      radial-gradient(85% 55% at 88% 2%, color-mix(in srgb, var(--indigo) 9%, transparent), transparent 62%),
+      radial-gradient(75% 50% at 4% 100%, color-mix(in srgb, var(--seal) 8%, transparent), transparent 58%),
+      var(--bg);
+    color:var(--text); font-family:var(--sans);
+    min-height:100vh; padding:0 clamp(18px,5vw,40px) clamp(34px,5vw,66px);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1160px; margin:0 auto; display:flex; flex-direction:column; gap:clamp(24px,3.4vw,38px);}
+
+  /* ---------- sticky in-page nav ---------- */
+  .docnav{
+    position:sticky; top:0; z-index:30;
+    margin:0 calc(-1 * clamp(18px,5vw,40px));
+    padding:10px clamp(18px,5vw,40px);
+    background:color-mix(in srgb, var(--bg) 90%, transparent);
+    border-bottom:1px solid var(--line);
+    -webkit-backdrop-filter:blur(9px); backdrop-filter:blur(9px);
+    display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px;
+  }
+  .docnav .mark{font-family:var(--mono); font-size:.98rem; font-weight:700; letter-spacing:-.01em; color:var(--text); margin-right:6px;}
+  .docnav .mark .slash{color:var(--seal);}
+  .docnav a{font-size:.82rem; color:var(--dim); text-decoration:none; border-bottom:1px solid transparent; padding-bottom:2px;}
+  .docnav a:hover{color:var(--text); border-bottom-color:var(--line);}
+  section[id]{scroll-margin-top:62px;}
+
+  /* ---------- part divider ---------- */
+  .part{display:flex; flex-direction:column; gap:5px; padding-top:clamp(10px,2vw,20px); border-top:1px solid var(--line);}
+  .part-k{margin:0; font-family:var(--mono); font-size:.62rem; letter-spacing:.24em; text-transform:uppercase; color:var(--seal);}
+  .part-h{margin:0; font-size:clamp(1.5rem,3.6vw,2.15rem); font-weight:800; letter-spacing:-.024em; line-height:1.12; text-wrap:balance;}
+  .part-l{margin:.4em 0 0; font-size:clamp(.95rem,1.8vw,1.06rem); line-height:1.55; color:var(--dim); max-width:70ch;}
+  .part-l b{color:var(--text); font-weight:650;}
+
+  /* ---------- 1 · masthead + Big Idea ---------- */
+  .mast{
+    margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px;
+    padding-bottom:14px; border-bottom:1px solid var(--line);
+  }
+  .mark{font-family:var(--mono); font-size:1.02rem; font-weight:700; letter-spacing:-.01em; color:var(--text);}
+  .mark .slash{color:var(--seal);}
+  .what{font-size:.87rem; line-height:1.4; color:var(--dim);}
+  .headline{
+    margin:.5em 0 0; font-size:clamp(1.9rem,5vw,3.3rem); line-height:1.06;
+    font-weight:800; letter-spacing:-.025em; text-wrap:balance; max-width:21ch;
+  }
+  .headline .hot{color:var(--indigo);}
+  .headline .cold{
+    color:var(--seal);
+    background:linear-gradient(180deg, transparent 68%, color-mix(in srgb,var(--seal) 22%, transparent) 0);
+  }
+  .subhead{margin:1.05em 0 0; font-size:clamp(1rem,2vw,1.19rem); line-height:1.56; color:var(--dim); max-width:66ch;}
+  .subhead b{color:var(--text); font-weight:650;}
+
+  /* ---------- the diagram ---------- */
+  .diagram{
+    position:relative; overflow:hidden;
+    background:linear-gradient(180deg,var(--bg2),color-mix(in srgb,var(--bg2) 76%, var(--bg)));
+    border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
+    padding:clamp(20px,3.2vw,32px); display:flex; flex-direction:column; gap:16px;
+  }
+  .phase{margin:0; font-family:var(--mono); font-size:.65rem; letter-spacing:.22em; text-transform:uppercase; color:var(--faint); display:flex; align-items:center; gap:.8em;}
+  .phase::after{content:""; flex:1; height:1px; background:var(--line);}
+
+  .build{position:relative; display:flex; align-items:stretch; gap:8px;}
+  .build::before{
+    content:""; position:absolute; left:14px; right:14px; top:50%; height:2px; margin-top:-1px; border-radius:2px; z-index:0;
+    background:linear-gradient(90deg, color-mix(in srgb,var(--indigo) 28%, transparent), var(--indigo) 20%, var(--indigo) 80%, color-mix(in srgb,var(--indigo) 28%, transparent));
+    opacity:.5; transform-origin:left center; animation:draw 1s cubic-bezier(.2,.75,.25,1) both;
+  }
+  .station{
+    position:relative; z-index:1; flex:1 1 0; min-width:0;
+    background:var(--panel); border:1px solid var(--line); border-radius:11px;
+    padding:14px 15px 15px; display:flex; flex-direction:column; gap:7px;
+    animation:rise .5s ease-out both;
+  }
+  .station:nth-of-type(1){animation-delay:.16s;}
+  .station:nth-of-type(2){animation-delay:.34s;}
+  .station:nth-of-type(3){animation-delay:.52s;}
+  .station:nth-of-type(4){animation-delay:.70s;}
+  .station.wide{flex:1.2 1 0;}
+  .n{align-self:flex-start; font-family:var(--mono); font-size:.63rem; letter-spacing:.14em; font-variant-numeric:tabular-nums; color:var(--faint); border:1px solid var(--line); border-radius:4px; padding:2px 6px; line-height:1;}
+  .s-name{margin:0; font-size:1.02rem; font-weight:750; letter-spacing:-.012em; line-height:1.24;}
+  .s-plain{margin:0; font-size:.88rem; line-height:1.46; color:var(--dim);}
+  .s-plain em{color:var(--text); font-style:italic;}
+  .s-tech{margin:auto 0 0; padding-top:8px; font-family:var(--mono); font-size:.65rem; line-height:1.45; letter-spacing:.02em; color:var(--faint);}
+  .tick{z-index:1; align-self:center; flex:0 0 auto; color:var(--indigo); display:grid; place-items:center; opacity:.9; animation:rise .5s ease-out both;}
+  .tick:nth-of-type(1){animation-delay:.26s;}
+  .tick:nth-of-type(2){animation-delay:.44s;}
+  .tick:nth-of-type(3){animation-delay:.62s;}
+  .tick svg{width:13px; height:13px; display:block;}
+
+  .runtime{position:relative; z-index:1; display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start;}
+  .pane{border-radius:12px; padding:15px 16px; display:flex; flex-direction:column; gap:11px;}
+  .pane.seal{
+    border:1px solid color-mix(in srgb,var(--seal) 46%, var(--line));
+    background:repeating-linear-gradient(122deg, transparent 0 11px, color-mix(in srgb,var(--seal) 5%, transparent) 11px 12px), color-mix(in srgb,var(--seal) 7%, transparent);
+    animation:stamp .45s cubic-bezier(.2,.8,.3,1) both; animation-delay:.86s;
+  }
+  .pane.mem{
+    border:1px solid color-mix(in srgb,var(--indigo) 42%, var(--line));
+    background:color-mix(in srgb,var(--indigo) 6%, transparent);
+    animation:rise .5s ease-out both; animation-delay:.96s;
+  }
+  .pane h3{margin:0; font-size:1rem; font-weight:800; letter-spacing:-.015em; display:flex; align-items:center; gap:.55em; line-height:1.25;}
+  .pane.seal h3{color:var(--seal-hi);}
+  .pane.mem h3{color:var(--indigo-hi);}
+  .chop{width:13px; height:13px; flex:0 0 auto; border-radius:3px; background:var(--seal); box-shadow:0 0 0 3px color-mix(in srgb,var(--seal) 22%, transparent);}
+  .disc{width:13px; height:13px; flex:0 0 auto; border-radius:50%; background:var(--indigo); box-shadow:0 0 0 3px color-mix(in srgb,var(--indigo) 22%, transparent);}
+  .lede2{margin:0; font-size:.87rem; line-height:1.5; color:var(--dim);}
+  .lede2 b{color:var(--text); font-weight:700;}
+  .lede2 em{color:var(--text); font-style:italic;}
+  .rows{display:flex; flex-direction:column; gap:7px;}
+  .row{display:grid; grid-template-columns:auto 1fr; gap:10px; align-items:baseline; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 10px;}
+  .row b{font-family:var(--mono); font-size:.71rem; font-weight:700; letter-spacing:.01em; white-space:nowrap;}
+  .row span{font-size:.78rem; line-height:1.4; color:var(--dim);}
+  .pane.seal .row{border-color:color-mix(in srgb,var(--seal) 24%, var(--line));}
+  .pane.seal .row b{color:var(--seal-hi);}
+  .pane.mem .row{border-color:color-mix(in srgb,var(--indigo) 24%, var(--line));}
+  .pane.mem .row b{color:var(--indigo-hi);}
+  .cycle{margin:0; font-size:.8rem; line-height:1.45; color:var(--text); display:flex; gap:.6em; align-items:baseline;}
+  .cycle .arrow{color:var(--indigo); font-size:.95rem; line-height:1;}
+  .p-tech{margin:0; font-family:var(--mono); font-size:.645rem; line-height:1.5; letter-spacing:.02em; color:var(--faint);}
+
+  /* ---------- the shipped "New" beat ---------- */
+  .newbeat{
+    border:1px solid color-mix(in srgb,var(--indigo) 48%, var(--line)); border-radius:12px; padding:16px 17px;
+    background:color-mix(in srgb,var(--indigo) 8%, transparent);
+    box-shadow:0 0 0 1px color-mix(in srgb,var(--indigo) 16%, transparent);
+    display:flex; flex-direction:column; gap:11px;
+  }
+  .newbeat .hdr{display:flex; flex-wrap:wrap; align-items:center; gap:8px 13px;}
+  .newbeat .chip{font-family:var(--mono); font-size:.6rem; letter-spacing:.18em; text-transform:uppercase; font-weight:700; color:var(--panel); background:var(--indigo); border-radius:4px; padding:4px 8px; line-height:1;}
+  .newbeat h3{margin:0; font-size:1.06rem; font-weight:800; letter-spacing:-.018em; color:var(--indigo-hi); line-height:1.25;}
+  .newbeat .items{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .newbeat .item{border:1px solid color-mix(in srgb,var(--indigo) 28%, var(--line)); border-radius:9px; padding:11px 13px; background:var(--panel);}
+  .newbeat .item b{display:block; font-size:.9rem; font-weight:750; color:var(--text); margin-bottom:3px;}
+  .newbeat .item span{font-size:.8rem; line-height:1.44; color:var(--dim);}
+  .newbeat .item em{color:var(--text); font-style:italic;}
+  .newbeat .n-tech{margin:0; font-family:var(--mono); font-size:.635rem; line-height:1.5; color:var(--faint);}
+
+  /* ---------- proof + contrast + ask ---------- */
+  .proof{display:grid; grid-template-columns:repeat(4,1fr); gap:11px;}
+  .stat{border:1px solid var(--line); border-radius:11px; padding:13px 15px; background:var(--bg2); display:flex; flex-direction:column; gap:3px;}
+  .stat b{font-size:1.14rem; font-weight:800; letter-spacing:-.02em; font-variant-numeric:tabular-nums; color:var(--indigo);}
+  .stat span{font-size:.775rem; line-height:1.4; color:var(--dim);}
+
+  .contrast{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  .card{border:1px solid var(--line); border-radius:11px; padding:15px 16px; background:var(--bg2); display:flex; flex-direction:column; gap:7px;}
+  .card .k{font-family:var(--mono); font-size:.64rem; letter-spacing:.16em; text-transform:uppercase; align-self:flex-start;}
+  .card.now{border-color:color-mix(in srgb,var(--indigo) 32%, var(--line));}
+  .card.now .k{color:var(--indigo);}
+  .card.next{border-color:color-mix(in srgb,var(--seal) 34%, var(--line));}
+  .card.next .k{color:var(--seal);}
+  .card p{margin:0; font-size:.94rem; line-height:1.52; color:var(--dim);}
+  .card p b{color:var(--text); font-weight:700;}
+  .cite{margin:0; font-family:var(--mono); font-size:.625rem; line-height:1.45; color:var(--faint);}
+
+  .ask{display:flex; flex-direction:column; gap:12px;}
+  .ask > p{margin:0; font-size:clamp(1.05rem,2.2vw,1.42rem); font-weight:700; line-height:1.34; letter-spacing:-.016em; text-wrap:balance; max-width:42ch;}
+  .ask .u{border-bottom:2px solid var(--seal); padding-bottom:1px;}
+  .cmd{margin:0; font-family:var(--mono); font-size:.79rem; line-height:1.85; color:var(--dim); background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:12px 15px; overflow-x:auto;}
+  .cmd i{color:var(--faint); font-style:normal;}
+  .cmd u{text-decoration:none; color:var(--indigo);}
+
+  /* ---------- PART 2 · function reference ---------- */
+  .grp{display:flex; flex-direction:column; gap:9px;}
+  .grp > header{display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px;}
+  .grp h3{margin:0; font-size:1.04rem; font-weight:800; letter-spacing:-.018em; color:var(--indigo-hi);}
+  .grp .count{font-family:var(--mono); font-size:.6rem; letter-spacing:.16em; text-transform:uppercase; color:var(--bg2); background:var(--faint); border-radius:4px; padding:3px 7px; line-height:1;}
+  .grp .note{margin:0; flex:1 1 280px; font-size:.82rem; line-height:1.45; color:var(--dim);}
+  .fn{display:grid; grid-template-columns:minmax(168px,auto) 1fr; gap:8px 16px; align-items:baseline; background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 13px;}
+  .fn > code{font-family:var(--mono); font-size:.77rem; font-weight:700; color:var(--indigo-hi); line-height:1.4; word-break:break-word;}
+  .fn div{min-width:0;}
+  .fn p{margin:0; font-size:.85rem; line-height:1.46; color:var(--dim);}
+  .fn p b{color:var(--text); font-weight:700;}
+  .fn .where{display:block; margin-top:4px; font-family:var(--mono); font-size:.63rem; line-height:1.45; color:var(--faint);}
+  .grp.enforce h3{color:var(--seal-hi);}
+  .grp.enforce .fn{border-color:color-mix(in srgb,var(--seal) 30%, var(--line));}
+  .grp.enforce .fn > code{color:var(--seal-hi);}
+
+  /* ---------- PART 3 · worked examples ---------- */
+  .ex{background:linear-gradient(180deg,var(--bg2),color-mix(in srgb,var(--bg2) 78%, var(--bg))); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); padding:clamp(18px,3vw,26px); display:flex; flex-direction:column; gap:14px;}
+  .ex > header{display:flex; flex-direction:column; gap:6px;}
+  .ex .tagline{margin:0; font-family:var(--mono); font-size:.62rem; letter-spacing:.2em; text-transform:uppercase; color:var(--indigo);}
+  .ex h3{margin:0; font-size:clamp(1.15rem,2.5vw,1.5rem); font-weight:800; letter-spacing:-.02em; line-height:1.2;}
+  .ex .intro{margin:0; font-size:.92rem; line-height:1.55; color:var(--dim); max-width:70ch;}
+  .ex .intro b{color:var(--text); font-weight:700;}
+  .steps{display:flex; flex-direction:column; gap:10px;}
+  .step{display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start;}
+  .step .num{font-family:var(--mono); font-size:.66rem; font-weight:700; letter-spacing:.06em; color:var(--panel); background:var(--indigo); border-radius:5px; padding:4px 7px; line-height:1; min-width:26px; text-align:center;}
+  .step .body{min-width:0; display:flex; flex-direction:column; gap:6px;}
+  .step h4{margin:0; font-size:.94rem; font-weight:750; letter-spacing:-.01em; line-height:1.3;}
+  .step p{margin:0; font-size:.865rem; line-height:1.5; color:var(--dim);}
+  .step p b{color:var(--text); font-weight:700;}
+  .step em{color:var(--text); font-style:italic;}
+  .say{margin:2px 0 0; font-family:var(--mono); font-size:.77rem; line-height:1.75; color:var(--dim); background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:11px 13px; overflow-x:auto; white-space:pre-wrap;}
+  .say u{text-decoration:none; color:var(--indigo-hi);}
+  .say i{font-style:normal; color:var(--faint);}
+  .gate{border:1px solid color-mix(in srgb,var(--seal) 42%, var(--line)); border-radius:10px; background:color-mix(in srgb,var(--seal) 7%, transparent); padding:11px 13px; display:flex; flex-direction:column; gap:4px;}
+  .gate b{font-size:.85rem; font-weight:750; color:var(--seal-hi);}
+  .gate p{margin:0; font-size:.84rem; line-height:1.48; color:var(--dim);}
+  .tip{margin:0; font-family:var(--mono); font-size:.645rem; line-height:1.55; color:var(--faint);}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .mini{border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--panel); display:flex; flex-direction:column; gap:5px;}
+  .mini b{font-size:.87rem; font-weight:750;}
+  .mini p{margin:0; font-size:.82rem; line-height:1.45; color:var(--dim);}
+
+  /* ---------- PART 4 · releases ---------- */
+  .notice{border:1px solid color-mix(in srgb,var(--seal) 44%, var(--line)); border-radius:11px; background:color-mix(in srgb,var(--seal) 7%, transparent); padding:13px 15px; display:flex; flex-direction:column; gap:5px;}
+  .notice b{font-size:.89rem; font-weight:800; color:var(--seal-hi);}
+  .notice p{margin:0; font-size:.85rem; line-height:1.5; color:var(--dim);}
+  .rel{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:15px 17px; display:flex; flex-direction:column; gap:9px;}
+  .rel.current{border-color:color-mix(in srgb,var(--indigo) 50%, var(--line)); box-shadow:0 0 0 1px color-mix(in srgb,var(--indigo) 18%, transparent); background:color-mix(in srgb,var(--indigo) 5%, var(--panel));}
+  .rel > header{display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px;}
+  .rel .tag{font-family:var(--mono); font-size:.84rem; font-weight:700; color:var(--indigo-hi); letter-spacing:-.01em;}
+  .rel .date{font-family:var(--mono); font-size:.65rem; color:var(--faint); letter-spacing:.04em;}
+  .rel .now{font-family:var(--mono); font-size:.58rem; letter-spacing:.16em; text-transform:uppercase; font-weight:700; color:var(--panel); background:var(--indigo); border-radius:4px; padding:3px 7px; line-height:1;}
+  .rel .theme{font-family:var(--mono); font-size:.58rem; letter-spacing:.16em; text-transform:uppercase; color:var(--bg2); background:var(--faint); border-radius:4px; padding:3px 7px; line-height:1;}
+  .rel h3{margin:0; font-size:1.01rem; font-weight:800; letter-spacing:-.018em; line-height:1.3;}
+  .rel > p{margin:0; font-size:.87rem; line-height:1.5; color:var(--dim);}
+  .rel > p b{color:var(--text); font-weight:700;}
+  .rel ul{margin:2px 0 0; padding-left:1.1em; display:flex; flex-direction:column; gap:5px;}
+  .rel li{font-size:.845rem; line-height:1.5; color:var(--dim);}
+  .rel li b{color:var(--text); font-weight:700;}
+  .rel .meta{margin:3px 0 0; font-family:var(--mono); font-size:.62rem; line-height:1.5; color:var(--faint);}
+  code{font-family:var(--mono); font-size:.9em; color:var(--indigo-hi);}
+  .grp.enforce .fn p code, .gate code{color:var(--seal-hi);}
+
+  /* ---------- footer ---------- */
+  .foot{display:flex; flex-direction:column; gap:9px; border-top:1px solid var(--line); padding-top:16px;}
+  .legend{margin:0; display:flex; flex-wrap:wrap; gap:6px 20px; align-items:center; font-size:.79rem; color:var(--faint);}
+  .legend .sw{display:inline-flex; align-items:center; gap:.55em;}
+  .legend .dot{width:9px; height:9px; border-radius:2px; flex:0 0 auto;}
+  .legend .dot.i{background:var(--indigo);} .legend .dot.s{background:var(--seal);}
+  .legend .mono{font-family:var(--mono); font-size:.71rem;}
+  .status{margin:0; font-family:var(--mono); font-size:.645rem; line-height:1.7; color:var(--faint);}
+
+  @keyframes draw{from{transform:scaleX(0); opacity:.15;} to{transform:scaleX(1); opacity:.5;}}
+  @keyframes rise{from{opacity:0; transform:translateY(9px);} to{opacity:1; transform:none;}}
+  @keyframes stamp{from{opacity:0; transform:scale(1.035);} to{opacity:1; transform:none;}}
+
+  @media (max-width:1040px){ .proof{grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:900px){
+    .build{flex-direction:column;}
+    .build::before{
+      left:50%; right:auto; top:16px; bottom:16px; width:2px; height:auto; margin:0 0 0 -1px;
+      background:linear-gradient(180deg, color-mix(in srgb,var(--indigo) 28%, transparent), var(--indigo) 20%, var(--indigo) 80%, color-mix(in srgb,var(--indigo) 28%, transparent));
+      transform-origin:center top; animation-name:drawv;
+    }
+    .station.wide{flex:1 1 0;}
+    /* the chevron turns to follow the line — its own keyframe so the reveal can't reset the rotation */
+    .tick{transform:rotate(90deg); animation-name:risev;}
+    .s-tech{margin-top:2px;}
+    .runtime{grid-template-columns:1fr;}
+  }
+  @keyframes drawv{from{transform:scaleY(0); opacity:.15;} to{transform:scaleY(1); opacity:.5;}}
+  @keyframes risev{from{opacity:0; transform:rotate(90deg) translateX(9px);} to{opacity:1; transform:rotate(90deg);}}
+
+  @media (max-width:620px){
+    .contrast{grid-template-columns:1fr;}
+    .proof{grid-template-columns:1fr;}
+    .newbeat .items{grid-template-columns:1fr;}
+    .fn{grid-template-columns:1fr; gap:5px;}
+    .grid2{grid-template-columns:1fr;}
+    .step{grid-template-columns:1fr; gap:6px;}
+    .step .num{justify-self:start;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .build::before,.station,.pane{animation:none; opacity:1; transform:none;}
+    .build::before{opacity:.5;}
+    .tick{animation:none; opacity:.9;}
+  }
+</style>
+</head>
+<body>
+
+<main class="page">
+
+  <nav class="docnav" aria-label="On this page">
+    <span class="mark">genesis<span class="slash">/</span></span>
+    <a href="#overview">Overview</a>
+    <a href="#functions">Functions</a>
+    <a href="#guide">Guide</a>
+    <a href="#releases">Releases</a>
+  </nav>
+
+  <div class="wrap">
+
+    <!-- ═══════════════ PART 1 · OVERVIEW ═══════════════ -->
+    <section id="overview">
+      <header>
+        <p class="mast">
+          <span class="mark">genesis<span class="slash">/</span></span>
+          <span class="what">an agent-builder for Claude Code</span>
+        </p>
+        <h1 class="headline">Build agents you can <span class="hot">test</span>, that <span class="cold">can't break their rules</span>, and that <span class="hot">don't forget</span>.</h1>
+        <p class="subhead">Describe the agent you want. Genesis interviews you until every requirement is confirmed, writes the agent's tests <em>before</em> it writes the agent, and installs it into your repo — <b>as a subagent you call by name, or as the folder's own Claude</b> — wired to rules it can't talk its way past, and a memory of its own that gets sharper the more you use it. <b>Every claim below is a file in the repo you can open.</b></p>
+      </header>
+    </section>
+
+    <section class="diagram" aria-label="How Genesis builds an agent, and what holds that agent afterwards">
+      <p class="phase">Build time</p>
+      <div class="build">
+        <div class="station">
+          <span class="n">01</span>
+          <h2 class="s-name">You say what you need</h2>
+          <p class="s-plain">In plain words — "an agent that reviews my pull requests for security issues."</p>
+          <p class="s-tech">/genesis:new · or "use sensei to build…"</p>
+        </div>
+        <span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg></span>
+        <div class="station wide">
+          <span class="n">02</span>
+          <h2 class="s-name">Sensei interviews you</h2>
+          <p class="s-plain">Restates every requirement back and builds nothing on a guess. It won't even choose <em>one agent or a team</em> for you — that's your call, and so is what the agent must know.</p>
+          <p class="s-tech">verified facts only · escalates every decision · a hook blocks assembly unless the expertise step actually ran</p>
+        </div>
+        <span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg></span>
+        <div class="station wide">
+          <span class="n">03</span>
+          <h2 class="s-name">Method writes the tests first</h2>
+          <p class="s-plain">It writes what the agent must pass — refuse this, escalate that, stay in its lane — proves those tests <em>fail</em> without the agent, then writes the smallest agent that passes them.</p>
+          <p class="s-tech">red baseline → green · adversarial + persona-leak + contradiction scans · nothing ships untested</p>
+        </div>
+        <span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg></span>
+        <div class="station">
+          <span class="n">04</span>
+          <h2 class="s-name">It lands where you choose</h2>
+          <p class="s-plain">A named subagent you call on — or the folder's own Claude. <em>Full enforcement either way</em>, and your teammates get it on a clone.</p>
+          <p class="s-tech">.claude/agents/&lt;name&gt;.md · or --main · the tools list is a real boundary</p>
+        </div>
+      </div>
+
+      <p class="phase">Then, every time it runs</p>
+      <div class="runtime">
+        <div class="pane seal">
+          <h3><span class="chop" aria-hidden="true"></span>It can't break its own rules.</h3>
+          <p class="lede2">Not because it <em>remembers</em> them — because four checks sit <b>outside the model</b> and simply refuse.</p>
+          <div class="rows">
+            <div class="row"><b>inject</b><span>Hands it the rules at the start of every session.</span></div>
+            <div class="row"><b>gate</b><span>Blocks the write itself — a banned phrase, a password, an over-long file.</span></div>
+            <div class="row"><b>validate</b><span>Won't let it finish until it cites which rules it applied — and the evidence matches the files it actually wrote.</span></div>
+            <div class="row"><b>review</b><span>A separate, faster model reads the artifacts and the rule manifests itself — and can only block, never bless.</span></div>
+          </div>
+          <p class="p-tech">one native binary — a check costs 2–10 ms, not a Node process per tool call · fail-closed · a fabricated rule-id or invented evidence blocks the turn</p>
+        </div>
+        <div class="pane mem">
+          <h3><span class="disc" aria-hidden="true"></span>It remembers, and it sharpens.</h3>
+          <p class="lede2">Every agent gets <b>its own vector database</b>, on your machine — one file, no cloud and no account. It searches by <em>meaning</em>, not by keyword match.</p>
+          <div class="rows">
+            <div class="row"><b>store</b><span>Keeps a decision or fact worth carrying forward. The agent chooses what's worth keeping — it isn't taping everything.</span></div>
+            <div class="row"><b>recall</b><span>Finds it again next week from a loose paraphrase — and the act of using it makes that memory stronger.</span></div>
+            <div class="row"><b>consolidate</b><span>Folds near-duplicates into the one that earned its place, and keeps the trail of what it replaced.</span></div>
+          </div>
+          <p class="cycle"><span class="arrow" aria-hidden="true">↻</span><span>What gets used keeps its weight. What nobody touches halves every 30 days. That's the agent getting better at <em>your</em> work.</span></p>
+          <p class="p-tech">SQLite + sqlite-vec KNN · 384-dim embeddings computed locally, no network · scoped per agent_id · committed as JSONL, so a teammate's clone rebuilds it</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="newbeat" aria-label="The agent can be the folder's own Claude">
+      <div class="hdr">
+        <span class="chip">New</span>
+        <h3>The agent doesn't have to be something you summon.</h3>
+      </div>
+      <div class="items">
+        <div class="item">
+          <b>Promote it to the folder's Claude</b>
+          <span>One command and the agent you built <em>becomes</em> Claude Code in that folder — its persona is the folder's brief, its enforcement moves to the main thread. Nothing to remember, nothing to invoke. It stays available as a subagent too.</span>
+        </div>
+        <div class="item">
+          <b>And change your mind freely</b>
+          <span>Demoting puts the folder back exactly as it was. Your own notes and your own hooks are never touched — Genesis only ever adds and removes its own marked block.</span>
+        </div>
+      </div>
+      <p class="n-tech">/genesis:promote &lt;name&gt; · /genesis:demote · or build it that way from the start (assemble --main) · a managed block in CLAUDE.md + --main-agent hooks in .claude/settings.json · idempotent and non-destructive</p>
+    </section>
+
+    <section class="proof" aria-label="Evidence">
+      <div class="stat"><b>No mocks</b><span>the memory server's suites run against the real embedding model, the real database and the real spawned server. A missing model fails the run — it never quietly skips.</span></div>
+      <div class="stat"><b>62.5s → 0.55s</b><span>the finish-check on a 21,000-file project, after the hooks were rewritten in Rust. It stopped walking your build folders.</span></div>
+      <div class="stat"><b>17 / 17</b><span>decisions the new native hooks had to reproduce byte-for-byte from the ones they replaced — before those were deleted.</span></div>
+      <div class="stat"><b>30 days</b><span>to halve an unused memory's weight. Every recall pushes it back up.</span></div>
+    </section>
+
+    <section class="contrast" aria-label="What changes">
+      <div class="card now">
+        <span class="k">How agents get built today</span>
+        <p>You paste a persona from a blog post and <b>hope it holds</b> — then re-explain your project from scratch tomorrow. It doesn't hold: instruction-following drops ~39% from a single turn to a conversation, and half the guidance is effectively gone by 32K tokens.</p>
+        <p class="cite">Laban et al. 2505.06120 · NoLiMa 2502.05167 — cited in expertise/expertise-application.md</p>
+      </div>
+      <div class="card next">
+        <span class="k">With Genesis</span>
+        <p>The agent can forget all it likes — <b>the gate still denies the write, and the validator still refuses the finish.</b> And what it learned last month is still on your disk this morning, weighted by how much it actually got used.</p>
+        <p class="cite">the whole design in one line: determinism lives outside the model</p>
+      </div>
+    </section>
+
+    <section class="ask">
+      <p>Install it, ask for an agent — then read <span class="u">the tests it wrote before it wrote the agent</span>.</p>
+      <p class="cmd"><i># in Claude Code, from your project:</i><br />
+        <u>/plugin</u> marketplace add Atiqul-Islam/genesis<br />
+        <u>/plugin</u> install genesis@genesis<br />
+        <i>&gt; Use sensei to build an agent that reviews my diffs for security issues.</i></p>
+    </section>
+
+    <!-- ═══════════════ PART 2 · FUNCTIONS ═══════════════ -->
+    <section id="functions" class="part">
+      <p class="part-k">Part two</p>
+      <h2 class="part-h">What everything does</h2>
+      <p class="part-l">Every surface Genesis exposes, and what it is for. <b>You will only ever type the first group</b> — the slash commands. Everything below them is machinery those commands drive on your behalf, listed so nothing is a black box.</p>
+    </section>
+
+    <section class="grp">
+      <header><h3>Slash commands</h3><span class="count">3</span>
+        <p class="note">The whole user-facing surface. Typed in Claude Code, from your project folder.</p></header>
+      <div class="fn"><code>/genesis:new</code><div>
+        <p>Start a build. Sensei interviews you, then delegates the authoring to Method. <b>Nothing about Genesis runs until this is invoked</b> — the plugin is dormant otherwise.</p>
+        <span class="where">optional argument: what the agent should do</span></div></div>
+      <div class="fn"><code>/genesis:promote &lt;name&gt;</code><div>
+        <p>Turn an already-built agent into <b>the folder's main Claude</b>. Its persona is merged into <code>CLAUDE.md</code> as a managed block and its enforcement moves to the main thread. The agent stays available as a subagent too.</p>
+        <span class="where">non-destructive · idempotent · one agent is main at a time</span></div></div>
+      <div class="fn"><code>/genesis:demote</code><div>
+        <p>The exact inverse. Strips the managed block and the main-thread hooks, preserving everything else you had. Takes no argument, because only one agent is ever main.</p>
+        <span class="where">reports which agent was demoted, or that none was</span></div></div>
+    </section>
+
+    <section class="grp">
+      <header><h3>The team that does the building</h3><span class="count">2</span>
+        <p class="note">Installed into your project on plugin install. Separate roles, separate tool lists.</p></header>
+      <div class="fn"><code>sensei</code><div>
+        <p>The coordinator, and the only one you talk to. Gathers and verifies every requirement, decides the plan <em>with</em> you, then assembles, wires and installs. <b>It never authors a persona itself and never guesses.</b></p>
+        <span class="where">expertise: agent-building · agentic-teams · expertise-application</span></div></div>
+      <div class="fn"><code>method</code><div>
+        <p>The test-first craftsman. Writes each agent's acceptance tests <em>before</em> the agent, then the smallest persona that passes them. Has <b>no Agent tool</b>, so it physically cannot delegate — the boundary is config, not a promise.</p>
+        <span class="where">expertise: persona-creation · prompt-engineering · expertise-application</span></div></div>
+    </section>
+
+    <section class="grp enforce">
+      <header><h3>Enforcement — the checks that can refuse</h3><span class="count">5</span>
+        <p class="note">One native binary, <code>genesis-hook</code>, dispatched by its first argument. A check costs 2–10 ms. Dormant unless a Genesis agent is active.</p></header>
+      <div class="fn"><code>inject</code><div>
+        <p>At session start, hands the agent the house rules and pointers to its expertise store — and, for a session-copied agent, its carried-over digest.</p>
+        <span class="where">SubagentStart / SessionStart</span></div></div>
+      <div class="fn"><code>gate</code><div>
+        <p>Blocks the write itself. A banned phrase, a credential value, or a persona over the 200-line budget is refused at the moment of writing — and the governing rules are re-surfaced right before the attempt.</p>
+        <span class="where">PreToolUse on Write|Edit</span></div></div>
+      <div class="fn"><code>enforce-research</code><div>
+        <p>Refuses to assemble a new agent unless the expertise-research step actually ran. <b>Resume-safe:</b> it scans sibling transcripts and writes a durable marker, so a compaction can't make confirmed research invisible.</p>
+        <span class="where">PreToolUse on Bash · Sensei-scoped · built-in agents exempt</span></div></div>
+      <div class="fn"><code>validate</code><div>
+        <p>Won't let the agent finish. It must cite the rules it applied — real ids from the manifest, at least three, with evidence that resolves to a file it actually produced or a quote that appears in one. Fabricate any of it and the turn is blocked.</p>
+        <span class="where">Stop / SubagentStop · fail-closed · a 21,000-file tree checks in 0.55 s</span></div></div>
+      <div class="fn"><code>session-pointer</code><div>
+        <p>Records the live session id so "copy my current session into an agent" knows which session to capture. Fails open and silent — it must never disturb a session.</p>
+        <span class="where">writes .genesis/current-session.json</span></div></div>
+    </section>
+
+    <section class="grp">
+      <header><h3>Build &amp; install — <code>genesis-cli</code></h3><span class="count">10</span>
+        <p class="note">The one-time build-and-wire layer. Runs at install time, never per tool call. Sensei drives these for you.</p></header>
+      <div class="fn"><code>assemble</code><div>
+        <p>Turns an authored persona into a real installed agent — as a subagent, or with <code>--main</code> as the folder's own Claude. Registers its required expertise and installs its skills either way.</p>
+        <span class="where">writes .claude/agents/&lt;name&gt;.md — or CLAUDE.md + .claude/settings.json</span></div></div>
+      <div class="fn"><code>bootstrap</code><div>
+        <p>Makes a repo a self-contained Genesis workspace: copies the expertise store and hooks into <code>.genesis/</code>, stages the native binaries, registers the memory server, and manages a <code>.gitignore</code> block so the agent's brain and memory travel with the repo.</p>
+        <span class="where">installs sensei + method wired to the repo-level .genesis</span></div></div>
+      <div class="fn"><code>promote</code> · <code>demote</code><div>
+        <p>What the two slash commands run. Promote merges the persona into <code>CLAUDE.md</code> and wires the main-thread hooks; demote removes only Genesis's own block and its <code>--main-agent</code> entries.</p>
+        <span class="where">your content and your hooks are never touched</span></div></div>
+      <div class="fn"><code>install</code> · <code>build-plugin-agents</code><div>
+        <p>Assemble Genesis's own team into a target repo; and regenerate the plugin's committed agent files from source, so the shipped ones can be drift-checked against a fresh render.</p>
+        <span class="where">the plain install path · maintainer tooling</span></div></div>
+      <div class="fn"><code>capture</code><div>
+        <p>Session-copy, step 1. Extracts your current session from all six stores and <b>scrubs credentials</b> on the way out.</p>
+        <span class="where">transcript · auto-memory · context-mode DB · claude-mem · genesis DB · user config</span></div></div>
+      <div class="fn"><code>store</code> · <code>embed</code><div>
+        <p>Steps 2 and 3. Turn the captured records into a portable history plus a deterministic digest, then write each record into the new agent's memory so it can recall its inherited history by meaning.</p>
+        <span class="where">history.sqlite + summary.md · then an MCP stdio client writes them under the agent's id</span></div></div>
+      <div class="fn"><code>build-session-agent</code><div>
+        <p>Runs all three in order and resolves <code>--session current</code> from the session pointer. The "copy my current session into an agent" entry point.</p>
+        <span class="where">credentials are never copied; --known-secret forces removal of values you name</span></div></div>
+    </section>
+
+    <section class="grp">
+      <header><h3>Memory — the MCP tools every agent gets</h3><span class="count">3</span>
+        <p class="note">A vector database per agent, on your machine. Scoped by agent id, so an agent only ever sees its own memories.</p></header>
+      <div class="fn"><code>store</code><div>
+        <p>Keep a durable fact or decision. The agent chooses what is worth keeping — this is not a transcript recorder.</p>
+        <span class="where">embeds the text and writes the row + its vector in one transaction</span></div></div>
+      <div class="fn"><code>recall</code><div>
+        <p>Find it again later from a loose paraphrase — nearest-neighbour search by meaning, not keyword match. <b>Using a memory makes it stronger.</b></p>
+        <span class="where">returns id, text and distance, nearest first · k defaults to 5</span></div></div>
+      <div class="fn"><code>consolidate</code><div>
+        <p>Fold near-duplicates into the one that earned its place, summing their use counts and keeping a trail of what was replaced.</p>
+        <span class="where">weight halves every 30 days unless recalled · summarise/evict deferred to v2</span></div></div>
+    </section>
+
+    <section class="grp">
+      <header><h3>The launcher</h3><span class="count">6</span>
+        <p class="note">The one remaining Node file: the irreducible bootstrap, since <em>something</em> has to download the first binary. Standard library only.</p></header>
+      <div class="fn"><code>(no argument)</code><div>
+        <p>Downloads and SHA256-verifies the memory server for your platform, caches it per user, and execs it over stdio for Claude Code's MCP channel.</p>
+        <span class="where">what .mcp.json runs</span></div></div>
+      <div class="fn"><code>--run-hook</code> · <code>--run-cli</code><div>
+        <p>Resolve and run one of the native binaries. The hook path fails <em>open</em> — an unresolvable check must never block your session. The installer path fails <em>loud</em>, because you asked for it explicitly.</p>
+        <span class="where">assembled agents skip the shim entirely and call the binary directly</span></div></div>
+      <div class="fn"><code>--stage-hook</code> · <code>--stage-cli</code><div>
+        <p>Copy a binary into a repo's <code>.genesis/bin</code> so its enforcement runs natively with no Node in the hot path.</p>
+        <span class="where">used by bootstrap</span></div></div>
+      <div class="fn"><code>--sync</code><div>
+        <p>Refreshes an already-bootstrapped repo's staged binaries when a stamp shows they are stale. <b>This is how <code>/plugin update</code> actually reaches your repos</b> — no manual staging.</p>
+        <span class="where">a one-file-read no-op otherwise · run automatically by the plugin</span></div></div>
+    </section>
+
+    <section class="grp">
+      <header><h3>Skills</h3><span class="count">22 + 11</span>
+        <p class="note">Procedures the agents follow. Twenty-two are Genesis's own; eleven are vendored verbatim from the MIT-licensed <em>superpowers</em> plugin by Jesse Vincent, so Genesis ships self-contained.</p></header>
+      <div class="fn"><code>build-agent</code> · <code>research-expertise</code><div>
+        <p>The build itself: the exact procedure Sensei follows, and how an agent's expertise is chosen and researched — always with you, never silently. Assembly is blocked until the second has run.</p></div></div>
+      <div class="fn"><code>spec-forge</code> · <code>spec-build</code><div>
+        <p>Supervisor-led multi-agent builds — nine steps, five specialists, the same gates. Forge adds worktree isolation, structured plans, TDD discipline, systematic debugging and local code review at every gate.</p></div></div>
+      <div class="fn"><code>spec-create · compile · test · simplify · crap · scaffold</code><div>
+        <p>The manual escape hatches: write a spec, compile it to Gherkin plus unit stubs, run the suites, simplify, and score every function for change risk — failing the build above the threshold.</p></div></div>
+      <div class="fn"><code>the five specialists ×2</code><div>
+        <p><code>spec-agent · dev-agent · verify-agent · review-agent · docs-agent</code>, and their <code>forge-</code> counterparts. Silent workers; the supervisor is the only voice you hear.</p></div></div>
+      <div class="fn"><code>vendored discipline skills</code><div>
+        <p><code>brainstorming · writing-plans · executing-plans · test-driven-development · systematic-debugging · verification-before-completion · requesting-code-review · receiving-code-review · using-git-worktrees · subagent-driven-development · finishing-a-development-branch</code></p>
+        <span class="where">attribution and licence in NOTICE.md</span></div></div>
+    </section>
+
+    <!-- ═══════════════ PART 3 · GUIDE ═══════════════ -->
+    <section id="guide" class="part">
+      <p class="part-k">Part three</p>
+      <h2 class="part-h">Building agents, in practice</h2>
+      <p class="part-l">Four worked examples: <b>one expert agent</b>, <b>a team</b>, <b>making an agent the folder's own Claude</b>, and <b>cloning the session you're already in</b>. You drive all of them from a single command — the rest is Sensei asking you questions and refusing to guess at the answers.</p>
+    </section>
+
+    <section class="ex">
+      <header>
+        <p class="tagline">Example one · the common case</p>
+        <h3>Build a single expert agent</h3>
+        <p class="intro">Say you want an agent that reviews your pull-request diffs for security problems — and you want it to actually know something about the subject, not just be told to "be careful". <b>This is the path most builds take.</b></p>
+      </header>
+      <div class="steps">
+        <div class="step"><span class="num">01</span><div class="body">
+          <h4>Ask for it</h4>
+          <p>One command, in the folder you want the agent to live in. Put the whole request on the line, or type nothing and let Sensei start the interview.</p>
+          <p class="say"><u>/genesis:new</u> an agent that reviews my pull-request diffs for security issues</p>
+        </div></div>
+        <div class="step"><span class="num">02</span><div class="body">
+          <h4>Sensei interviews you — and restates it back</h4>
+          <p>It gathers the goal, what <em>done</em> looks like, the exact tools the agent may use, and when it should stop and escalate to you. Then it repeats every requirement back and builds only on what you confirm.</p>
+          <p>It also asks two questions it will <b>never answer for you</b>: is this one agent or a team, and does it install as a named subagent or as this folder's main Claude.</p>
+        </div></div>
+        <div class="step"><span class="num">03</span><div class="body">
+          <h4>You choose what it must know</h4>
+          <p>Sensei proposes the expertise the agent has to apply — for a security reviewer, that might be your threat model and your review standard. You add, drop or change it, and you decide whether to have it deep-researched now against sources you name.</p>
+          <div class="gate"><b>This step cannot be skipped.</b>
+            <p>A hook blocks assembly outright unless the research step actually ran this session. The point is that no agent is ever built on expertise nobody chose.</p></div>
+        </div></div>
+        <div class="step"><span class="num">04</span><div class="body">
+          <h4>Method writes the tests first</h4>
+          <p>Sensei hands Method a task-spec. Method writes the agent's acceptance tests <em>before</em> the agent — must refuse this, must escalate that, must stay in its lane — proves they <b>fail</b> without the agent, then writes the smallest persona that makes them pass.</p>
+          <p class="tip">a persona that passes because the base model would have done it anyway is a test that proves nothing — hence the failing baseline</p>
+        </div></div>
+        <div class="step"><span class="num">05</span><div class="body">
+          <h4>It lands, wired</h4>
+          <p>The finished agent is written into your repo with its enforcement hooks attached and, if you asked for it, its own memory. Your teammates get it on a clone.</p>
+          <p class="say"><i># what you now have</i>
+.claude/agents/<u>security-reviewer</u>.md     <i>the agent</i>
+.genesis/expertise/                     <i>what it must apply</i>
+.genesis/bin/genesis-hook               <i>what enforces it</i></p>
+        </div></div>
+        <div class="step"><span class="num">06</span><div class="body">
+          <h4>Use it</h4>
+          <p>It is an ordinary Claude Code agent from here — call it by name. The difference is what happens while it runs: it cannot write a credential, cannot exceed its budget, and cannot finish a turn without citing the rules it applied.</p>
+          <p class="say"><u>&gt;</u> Use security-reviewer on the diff for this branch.</p>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="ex">
+      <header>
+        <p class="tagline">Example two · when one isn't enough</p>
+        <h3>Build an agentic team</h3>
+        <p class="intro">A team is a supervisor plus specialists, each with its own narrow job and its own tools. It is <b>genuinely more expensive</b> — multi-agent work costs several times the tokens of a single agent — so Genesis makes you earn it.</p>
+      </header>
+      <div class="steps">
+        <div class="step"><span class="num">01</span><div class="body">
+          <h4>Ask for the outcome, not the org chart</h4>
+          <p>Describe what you want done. Sensei decomposes it; you are not expected to design the roster.</p>
+          <p class="say"><u>/genesis:new</u> a team that audits our repos: one pass per repo, then a single consolidated report</p>
+        </div></div>
+        <div class="step"><span class="num">02</span><div class="body">
+          <h4>The single-agent-first gate</h4>
+          <p>Before anything is built, Sensei applies a test drawn from its own teams expertise: <em>would one agent do?</em> A team is justified only by a named limitation of the single agent — work that exceeds one context, subtasks that are genuinely independent, parallelism that materially cuts latency.</p>
+          <div class="gate"><b>If one agent suffices, you get one agent.</b>
+            <p>That halt is a feature, not a failure. And Sensei will still not decide team-vs-single <em>for</em> you — it puts the recommendation and the reason in front of you, and you choose.</p></div>
+        </div></div>
+        <div class="step"><span class="num">03</span><div class="body">
+          <h4>The roster gets decided with you</h4>
+          <p>One specialist per independent responsibility, each scoped to a job you could state in a sentence, each given only the tools that job needs. Sensei states the plan back before building anything.</p>
+          <div class="grid2">
+            <div class="mini"><b>The supervisor</b><p>Decomposes, delegates, verifies each result, synthesises, and decides when the work is done. It owns the outcome and does none of the specialist work itself.</p></div>
+            <div class="mini"><b>Each specialist</b><p>One coherent job, least-privilege tools, and an explicit out-of-scope rule so it hands work back rather than improvising outside its lane.</p></div>
+          </div>
+        </div></div>
+        <div class="step"><span class="num">04</span><div class="body">
+          <h4>Every member is built the same way</h4>
+          <p>Expertise chosen with you, tests written first, assembled with full enforcement. A team is not a shortcut around the discipline — it is the same discipline, several times.</p>
+          <p class="tip">delegation is a contract, not a sentence: each specialist receives an objective, its inputs, an output schema and acceptance criteria — and every result is untrusted until the supervisor checks it against them</p>
+        </div></div>
+        <div class="step"><span class="num">05</span><div class="body">
+          <h4>Genesis is itself the worked example</h4>
+          <p>Sensei and Method <em>are</em> a two-agent team built on this pattern: a coordinator that never authors, and a craftsman that never orchestrates — with the boundary enforced by the tool list, not by asking nicely. Method has no Agent tool, so it physically cannot delegate.</p>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="ex">
+      <header>
+        <p class="tagline">Example three · promotion</p>
+        <h3>Make an agent the folder's own Claude — and undo it</h3>
+        <p class="intro">A subagent is something you summon by name. A <b>promoted</b> agent simply <em>is</em> Claude Code in that folder: its persona becomes the folder's brief and its enforcement moves to the main thread. It stays available as a subagent too.</p>
+      </header>
+      <div class="steps">
+        <div class="step"><span class="num">01</span><div class="body">
+          <h4>Decide at build time — or change your mind later</h4>
+          <p>Sensei asks during the interview. If you said "subagent" then and want to switch now, one command does it. Only one agent is the folder's Claude at a time, so promoting a different one simply replaces the block.</p>
+          <p class="say"><u>/genesis:promote</u> security-reviewer</p>
+        </div></div>
+        <div class="step"><span class="num">02</span><div class="body">
+          <h4>What actually changes on disk</h4>
+          <p>Two files, both edited surgically. Genesis writes between its own sentinels and leaves everything else exactly as it found it.</p>
+          <p class="say">CLAUDE.md
+  <i># >>> genesis agent: security-reviewer (managed) >>></i>
+  <i>…the agent's persona…</i>
+  <i># &lt;&lt;&lt; genesis agent: security-reviewer &lt;&lt;&lt;</i>
+
+.claude/settings.json
+  <i>SessionStart / PreToolUse / Stop hooks, each carrying</i> <u>--main-agent security-reviewer</u></p>
+          <p><b>Your own CLAUDE.md content and your own hooks are preserved.</b> Re-running is idempotent — you get one block, not two.</p>
+        </div></div>
+        <div class="step"><span class="num">03</span><div class="body">
+          <h4>Reopen the folder</h4>
+          <p>The main-thread persona and hooks take effect on a fresh session. From then on there is nothing to invoke — the folder's Claude <em>is</em> your agent, with the same enforcement it had as a subagent.</p>
+        </div></div>
+        <div class="step"><span class="num">04</span><div class="body">
+          <h4>Undo it whenever</h4>
+          <p>No agent name needed — only one is ever main. The managed block and the main-thread hooks come out; your content and hooks stay; the agent remains available as a subagent. If nothing was promoted, it says so and changes nothing.</p>
+          <p class="say"><u>/genesis:demote</u></p>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="ex">
+      <header>
+        <p class="tagline">Example four · the unusual one</p>
+        <h3>Turn the session you're in into an agent</h3>
+        <p class="intro">Sometimes the context you want an agent to have is <b>the conversation you are already having</b>. Genesis can capture the live session and hand it to a new agent as memory — then specialise it the normal way.</p>
+      </header>
+      <div class="steps">
+        <div class="step"><span class="num">01</span><div class="body">
+          <h4>Ask for a single agent, and say yes to the copy</h4>
+          <p>For single-agent builds Sensei offers the choice explicitly: a fresh agent, or a copy of your current session. It never assumes.</p>
+        </div></div>
+        <div class="step"><span class="num">02</span><div class="body">
+          <h4>Everything is captured — and scrubbed</h4>
+          <p>Six stores are read: the transcript, auto-memory, the context-mode database, claude-mem, the Genesis database and your user config. <b>Credentials are scrubbed on the way out</b>, and you can name specific secret values for guaranteed removal.</p>
+          <div class="gate"><b>Credentials are never copied.</b>
+            <p>Scrubbing runs over six credential shapes plus anything you list explicitly, and it has its own unit tests — this is the security-critical step in the pipeline.</p></div>
+        </div></div>
+        <div class="step"><span class="num">03</span><div class="body">
+          <h4>It becomes memory, not a transcript dump</h4>
+          <p>The captured history is embedded into the repo's memory under the new agent's id, plus a short digest it loads at the start of every session. The agent recalls the rest <em>by meaning</em>, on demand — it doesn't carry the whole conversation in its context.</p>
+          <p class="tip">the bundle lives in the repo and travels with a git clone — no dependency on your ~/.claude</p>
+        </div></div>
+        <div class="step"><span class="num">04</span><div class="body">
+          <h4>Then the normal build continues</h4>
+          <p>Method authors the specialised persona on top, and the assembler wires it. You end up with a named agent that already knows everything the two of you worked out.</p>
+        </div></div>
+      </div>
+    </section>
+
+    <section class="ex">
+      <header>
+        <p class="tagline">Worth knowing up front</p>
+        <h3>Four things Genesis will refuse to do</h3>
+        <p class="intro">These are not rough edges. Each one is a deliberate decision, and each is enforced by something outside the model — so it holds even when the conversation gets long.</p>
+      </header>
+      <div class="grid2">
+        <div class="mini"><b>It won't decide for you</b><p>Single agent or a team, subagent or main Claude, what the agent must know — Sensei asks and waits. Tell it "you decide" and it will still put the choice back to you.</p></div>
+        <div class="mini"><b>It won't skip the research</b><p>A hook blocks assembly unless the expertise step ran. Being in a hurry is not an accepted reason.</p></div>
+        <div class="mini"><b>It won't ship untested</b><p>Method writes the tests before the agent and returns only when they pass. Ask it to skip them and it refuses.</p></div>
+        <div class="mini"><b>It won't let an agent finish quietly</b><p>An agent must cite the rules it applied, with evidence that resolves to something it actually wrote. Fabricate a rule id and the turn is blocked.</p></div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ PART 4 · RELEASES ═══════════════ -->
+    <section id="releases" class="part">
+      <p class="part-k">Part four</p>
+      <h2 class="part-h">Releases</h2>
+      <p class="part-l">Nine so far, all within one week — one alpha and eight betas. The arc is short and legible: <b>get off Node, get off npm, then make the gestures good.</b> Newest first.</p>
+    </section>
+
+    <div class="notice">
+      <b>The beta release assets are not published yet.</b>
+      <p>The version tags below exist and the code is built and tested, but the GitHub Release that carries the binaries and the model has not been cut. Until it is, the launcher's download will 404 — build from source and point it at your binaries with <code>GENESIS_MEMORY_BIN</code>, <code>GENESIS_HOOK_BIN</code> and <code>GENESIS_MODEL_DIR</code>.</p>
+    </div>
+
+    <article class="rel current">
+      <header><span class="tag">v0.1.0-beta.8</span><span class="date">2026-08-09</span><span class="now">current</span><span class="theme">rollup</span></header>
+      <h3>Promote / demote, a resume-safe gate, a working update, and honest docs</h3>
+      <p>A cumulative release that gathers everything since beta.3 into one version. <b>No code changed since beta.7</b> — only the version bump and the documentation corrections.</p>
+      <ul>
+        <li><code>/genesis:promote</code> and <code>/genesis:demote</code>, from beta.6 and beta.7.</li>
+        <li>The resume-safe research gate, from beta.4.</li>
+        <li><code>/plugin update</code> version lockstep and repo auto-sync, from beta.5.</li>
+        <li><b>Contributor docs corrected and made drift-proof</b> — the test counts had gone stale for the second time, so the docs now describe what each suite <em>covers</em> and point at <code>cargo test</code> as the source of truth, rather than pinning integers that rot.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.7</span><span class="date">2026-08-09</span><span class="theme">gesture</span></header>
+      <h3>Demote — the exact inverse of promote</h3>
+      <p>Promotion without a way back is a trap. This adds the undo, and makes it precise: it removes only what Genesis put there.</p>
+      <ul>
+        <li><code>genesis-cli demote</code> plus the <code>/genesis:demote</code> command. Strips the managed persona block from <code>CLAUDE.md</code> and the <code>--main-agent</code> hooks from <code>.claude/settings.json</code>, <b>preserving all your other content and hooks</b>. The agent stays a subagent.</li>
+        <li><b>No agent-name argument</b> — only one agent is ever the main Claude, so there is nothing to disambiguate. It reports which agent was demoted, or that none was promoted.</li>
+        <li>The removal is name-agnostic: it matches on the sentinels and the <code>--main-agent</code> marker, so it works even if you have forgotten which agent you promoted.</li>
+        <li>Verified with a demote round-trip that asserts your content and hooks survive, plus a live promote→demote smoke test.</li>
+      </ul>
+      <p class="meta">this release carries BOTH gestures — promote (beta.6) and demote</p>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.6</span><span class="date">2026-08-09</span><span class="theme">gesture</span></header>
+      <h3>Promote — make an existing agent the folder's main Claude</h3>
+      <p>The capability had existed since beta.2 as an installer flag. This turns it into something you can actually reach: a slash command, consistent with <code>/genesis:new</code>.</p>
+      <ul>
+        <li><code>/genesis:promote &lt;agent-name&gt;</code> runs the installer through the plugin launcher, so there is <b>no manual staging</b> — a bare plugin install can promote.</li>
+        <li>Merges the agent's persona into <code>CLAUDE.md</code> as a managed block and wires the main-thread enforcement hooks into <code>.claude/settings.json</code>. Non-destructive and idempotent.</li>
+        <li>The agent stays available as a subagent as well.</li>
+        <li>No demote command yet at this point — promoting a different agent simply replaced the block.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.5</span><span class="date">2026-08-06</span><span class="theme">reliability</span></header>
+      <h3><code>/plugin update</code> actually works now</h3>
+      <p>Updating the standard way was silently broken in two separate places. Both are fixed, and both are now impossible to regress.</p>
+      <ul>
+        <li><b>The plugin version was never bumped</b> — stuck at <code>0.1.0</code> across beta.1 through beta.4 — so the plugin manager saw no new version and the update was a no-op.</li>
+        <li><b>A repo's staged binaries never refreshed</b>, so an already-bootstrapped project kept running the old hook binary after an update.</li>
+        <li>Fix one: the version script sets the plugin version and the launcher's release version in lockstep, and <b>the release job now refuses a tag whose versions disagree</b> — they can never drift apart again.</li>
+        <li>Fix two: the launcher's <code>--sync</code> refreshes a repo's staged binaries when a stamp shows they are stale, and the plugin runs it automatically. A one-file read when there is nothing to do.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.4</span><span class="date">2026-08-06</span><span class="theme">reliability</span></header>
+      <h3>The research gate stopped forgetting</h3>
+      <p>The gate that requires expertise research before a build proved it by scanning the current session's transcript. A resume or a compaction starts a <em>new</em> transcript — so research you had already done became invisible, and an in-progress build was wrongly blocked again.</p>
+      <ul>
+        <li><b>Defence one:</b> scan every transcript in the session's project directory, not just the active file — a resume leaves the earlier one sitting alongside it.</li>
+        <li><b>Defence two:</b> on first confirmation, write a durable per-agent marker, so a later session change, compaction or transcript pruning can never undo it.</li>
+        <li><b>The requirement itself is unchanged</b> — research is still mandatory. Only the forgetting was removed.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.3</span><span class="date">2026-08-04</span><span class="theme">port</span></header>
+      <h3>Session-copy goes native — the launcher is now the only Node file</h3>
+      <p>The last remaining Node pipeline becomes part of the Rust installer, finishing the "everything except the fetch-launcher is Rust" mandate.</p>
+      <ul>
+        <li><code>capture</code> extracts and credential-scrubs all six stores; <code>store</code> builds a portable history plus a deterministic digest; <code>embed</code> writes each record into the agent's memory; <code>build-session-agent</code> orchestrates all three.</li>
+        <li><b>Credential scrubbing is the security-critical part</b> — a faithful port of six credential shapes plus explicit known-secret redaction, with its own unit tests.</li>
+        <li>The Node session-copy scripts and their tests were deleted; the coverage moved to Rust, including a full round-trip against the real binaries.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.2</span><span class="date">2026-08-04</span><span class="theme">port · capability</span></header>
+      <h3>An all-Rust installer — and agents that can <em>be</em> the folder's Claude</h3>
+      <p>The whole install layer becomes one native binary, and the promotion capability appears for the first time.</p>
+      <ul>
+        <li>The Node installer becomes <code>genesis-cli</code>, <b>byte-identical to the version it replaced</b> — the subagent file, the main-Claude wiring, and the committed plugin agents were all verified by diff before the Node code was deleted.</li>
+        <li><b>New capability:</b> build an agent directly as the folder's main Claude, or promote an existing one. Persona into a managed <code>CLAUDE.md</code> block, enforcement onto the main thread, non-destructive and idempotent — with full enforcement retained.</li>
+        <li>The launcher gained <code>--stage-cli</code>, <code>--run-hook</code> and <code>--run-cli</code>, so a bare plugin install can run the orchestrator with no binary on disk yet.</li>
+        <li>Only the registry-free fetch-launcher stays in Node — the irreducible bootstrap.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.1</span><span class="date">2026-08-03</span><span class="theme">the big one</span></header>
+      <h3>Native enforcement hooks, and goodbye to npm</h3>
+      <p>The release the rest of the beta line is built on: the enforcement layer stops being Node, and distribution stops needing a package registry at all.</p>
+      <ul>
+        <li>The Node hooks become one native binary, <code>genesis-hook</code>, with <code>gate</code> / <code>enforce-research</code> / <code>inject</code> / <code>validate</code> / <code>session-pointer</code> as subcommands — <b>byte-identical decisions, 17 of 17 verified before the old ones were deleted</b>.</li>
+        <li><b>The finish-check went from 62.5 seconds to 0.55</b> on a 21,000-file tree, by no longer walking build directories.</li>
+        <li>The semantic review moved onto a built-in agent hook — a fast, tool-capable model that reads the artifacts itself, instead of shelling out twice per expertise.</li>
+        <li><b>npm dropped entirely.</b> Binaries and the model now ship as GitHub Release assets, downloaded and SHA256-verified by a standard-library-only Node launcher and cached per user. Publishing needs only the token GitHub provides — <b>no registry account, no npm token</b>.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-alpha.1</span><span class="date">2026-08-03</span><span class="theme">alpha · npm era</span></header>
+      <h3>ARM builds, on real ARM machines</h3>
+      <p>The last alpha, still on the npm distribution model that beta.1 replaced the same week.</p>
+      <ul>
+        <li>Linux ARM64 (both glibc and musl) and Windows ARM64 moved onto <b>native ARM runners</b> — the inference engine's hand-written ARM64 SIMD compiles there, where cross-compiling from x64 had failed.</li>
+        <li>Re-running at the same version added the three ARM platform packages while the six already published were skipped.</li>
+      </ul>
+      <p class="meta">two platforms remain deferred and are tracked in TODO.md — Alpine-on-ARM and Windows-on-ARM, both blocked upstream rather than by CI configuration</p>
+    </article>
+
+    <!-- ═══════════════ FOOTER ═══════════════ -->
+    <footer class="foot">
+      <p class="legend">
+        <span class="sw"><span class="dot i"></span> Plain text is for everyone.</span>
+        <span class="sw"><span class="dot s"></span> <span class="mono">the mono line is the detail for engineers.</span></span>
+      </p>
+      <p class="status">v0.1.0-beta.8 · MIT · github.com/Atiqul-Islam/genesis. The two-agent builder, the native enforcement hooks, the memory server and the spec-driven workflow are implemented and tested. The binaries and the embedding model ship as GitHub Release assets — downloaded and SHA256-verified on first use, with no npm, no registry account and no token — but the beta release is not published yet, so today it builds from source. Memory consolidation ships as decay-scored dedup/merge; summarise-and-evict is deferred to v2. Versions are kept in lockstep between the plugin manifest and the launcher, and a release may only be cut from a commit on main. No usage, star or deployment numbers are claimed here — none would be verifiable yet.</p>
+    </footer>
+
+  </div>
+</main>
+
+</body>
+</html>

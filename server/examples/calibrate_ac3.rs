@@ -19,7 +19,7 @@ fn main() -> Result<()> {
     let (model, tokenizer) = model_paths();
     ensure!(
         model.exists(),
-        "model missing at {}: run scripts/fetch-model",
+        "model missing at {}: run node scripts/fetch-model.mjs",
         model.display()
     );
     let mut embedder = Embedder::load(&model.to_string_lossy(), &tokenizer.to_string_lossy())?;
