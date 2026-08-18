@@ -523,7 +523,12 @@ mod tests {
             &meta.expertise,
         );
         assert!(fm.contains("name: method"));
-        assert!(fm.contains("\"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook\" gate --expertise"));
+        // The hook binary carries a `.exe` suffix on Windows (see `hook_bin`), so the gate command is
+        // `...genesis-hook.exe" gate` there — assert with the platform-correct extension.
+        let ext = if cfg!(windows) { ".exe" } else { "" };
+        assert!(fm.contains(&format!(
+            "\"${{CLAUDE_PROJECT_DIR}}/.genesis/bin/genesis-hook{ext}\" gate --expertise"
+        )));
         assert!(fm.contains("- type: agent")); // method has expertise -> review hook
         assert!(!fm.contains("matcher: \"Bash\"")); // method is not sensei
     }
