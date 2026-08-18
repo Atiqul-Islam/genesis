@@ -5,7 +5,7 @@
 //! fetch-launcher, registers a repo-local `genesis-memory` MCP server in `.mcp.json` (launched via the Node
 //! launcher), manages the `.gitignore` block, and installs sensei+method wired to the repo-level `.genesis`.
 
-use crate::{assemble, fsx};
+use crate::{assemble, fsx, render};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -89,7 +89,7 @@ fn stage_binaries(dest: &Path) -> bool {
 }
 
 /// Register the repo-local `genesis-memory` MCP server in `<target>/.mcp.json` (merge, preserve others).
-fn write_mcp(target: &Path, launcher: &Path, mem_db: &Path, mem_export: &Path) -> PathBuf {
+fn write_mcp(target: &Path, launcher: &str, mem_db: &str, mem_export: &str) -> PathBuf {
     let p = target.join(".mcp.json");
     let mut mcp = fsx::read_json(&p)
         .filter(Value::is_object)
@@ -104,10 +104,10 @@ fn write_mcp(target: &Path, launcher: &Path, mem_db: &Path, mem_export: &Path) -
             "genesis-memory".to_string(),
             json!({
                 "command": "node",
-                "args": [launcher.to_string_lossy()],
+                "args": [launcher],
                 "env": {
-                    "GENESIS_MEMORY_DB": mem_db.to_string_lossy(),
-                    "GENESIS_MEMORY_EXPORT": mem_export.to_string_lossy(),
+                    "GENESIS_MEMORY_DB": mem_db,
+                    "GENESIS_MEMORY_EXPORT": mem_export,
                 },
             }),
         );
@@ -122,12 +122,9 @@ fn write_mcp(target: &Path, launcher: &Path, mem_db: &Path, mem_export: &Path) -
 /// so it fires only here; the plugin's own `hooks/hooks.json` still wires no main-thread SessionStart. The
 /// hook self-silences once a Genesis agent is promoted to main (see `genesis-hook promote-offer`), and it is
 /// fail-open. Idempotent: re-bootstrapping never duplicates it.
-fn write_promote_offer_hook(target: &Path, launcher: &Path) -> PathBuf {
+fn write_promote_offer_hook(target: &Path, launcher: &str) -> PathBuf {
     let p = target.join(".claude").join("settings.json");
-    let command = format!(
-        "node \"{}\" --run-hook promote-offer",
-        launcher.to_string_lossy()
-    );
+    let command = format!("node \"{launcher}\" --run-hook promote-offer");
     let mut settings = fsx::read_json(&p)
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
@@ -212,12 +209,17 @@ pub fn run(args: &[String]) -> i32 {
     // 1b. Stage the native binaries into .genesis/bin (via the copied launcher). Non-fatal.
     let hook_bin_staged = stage_binaries(&dest);
 
-    // 2. Memory paths (the launched server creates the DB on first use; JSONL is the portable mirror).
-    let mem_db = dest.join("memory.db");
-    let mem_export = dest.join("memory").join("memory.jsonl");
+    // 2. Memory + launcher paths — written into .mcp.json / settings.json as ${CLAUDE_PROJECT_DIR}-relative
+    //    strings. `dest` is always `<repo>/.genesis` (inside `target`), so `portable_home` yields
+    //    `${CLAUDE_PROJECT_DIR}/.genesis`; the generated config then survives a clone/move/commit instead of
+    //    baking in the building machine's absolute path. Claude Code expands the variable in both the MCP
+    //    server config and the hook command at runtime.
+    let home = render::portable_home(&target, &dest);
+    let launcher = format!("{home}/bin/genesis-memory.js");
+    let mem_db = format!("{home}/memory.db");
+    let mem_export = format!("{home}/memory/memory.jsonl");
 
     // 3. Register the repo-local memory MCP server (launched via the Node launcher in .genesis/bin).
-    let launcher = dest.join("bin").join("genesis-memory.js");
     let mcp_path = write_mcp(&target, &launcher, &mem_db, &mem_export);
 
     // 3b. Install the repo-local SessionStart promote-offer hook (workspace-only; plugin stays dormant).
@@ -243,10 +245,10 @@ pub fn run(args: &[String]) -> i32 {
             "agents_installed": installed,
             "agents_dir": target.join(".claude").join("agents").to_string_lossy(),
             "hook_bin_staged": hook_bin_staged,
-            "memory_db": mem_db.to_string_lossy(),
-            "memory_export": mem_export.to_string_lossy(),
+            "memory_db": mem_db,
+            "memory_export": mem_export,
             "mcp_json": mcp_path.to_string_lossy(),
-            "mcp_server": format!("node {}", launcher.to_string_lossy()),
+            "mcp_server": format!("node {launcher}"),
             "promote_offer_settings": settings_path.to_string_lossy(),
             "next": "Open Claude Code in the repo; talk to Sensei to build agents.",
         }))

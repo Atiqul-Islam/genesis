@@ -252,6 +252,56 @@ fn bootstrap_builds_self_contained_workspace() {
     );
 }
 
+// ── portability: bootstrap must emit ${CLAUDE_PROJECT_DIR}-relative paths, never absolute ────
+// Regression for the hardcoded-path bug: .mcp.json + the promote-offer hook were written with the
+// building machine's canonicalized absolute path, so they broke on any clone/move/commit.
+#[test]
+fn bootstrap_emits_portable_project_dir_paths_not_absolute() {
+    let tgt_dir = tempdir().unwrap();
+    let target = tgt_dir.path();
+
+    let code = bootstrap::run(&[
+        target.to_string_lossy().into_owned(),
+        repo_root().to_string_lossy().into_owned(),
+    ]);
+    assert_eq!(code, 0, "bootstrap exits 0");
+
+    // The target's canonical absolute prefix (what bootstrap canonicalizes internally) must NOT
+    // appear in either generated config file — they travel with the repo.
+    let abs_prefix = std::fs::canonicalize(target)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let mcp = read(&target.join(".mcp.json")).replace('\\', "/");
+    assert!(
+        mcp.contains("${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js"),
+        ".mcp.json launcher must be ${{CLAUDE_PROJECT_DIR}}-relative, got:\n{mcp}"
+    );
+    assert!(
+        mcp.contains("${CLAUDE_PROJECT_DIR}/.genesis/memory.db")
+            && mcp.contains("${CLAUDE_PROJECT_DIR}/.genesis/memory/memory.jsonl"),
+        ".mcp.json memory paths must be ${{CLAUDE_PROJECT_DIR}}-relative, got:\n{mcp}"
+    );
+    assert!(
+        !mcp.contains(&abs_prefix),
+        ".mcp.json must not contain the absolute target path {abs_prefix}, got:\n{mcp}"
+    );
+
+    // Assert on the portable substring (not the full quoted command) so the check is agnostic to JSON
+    // quote-escaping; the promote-offer marker confirms it is that hook's command.
+    let settings = read(&target.join(".claude").join("settings.json"));
+    assert!(
+        settings.contains("${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js")
+            && settings.contains("--run-hook promote-offer"),
+        "promote-offer hook must be ${{CLAUDE_PROJECT_DIR}}-relative, got:\n{settings}"
+    );
+    assert!(
+        !settings.replace('\\', "/").contains(&abs_prefix),
+        "settings.json must not contain the absolute target path {abs_prefix}, got:\n{settings}"
+    );
+}
+
 // ── drift: committed agents/*.md == what genesis-cli build-plugin-agents regenerates ────────
 #[test]
 fn build_plugin_agents_matches_committed_no_drift() {
