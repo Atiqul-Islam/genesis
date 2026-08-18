@@ -19,6 +19,7 @@ fn main() {
         "resolve" => genesis_cli::resolve::run(&rest),
         "install" => genesis_cli::install::run(&rest),
         "bootstrap" => genesis_cli::bootstrap::run(&rest),
+        "sync-gitignore" => genesis_cli::bootstrap::run_sync_gitignore(&rest),
         "build-plugin-agents" => genesis_cli::build_plugin_agents::run(&rest),
         // session-copy pipeline
         "capture" => genesis_cli::capture::run(&rest),

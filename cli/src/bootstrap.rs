@@ -41,7 +41,7 @@ fn gitignore_block() -> String {
 
 /// Idempotently write the managed genesis block into `<target>/.gitignore` (replace between sentinels,
 /// else append), never touching the user's own lines.
-fn merge_gitignore(target: &Path) {
+pub fn merge_gitignore(target: &Path) {
     let p = target.join(".gitignore");
     let existing = fsx::read_text(&p).unwrap_or_default();
     let block = gitignore_block();
@@ -251,6 +251,32 @@ pub fn run(args: &[String]) -> i32 {
             "mcp_server": format!("node {launcher}"),
             "promote_offer_settings": settings_path.to_string_lossy(),
             "next": "Open Claude Code in the repo; talk to Sensei to build agents.",
+        }))
+    );
+    0
+}
+
+/// `genesis-cli sync-gitignore <target>` — regenerate ONLY the managed `.gitignore` block of an existing
+/// repo so a workspace bootstrapped with an OLDER template adopts the current block (e.g. the
+/// `!.genesis/memory.db` re-include that lets the ready-to-use vector DB travel). Idempotent; changes
+/// nothing else (never re-copies committed expertise/hooks). The launcher's `--sync` runs this on every
+/// plugin update, so stale repos self-heal. Returns the process exit code.
+#[must_use]
+pub fn run_sync_gitignore(args: &[String]) -> i32 {
+    let Some(target_arg) = args.first() else {
+        fsx::fail("usage: genesis-cli sync-gitignore <target_repo>");
+    };
+    let target = std::fs::canonicalize(target_arg).unwrap_or_else(|_| PathBuf::from(target_arg));
+    if !target.is_dir() {
+        fsx::fail(&format!("target repo not found: {}", target.display()));
+    }
+    // Regenerate the managed block to the current template (single-sourced in `gitignore_block`).
+    // Idempotent: a no-op when the block already matches; preserves everything outside the sentinels.
+    merge_gitignore(&target);
+    println!(
+        "{}",
+        fsx::json_pretty(&json!({
+            "synced_gitignore": target.join(".gitignore").to_string_lossy(),
         }))
     );
     0

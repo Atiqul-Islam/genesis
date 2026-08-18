@@ -317,6 +317,18 @@ async function syncRepo(genesisHome) {
     } catch (_e) {
       // ignore — the binaries are what matter
     }
+    // Heal the managed .gitignore block so a workspace bootstrapped with an OLDER template adopts the
+    // current one (e.g. the `!.genesis/memory.db` re-include that lets the vector DB travel with the repo).
+    // The block is single-sourced in the Rust cli; run it on the repo root (parent of the .genesis home).
+    // Fail-open: a gitignore heal must never break session start.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["sync-gitignore", path.dirname(genesisHome)], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on a gitignore heal
+    }
     fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
     log("synced " + genesisHome + " -> v" + RELEASE_VERSION);
   } catch (e) {
