@@ -208,8 +208,42 @@ fn parse_declarations(p: &str) -> Option<Declarations> {
 
     let mut decls: HashMap<String, Vec<(String, String)>> = HashMap::new();
     let mut bare: HashSet<String> = HashSet::new();
-    for line in text.split('\n') {
-        let line = line.trim_end_matches('\r');
+
+    // D4 fix — turn-scoping. Only APPLIED-EXPERTISE declarations from the CURRENT turn count:
+    // scan only the transcript records AFTER the last genuine user (human) message. Without this the
+    // validator re-checked every declaration ever emitted this session against files produced in the
+    // current turn — unsatisfiable on a long session. Tool-result records are also `type:"user"`, so
+    // a real human turn is one whose content is a string or carries a `text` block (never solely a
+    // tool_result). A transcript with no human record leaves `start = 0` (parses all — prior parity).
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut start = 0usize;
+    for (i, raw) in lines.iter().enumerate() {
+        let Ok(ev) = serde_json::from_str::<Value>(raw.trim_end_matches('\r')) else {
+            continue;
+        };
+        if ev.get("type").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        // Exclude system-injected user records — Stop-hook feedback, system reminders — which are
+        // `type:"user"` with `isMeta:true`. A genuine human prompt has no `isMeta` (and carries
+        // `promptSource`). Without this, every "Stop hook feedback:" block became a false turn boundary
+        // that pushed past — and dropped — the very declarations being validated (self-defeating loop).
+        let is_meta = ev.get("isMeta").and_then(Value::as_bool) == Some(true);
+        let is_human = !is_meta
+            && match ev.get("message").and_then(|m| m.get("content")) {
+                Some(Value::String(_)) => true,
+                Some(Value::Array(blocks)) => blocks
+                    .iter()
+                    .any(|b| b.get("type").and_then(Value::as_str) == Some("text")),
+                _ => false,
+            };
+        if is_human {
+            start = i + 1;
+        }
+    }
+
+    for raw in &lines[start..] {
+        let line = raw.trim_end_matches('\r');
         let Ok(ev) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -450,6 +484,39 @@ mod tests {
         assert_eq!(decls["persona-creation"][0].0, "pc-30");
         assert_eq!(decls["persona-creation"][0].1, "release-manager/CLAUDE.md");
         assert!(bare.contains("prompt-engineering"));
+    }
+
+    #[test]
+    fn parse_decls_is_turn_scoped_and_ignores_tool_results() {
+        // D4 regression: only declarations AFTER the last genuine human message count, and a
+        // trailing tool_result (also `type:"user"`) must NOT be treated as a turn boundary.
+        let td = tempfile::tempdir().unwrap();
+        let tp = td.path().join("t.jsonl");
+        let stale = json!({"type":"assistant","message":{"content":[{"type":"text",
+            "text":"APPLIED-EXPERTISE: agent-building#ab-1 — stale/old.md"}]}});
+        let human = json!({"type":"user","message":{"role":"user","content":"do the next thing"}});
+        let current = json!({"type":"assistant","message":{"content":[{"type":"text",
+            "text":"APPLIED-EXPERTISE: expertise-application#ea-3 — fresh/now.md"}]}});
+        let tool_result =
+            json!({"type":"user","message":{"content":[{"type":"tool_result","content":"x"}]}});
+        // A Stop-hook-feedback record (type:user, isMeta:true) must NOT count as a turn boundary —
+        // otherwise it would push past and drop `current` (which precedes it).
+        let stop_feedback = json!({"type":"user","isMeta":true,
+            "message":{"role":"user","content":"Stop hook feedback: Cannot finish"}});
+        std::fs::write(
+            &tp,
+            format!("{stale}\n{human}\n{current}\n{tool_result}\n{stop_feedback}\n"),
+        )
+        .unwrap();
+        let (decls, _bare) = parse_declarations(tp.to_str().unwrap()).unwrap();
+        assert!(
+            decls.contains_key("expertise-application"),
+            "current-turn decl kept"
+        );
+        assert!(
+            !decls.contains_key("agent-building"),
+            "stale pre-user decl must be dropped (turn-scoping)"
+        );
     }
 
     #[test]

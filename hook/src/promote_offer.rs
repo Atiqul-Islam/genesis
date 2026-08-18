@@ -38,8 +38,7 @@ fn offer(root: &Path) -> Option<String> {
 /// True if a Genesis agent is installed as the folder's main Claude — detected by the managed persona block
 /// `render::persona_block` writes into `CLAUDE.md` (`# >>> genesis agent: <name> ...`).
 fn is_promoted(root: &Path) -> bool {
-    std::fs::read_to_string(root.join("CLAUDE.md"))
-        .is_ok_and(|s| s.contains(">>> genesis agent:"))
+    std::fs::read_to_string(root.join("CLAUDE.md")).is_ok_and(|s| s.contains(">>> genesis agent:"))
 }
 
 /// The repo root: `CLAUDE_PROJECT_DIR` (Claude Code sets it for hooks), else the current dir.

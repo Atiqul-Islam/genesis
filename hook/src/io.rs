@@ -44,7 +44,13 @@ pub fn append_log(log_path: &Path, record: &Value) {
         .append(true)
         .open(log_path)
     {
-        let _ = writeln!(f, "{record}");
+        // D5 fix: write the whole record + newline in ONE write_all. Under O_APPEND each write() is
+        // atomic on POSIX, so a single call stops concurrent hook processes (gate/validate/etc.) from
+        // interleaving a record mid-line — the previous `writeln!` issued multiple write()s, which
+        // could corrupt records that a naive per-line JSON parser then silently skips.
+        let mut line = record.to_string();
+        line.push('\n');
+        let _ = f.write_all(line.as_bytes());
     }
 }
 
