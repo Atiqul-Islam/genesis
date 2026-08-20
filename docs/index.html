@@ -106,6 +106,21 @@
   .subhead{margin:1.05em 0 0; font-size:clamp(1rem,2vw,1.19rem); line-height:1.56; color:var(--dim); max-width:66ch;}
   .subhead b{color:var(--text); font-weight:650;}
 
+  /* self-hosting claim + primary calls-to-action (added so the site is not a dead end) */
+  .selfhost{margin:1.1em 0 0; font-size:clamp(1rem,2vw,1.16rem); line-height:1.5; color:var(--text); font-weight:650; border-left:3px solid var(--seal); padding-left:.9em; max-width:64ch; text-wrap:balance;}
+  .selfhost b{color:var(--indigo);}
+  .cta{display:flex; flex-wrap:wrap; gap:10px; margin-top:20px;}
+  .cta a{display:inline-flex; align-items:center; gap:.5em; font-size:.9rem; font-weight:700; letter-spacing:-.005em; text-decoration:none; border-radius:9px; padding:11px 17px; line-height:1;}
+  .cta a.primary{background:var(--indigo); color:var(--bg); border:1px solid var(--indigo);}
+  .cta a.primary:hover{background:var(--indigo-hi); border-color:var(--indigo-hi);}
+  .cta a.ghost{background:transparent; color:var(--indigo); border:1px solid color-mix(in srgb,var(--indigo) 45%, var(--line));}
+  .cta a.ghost:hover{border-color:var(--indigo); background:color-mix(in srgb,var(--indigo) 8%, transparent);}
+  .docnav a.repo{margin-left:auto; color:var(--indigo); font-weight:650;}
+  .foot-links{display:flex; flex-wrap:wrap; gap:8px 20px; align-items:center; padding-bottom:2px;}
+  .foot-links a{font-size:.84rem; font-weight:650; color:var(--indigo); text-decoration:none; border-bottom:1px solid transparent;}
+  .foot-links a:hover{border-bottom-color:var(--indigo);}
+  .status a{color:var(--indigo); text-decoration:none; border-bottom:1px solid color-mix(in srgb,var(--indigo) 40%, transparent);}
+
   /* ---------- the diagram ---------- */
   .diagram{
     position:relative; overflow:hidden;
@@ -337,6 +352,7 @@
     <a href="#functions">Functions</a>
     <a href="#guide">Guide</a>
     <a href="#releases">Releases</a>
+    <a class="repo" href="https://github.com/Atiqul-Islam/genesis">GitHub ↗</a>
   </nav>
 
   <div class="wrap">
@@ -350,6 +366,12 @@
         </p>
         <h1 class="headline">Build agents you can <span class="hot">test</span>, that <span class="cold">can't break their rules</span>, and that <span class="hot">don't forget</span>.</h1>
         <p class="subhead">Describe the agent you want. Genesis interviews you until every requirement is confirmed, writes the agent's tests <em>before</em> it writes the agent, and installs it into your repo — <b>as a subagent you call by name, or as the folder's own Claude</b> — wired to rules it can't talk its way past, and a memory of its own that gets sharper the more you use it. <b>Every claim below is a file in the repo you can open.</b></p>
+        <p class="selfhost">Genesis is <b>self-hosting</b>: its own agents built it, under the same rules it enforces on everything else. The proof is <code>CLAUDE.md</code> in the repo — the persona of the agent that maintains it.</p>
+        <div class="cta">
+          <a class="primary" href="https://github.com/Atiqul-Islam/genesis">View the repository →</a>
+          <a class="ghost" href="https://github.com/Atiqul-Islam/genesis#install">How to install</a>
+          <a class="ghost" href="https://github.com/Atiqul-Islam/genesis/releases">Releases</a>
+        </div>
       </header>
     </section>
 
@@ -758,7 +780,7 @@
     <section id="releases" class="part">
       <p class="part-k">Part four</p>
       <h2 class="part-h">Releases</h2>
-      <p class="part-l"><b>17 releases</b> to date — one alpha, then the beta line. The arc is short and legible: <b>get off Node, get off npm, make the gestures good, then re-architect memory and ship the binaries.</b> The headline releases are below; the full list is on GitHub. Newest first.</p>
+      <p class="part-l"><b>17 releases</b> to date — one alpha, then the beta line. The arc is short and legible: <b>get off Node, get off npm, make the gestures good, then re-architect memory and ship the binaries.</b> The headline releases are below; the <a href="https://github.com/Atiqul-Islam/genesis/releases">full list is on GitHub</a>. Newest first.</p>
     </section>
 
     <article class="rel current">
@@ -891,11 +913,17 @@
 
     <!-- ═══════════════ FOOTER ═══════════════ -->
     <footer class="foot">
+      <p class="foot-links">
+        <a href="https://github.com/Atiqul-Islam/genesis">Repository ↗</a>
+        <a href="https://github.com/Atiqul-Islam/genesis#install">Install ↗</a>
+        <a href="https://github.com/Atiqul-Islam/genesis/releases">Releases ↗</a>
+        <a href="https://github.com/Atiqul-Islam/genesis/blob/main/CLAUDE.md">The agent that maintains this repo ↗</a>
+      </p>
       <p class="legend">
         <span class="sw"><span class="dot i"></span> Plain text is for everyone.</span>
         <span class="sw"><span class="dot s"></span> <span class="mono">the mono line is the detail for engineers.</span></span>
       </p>
-      <p class="status">v0.2.0-beta.2 · MIT · github.com/Atiqul-Islam/genesis. The three-agent builder (Sensei, Method, Mneme), the native enforcement hooks, the memory server and the spec-driven workflow are implemented and tested. The binaries and the embedding model ship as GitHub Release assets — downloaded and SHA256-verified on first use, with no npm, no registry account and no token; a build-from-source path remains as a fallback. Memory consolidation ships as decay-scored dedup/merge; summarise-and-evict is deferred to v2. Versions are kept in lockstep between the plugin manifest and the launcher, and a release may only be cut from a commit on main. No usage, star or deployment numbers are claimed here — none would be verifiable yet.</p>
+      <p class="status">v0.2.0-beta.2 · MIT · <a href="https://github.com/Atiqul-Islam/genesis">github.com/Atiqul-Islam/genesis</a>. The three-agent builder (Sensei, Method, Mneme), the native enforcement hooks, the memory server and the spec-driven workflow are implemented and tested. The binaries and the embedding model ship as GitHub Release assets — downloaded and SHA256-verified on first use, with no npm, no registry account and no token; a build-from-source path remains as a fallback. Memory consolidation ships as decay-scored dedup/merge; summarise-and-evict is deferred to v2. Versions are kept in lockstep between the plugin manifest and the launcher, and a release may only be cut from a commit on main. No usage, star or deployment numbers are claimed here — none would be verifiable yet.</p>
     </footer>
 
   </div>
