@@ -1,10 +1,13 @@
 # Genesis
 
-**An agent-builder for Claude Code** — a two-agent team (Sensei + Method) that builds, tests, and installs specialized Claude Code agents with enforced expertise and per-agent semantic memory.
+**An agent-builder for Claude Code** — a team of three agents (Sensei, Method, and Mneme) that builds, tests, installs, and remembers specialized Claude Code agents with enforced expertise and per-agent semantic memory.
+
+**Genesis is self-hosting: its own agents built it, under the same rules it enforces on everything else.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-informational)
-![Status: v0.1.0](https://img.shields.io/badge/status-v0.1.0%20(pre--release)-orange)
+[![Latest release](https://img.shields.io/github/v/release/Atiqul-Islam/genesis?include_prereleases&sort=semver&label=release)](https://github.com/Atiqul-Islam/genesis/releases)
+![Status: beta](https://img.shields.io/badge/status-beta-yellow)
 
 You describe the agent you want. Genesis interviews you, writes it test-first, installs it into your project, and wires it with enforced rules and its own memory — so the agent you get is one you (and your teammates) can reproduce.
 
@@ -24,10 +27,11 @@ Sensei interviews you, delegates the authoring to Method (who writes the agent's
 
 ## What it is
 
-Genesis is a **Claude Code plugin**. Installing it adds two agents to your project:
+Genesis is a **Claude Code plugin**. Installing it adds three agents to your project:
 
 - **Sensei** — the coordinator you talk to. It gathers and verifies every requirement, decides the plan with you (single agent or a team — your call, not its), and orchestrates the build. It never authors prompts itself and never guesses.
 - **Method** — the test-first craftsman. It writes each agent's persona, behavior, and skills, writes the acceptance tests before the agent, and ships nothing until they pass.
+- **Mneme** — the memory specialist. It structures each memory the moment it's written and keeps every agent's store contradiction-free through deterministic bi-temporal supersession, so recall stays trustworthy across sessions. Memory is its own discipline, so it's its own agent.
 
 The agents Genesis produces are ordinary Claude Code agents — plus two things Genesis wires in for you: **expertise the agent is forced to apply**, and **memory that persists across sessions**.
 
@@ -102,21 +106,21 @@ Genesis is wired at the plugin level, because a plugin-shipped agent can't carry
 
 Built agents invoke the binary directly (baked into their frontmatter by the assembler); the plugin's own team resolves it through a tiny cross-platform shim. The launcher + installer that fetch and stage the binaries are Node.
 
-The **native binaries + the embedding model are distributed as GitHub Release assets** — not committed to the repo, and not on any package registry. The plugin's `.mcp.json` runs a small Node launcher (`bin/genesis-memory.js`) that, on first use, downloads the `genesis-memory-server` (and `genesis-hook`) for your OS/arch plus the pinned model from the matching release, **SHA256-verifies each against a published `SHA256SUMS`**, caches them per-user, and execs the server — the MCP stream passing through untouched. The assets are public: **no npm, no registry account, no token.** **The beta release isn't published yet**, so until it is, use the build-from-source path in [Requirements](#requirements).
+The **native binaries + the embedding model are distributed as GitHub Release assets** — not committed to the repo, and not on any package registry. The plugin's `.mcp.json` runs a small Node launcher (`bin/genesis-memory.js`) that, on first use, downloads the `genesis-memory-server` (and `genesis-hook`) for your OS/arch plus the pinned model from the matching release, **SHA256-verifies each against a published `SHA256SUMS`**, caches them per-user, and execs the server — the MCP stream passing through untouched. The assets are public: **no npm, no registry account, no token.** A build-from-source path in [Requirements](#requirements) remains as a fallback (or for an as-yet-unpackaged platform).
 
 ## Requirements
 
 - **Claude Code with plugin support** (the `/plugin` marketplace system).
 - **Node.js on your PATH.** The memory-server launcher (downloads + runs the binaries), the installer, and the plugin's hook resolver run on **Node 18+**; the optional **session-copy** feature reads SQLite via the built-in `node:sqlite` and needs **Node 24+**. The enforcement hooks themselves are a native Rust binary (no per-call runtime); built agents invoke it directly. No Python runtime is required.
-- **For the memory server:** prebuilt native binaries + the model are published as **GitHub Release assets** per OS/arch (macOS, Linux, and Windows on x64 and arm64); the launcher downloads and SHA256-verifies the right ones for your platform. **The beta release isn't published yet**, so until then — or on any unpackaged platform — build from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release` (and `cd hook && cargo build --release`), fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN`, `GENESIS_HOOK_BIN`, and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
+- **For the memory server:** prebuilt native binaries + the model are published as **GitHub Release assets** (macOS and Linux on x64/arm64, Windows on x64; more targets rolling out); the launcher downloads and SHA256-verifies the right ones for your platform. As a fallback — or on an as-yet-unpackaged platform — build from source with **Rust (cargo 1.97+)**: `cd server && cargo build --release` (and `cd hook && cargo build --release`), fetch the model with `node scripts/fetch-model.mjs`, then point the launcher at them via `GENESIS_MEMORY_BIN`, `GENESIS_HOOK_BIN`, and `GENESIS_MODEL_DIR` (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)). The agent builder works without the memory server; memory is wired into a built agent only when you ask for it.
 
 ## Status
 
-Genesis is at **v0.1.0, before its first published release**, and is honest about what that means:
+Genesis is in **beta** — the latest release is **`v0.2.0-beta.2`** (of 17 published releases). It is honest about what that means:
 
-- The two-agent builder, the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (the Rust `genesis-hook` suite, the Rust server suite, and the Node installer/session-copy/plugin tests).
+- The **three-agent builder** (Sensei, Method, Mneme), the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (the Rust `genesis-hook` suite, the Rust server suite, and the Node installer/session-copy/plugin tests).
 - The **memory server (v1)** — `store` / `recall` / `consolidate` — is built and tested: 86 unit tests and 17 BDD scenarios pass in release against the real ONNX model, real SQLite, and the real spawned stdio server. Its `consolidate` summarize/evict pass is deferred to v2 (see `server/README.md`).
-- The memory server's **binary distribution** (GitHub Release assets, downloaded + SHA256-verified by the launcher) activates once the beta release is published. Until then, use the build-from-source path above.
+- The **binary distribution is live:** prebuilt `genesis-memory-server`, `genesis-hook`, and `genesis-cli` plus the pinned model ship as SHA256-verified GitHub Release assets, downloaded by the launcher on first use. Build-from-source remains a fallback.
 
 No usage, star, or production-deployment claims are made here because none would be verifiable yet.
 
@@ -129,7 +133,7 @@ No usage, star, or production-deployment claims are made here because none would
 
 ## Contributing
 
-Contributions are welcome — Genesis holds every change to the same four rules it enforces on the agents it builds (no shortcuts, no speculation, use the docs, production-ready and tested). See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the repository layout, build/test instructions for both the Rust and Node toolchains, and the code style.
+Contributions are welcome — Genesis holds every change to the same four rules it enforces on the agents it builds (no shortcuts, no speculation, use the docs, and nothing ships untested or unfinished). See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the repository layout, build/test instructions for both the Rust and Node toolchains, and the code style.
 
 ## License
 
