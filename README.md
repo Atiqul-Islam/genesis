@@ -2,7 +2,7 @@
 
 **An agent-builder for Claude Code** — a team of three agents (Sensei, Method, and Mneme) that builds, tests, installs, and remembers specialized Claude Code agents with enforced expertise and per-agent semantic memory.
 
-**Genesis is self-hosting: its own agents built it, under the same rules it enforces on everything else.**
+**Genesis is self-hosting: its own agents built it, under the same rules it enforces on everything else.** And it is used in production — agents built with Genesis work as the engineers on live systems (operating production ML pipelines, extending a decades-old .NET/C++ codebase), held to those same enforced rules.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-informational)
@@ -121,8 +121,9 @@ Genesis is in **beta** — the latest release is **`v0.2.0-beta.2`** (of 17 publ
 - The **three-agent builder** (Sensei, Method, Mneme), the enforcement hooks, and the spec-driven workflow are implemented and have their own test suites (the Rust `genesis-hook` suite, the Rust server suite, and the Node installer/session-copy/plugin tests).
 - The **memory server (v1)** — `store` / `recall` / `consolidate` — is built and tested: 86 unit tests and 17 BDD scenarios pass in release against the real ONNX model, real SQLite, and the real spawned stdio server. Its `consolidate` summarize/evict pass is deferred to v2 (see `server/README.md`).
 - The **binary distribution is live:** prebuilt `genesis-memory-server`, `genesis-hook`, and `genesis-cli` plus the pinned model ship as SHA256-verified GitHub Release assets, downloaded by the launcher on first use. Build-from-source remains a fallback.
+- **It is used in production.** Agents built with Genesis operate and debug live systems today — from production ML pipelines to a decades-old .NET/C++ codebase — and Genesis itself is developed and maintained by its own agents (Sensei, Method, and the enforcement hooks) under the same rules. Maintainer-confirmed.
 
-No usage, star, or production-deployment claims are made here because none would be verifiable yet.
+No usage, star, or deployment **numbers** are claimed here — those wouldn't be independently verifiable. Production use is real and maintainer-confirmed; it is stated plainly and never dressed up with counts, uptime, or customer names.
 
 ## Docs
 
