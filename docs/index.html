@@ -480,7 +480,7 @@
     </section>
 
     <section class="grp">
-      <header><h3>The team that does the building</h3><span class="count">2</span>
+      <header><h3>The team that does the building</h3><span class="count">3</span>
         <p class="note">Installed into your project on plugin install. Separate roles, separate tool lists.</p></header>
       <div class="fn"><code>sensei</code><div>
         <p>The coordinator, and the only one you talk to. Gathers and verifies every requirement, decides the plan <em>with</em> you, then assembles, wires and installs. <b>It never authors a persona itself and never guesses.</b></p>
@@ -488,6 +488,9 @@
       <div class="fn"><code>method</code><div>
         <p>The test-first craftsman. Writes each agent's acceptance tests <em>before</em> the agent, then the smallest persona that passes them. Has <b>no Agent tool</b>, so it physically cannot delegate — the boundary is config, not a promise.</p>
         <span class="where">expertise: persona-creation · prompt-engineering · expertise-application</span></div></div>
+      <div class="fn"><code>mneme</code><div>
+        <p>The memory specialist. Structures each memory the moment it's written and keeps every agent's store contradiction-free through <b>deterministic bi-temporal supersession</b> — so recall reflects the latest truth without deleting history. It runs right after a memory is stored, and never orchestrates.</p>
+        <span class="where">expertise: memory-management · expertise-application</span></div></div>
     </section>
 
     <section class="grp enforce">
@@ -667,7 +670,7 @@
         </div></div>
         <div class="step"><span class="num">05</span><div class="body">
           <h4>Genesis is itself the worked example</h4>
-          <p>Sensei and Method <em>are</em> a two-agent team built on this pattern: a coordinator that never authors, and a craftsman that never orchestrates — with the boundary enforced by the tool list, not by asking nicely. Method has no Agent tool, so it physically cannot delegate.</p>
+          <p>Sensei and Method <em>are</em> a team built on this pattern: a coordinator that never authors, and a craftsman that never orchestrates — with the boundary enforced by the tool list, not by asking nicely. Method has no Agent tool, so it physically cannot delegate. (Mneme, the memory specialist, makes three agents in all.)</p>
         </div></div>
       </div>
     </section>
@@ -755,16 +758,33 @@
     <section id="releases" class="part">
       <p class="part-k">Part four</p>
       <h2 class="part-h">Releases</h2>
-      <p class="part-l">Nine so far, all within one week — one alpha and eight betas. The arc is short and legible: <b>get off Node, get off npm, then make the gestures good.</b> Newest first.</p>
+      <p class="part-l"><b>17 releases</b> to date — one alpha, then the beta line. The arc is short and legible: <b>get off Node, get off npm, make the gestures good, then re-architect memory and ship the binaries.</b> The headline releases are below; the full list is on GitHub. Newest first.</p>
     </section>
 
-    <div class="notice">
-      <b>The beta release assets are not published yet.</b>
-      <p>The version tags below exist and the code is built and tested, but the GitHub Release that carries the binaries and the model has not been cut. Until it is, the launcher's download will 404 — build from source and point it at your binaries with <code>GENESIS_MEMORY_BIN</code>, <code>GENESIS_HOOK_BIN</code> and <code>GENESIS_MODEL_DIR</code>.</p>
-    </div>
-
     <article class="rel current">
-      <header><span class="tag">v0.1.0-beta.8</span><span class="date">2026-08-09</span><span class="now">current</span><span class="theme">rollup</span></header>
+      <header><span class="tag">v0.2.0-beta.2</span><span class="date">2026-08-18</span><span class="now">current</span><span class="theme">rollup · fix</span></header>
+      <h3>Live binaries, portable workspaces, and a self-healing update</h3>
+      <p>The 0.2.0 line's latest: the release binaries are published and SHA256-verified on first use, and an update now heals older workspaces.</p>
+      <ul>
+        <li><b>Prebuilt binaries are live</b> — <code>genesis-memory-server</code>, <code>genesis-hook</code> and <code>genesis-cli</code> plus the pinned model ship as GitHub Release assets for macOS and Linux (x64/arm64) and Windows (x64).</li>
+        <li><b>Portable workspaces</b> — bootstrap emits <code>${CLAUDE_PROJECT_DIR}</code>-relative paths, never an absolute machine path, so a generated <code>.mcp.json</code> and settings survive a clone or move.</li>
+        <li><b>Self-healing update</b> — the launcher's <code>--sync</code> regenerates the managed <code>.gitignore</code> on every plugin update, so an older repo starts committing its memory DB without a re-bootstrap.</li>
+        <li>Turn-scoped expertise validation and atomic decision-log writes in the enforcement binary.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.2.0-beta</span><span class="date">2026-08-15</span><span class="theme">the memory re-architecture</span></header>
+      <h3>Mneme, and a bi-temporal memory store</h3>
+      <p>The headline of the 0.2.0 line: a third agent, and a memory store that stays contradiction-free by construction.</p>
+      <ul>
+        <li><b>Mneme</b> — a dedicated memory specialist that structures each memory as it's written and supersedes contradicting facts deterministically, rather than letting them pile up.</li>
+        <li><b>Bi-temporal supersession</b> — every fact carries when it was true and when it was recorded, so recall reflects the latest truth without deleting history.</li>
+      </ul>
+    </article>
+
+    <article class="rel">
+      <header><span class="tag">v0.1.0-beta.8</span><span class="date">2026-08-09</span><span class="theme">rollup</span></header>
       <h3>Promote / demote, a resume-safe gate, a working update, and honest docs</h3>
       <p>A cumulative release that gathers everything since beta.3 into one version. <b>No code changed since beta.7</b> — only the version bump and the documentation corrections.</p>
       <ul>
@@ -875,7 +895,7 @@
         <span class="sw"><span class="dot i"></span> Plain text is for everyone.</span>
         <span class="sw"><span class="dot s"></span> <span class="mono">the mono line is the detail for engineers.</span></span>
       </p>
-      <p class="status">v0.1.0-beta.8 · MIT · github.com/Atiqul-Islam/genesis. The two-agent builder, the native enforcement hooks, the memory server and the spec-driven workflow are implemented and tested. The binaries and the embedding model ship as GitHub Release assets — downloaded and SHA256-verified on first use, with no npm, no registry account and no token — but the beta release is not published yet, so today it builds from source. Memory consolidation ships as decay-scored dedup/merge; summarise-and-evict is deferred to v2. Versions are kept in lockstep between the plugin manifest and the launcher, and a release may only be cut from a commit on main. No usage, star or deployment numbers are claimed here — none would be verifiable yet.</p>
+      <p class="status">v0.2.0-beta.2 · MIT · github.com/Atiqul-Islam/genesis. The three-agent builder (Sensei, Method, Mneme), the native enforcement hooks, the memory server and the spec-driven workflow are implemented and tested. The binaries and the embedding model ship as GitHub Release assets — downloaded and SHA256-verified on first use, with no npm, no registry account and no token; a build-from-source path remains as a fallback. Memory consolidation ships as decay-scored dedup/merge; summarise-and-evict is deferred to v2. Versions are kept in lockstep between the plugin manifest and the launcher, and a release may only be cut from a commit on main. No usage, star or deployment numbers are claimed here — none would be verifiable yet.</p>
     </footer>
 
   </div>
