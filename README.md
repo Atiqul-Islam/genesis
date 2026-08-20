@@ -71,14 +71,14 @@ After install, start Claude Code in your project and ask Sensei to build somethi
 4. **Sensei assembles and installs it.** The finished agent lands in `.claude/agents/`, with its enforcement hooks wired and — if you asked for it — its memory.
 5. **You use it.** The new agent is now available in Claude Code, held to its rules by the same hooks, with its own memory.
 
-Nothing is built on an unconfirmed assumption, and nothing untested is delivered — those are properties of the two agents, not promises in this README (see `agents/sensei.md`, `agents/method.md`).
+Nothing is built on an unconfirmed assumption, and nothing untested is delivered — those are properties of Sensei and Method, not promises in this README (see `agents/sensei.md`, `agents/method.md`).
 
 ## What you get
 
 Each item below is backed by a file in this repo, named so you can check it.
 
-- **A two-agent team, not a prompt template.** Coordination (Sensei) and authoring (Method) are separate roles with separate tools; Method is test-first and ships nothing untested.
-  *Proof:* `agents/sensei.md`, `agents/method.md`, `skills/build-agent/SKILL.md`.
+- **A team of specialists, not a prompt template.** Coordination (Sensei), authoring (Method), and memory (Mneme) are separate roles with separate tools; Method is test-first and ships nothing untested.
+  *Proof:* `agents/sensei.md`, `agents/method.md`, `agents/mneme.md`, `skills/build-agent/SKILL.md`.
 
 - **Enforced expertise (fail-closed).** Every agent is required to load named expertise and, before it can end a turn, declare which rules it applied. The declaration is checked against a rule manifest, and the cited evidence is spot-checked against the files the agent produced — a fabricated rule id or made-up evidence blocks the turn.
   *Proof:* the `genesis-hook` binary (`validate`), `expertise/required.json`, `expertise/manifests/`.
