@@ -226,6 +226,39 @@ fn enforce_fires_for_promoted_main_via_main_agent() {
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 
+// ---- enforce-research: no-grep guard (no-grep-guard) ----
+
+#[test]
+fn grep_guard_blocks_genesis_engineer_file_grep() {
+    let ev = json!({"agent_type":"genesis-engineer","tool_input":{"command":"grep foo src/x.rs"}});
+    let v = parse(&run(&["enforce-research"], &ev.to_string()));
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn grep_guard_allows_piped_grep() {
+    let ev = json!({"agent_type":"genesis-engineer","tool_input":{"command":"cargo test | grep result"}});
+    assert_eq!(run(&["enforce-research"], &ev.to_string()), ""); // piped -> stdin -> allow (silent)
+}
+
+#[test]
+fn grep_guard_does_not_touch_agents_with_the_grep_tool() {
+    // method holds the Grep tool -> the no-grep guard must NOT block its file grep.
+    let ev = json!({"agent_type":"method","tool_input":{"command":"grep foo src/x.rs"}});
+    assert_eq!(run(&["enforce-research"], &ev.to_string()), ""); // allow (silent)
+}
+
+#[test]
+fn grep_guard_fires_for_promoted_main_via_main_agent() {
+    // genesis-engineer as a promoted main carries no payload agent_type; --main-agent makes it fire.
+    let ev = json!({"tool_input":{"command":"rg foo"}});
+    let v = parse(&run(
+        &["enforce-research", "--main-agent", "genesis-engineer"],
+        &ev.to_string(),
+    ));
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
 // ---- validate ----
 
 #[test]
