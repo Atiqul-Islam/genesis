@@ -31,7 +31,8 @@ pub fn run(args: &[String]) {
     let ev = io::parse_event(&io::read_stdin());
 
     // DORMANCY GUARD: no-op unless a genesis agent is active (payload agent_type, or --main-agent fallback).
-    if agent::resolve_agent(&ev, "", main_agent.as_deref().unwrap_or("")).is_empty() {
+    let active = agent::resolve_agent(&ev, "", main_agent.as_deref().unwrap_or(""));
+    if active.is_empty() {
         std::process::exit(0);
     }
 
@@ -44,6 +45,18 @@ pub fn run(args: &[String]) {
         .and_then(|t| t.get("command"))
         .and_then(Value::as_str)
         .unwrap_or("");
+
+    // no-grep-guard: an agent whose discipline forbids grep (it carries no Grep tool) must not grep a
+    // FILE to skip reading it — deny and tell it to Read. Piping command OUTPUT to grep is unaffected.
+    if NO_GREP_AGENTS.contains(&active.as_str()) && grep_reads_a_file(command) {
+        deny(
+            &log,
+            &active,
+            "You have no Grep tool and must READ files in full — never grep a file to skip a read. Use \
+             the Read tool on the file instead. (Piping command OUTPUT to grep is fine; grepping a FILE \
+             is not.)",
+        );
+    }
 
     match assembled_agent_name(command) {
         None => allow(&log, "", ""), // not an assembler invocation
@@ -279,6 +292,80 @@ fn shlex_split(input: &str) -> Result<Vec<String>, ()> {
     Ok(tokens)
 }
 
+/// Agents whose discipline forbids grep entirely — they carry NO Grep tool and must read files in full.
+/// The grep-guard denies a file-grep only for these; agents that legitimately hold the Grep tool
+/// (sensei/method/mneme, per `render::builtin_meta`) are never affected. Extend if more are added.
+const NO_GREP_AGENTS: [&str; 1] = ["genesis-engineer"];
+
+/// Grep-family content-search commands the guard recognizes.
+const GREP_CMDS: [&str; 5] = ["grep", "egrep", "fgrep", "rg", "ag"];
+
+/// A top-level shell control operator token (`shlex_split` yields these as standalone tokens when
+/// space-separated).
+fn is_shell_operator(tok: &str) -> bool {
+    matches!(tok, "|" | "||" | "&&" | ";" | "(" | ")" | "|&" | "&")
+}
+
+/// The command basename of a token (`/usr/bin/grep` -> `grep`), slash-normalized.
+fn cmd_basename(tok: &str) -> String {
+    tok.replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// A grep flag that makes grep read files recursively (`-r`, `-R`, `--recursive`, or a combined short
+/// flag containing `r`/`R` such as `-rn`).
+fn is_recursive_flag(tok: &str) -> bool {
+    tok == "--recursive"
+        || (tok.starts_with('-')
+            && !tok.starts_with("--")
+            && (tok.contains('r') || tok.contains('R')))
+}
+
+/// True if `command` runs a grep-family tool AGAINST A FILE (the "grep-to-skip-a-read" pattern). Piped
+/// greps (`… | grep`) read stdin and are allowed; a bare `grep PATTERN` (stdin) is allowed; `grep PATTERN
+/// <file>`, `grep -r …`, and `rg`/`ag` at a command position are file reads. Purely structural (no
+/// filesystem lookup) so it is deterministic.
+fn grep_reads_a_file(command: &str) -> bool {
+    let toks = shlex_split(command).unwrap_or_else(|()| {
+        command
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect()
+    });
+    for (i, t) in toks.iter().enumerate() {
+        let cmd = cmd_basename(t);
+        if !GREP_CMDS.contains(&cmd.as_str()) {
+            continue;
+        }
+        // Is this grep a COMMAND (vs an argument to something else)? Command position = index 0, or the
+        // previous token is a shell operator. Immediately after a single `|` it reads stdin (allowed).
+        let prev = i.checked_sub(1).map(|j| toks[j].as_str());
+        let at_command_pos = i == 0 || prev.is_some_and(is_shell_operator);
+        if !at_command_pos || prev == Some("|") {
+            continue;
+        }
+        // rg / ag search files by default, even with no path argument.
+        if cmd == "rg" || cmd == "ag" {
+            return true;
+        }
+        // grep family: reads a file if it recurses, or has a file arg beyond the pattern.
+        let seg: Vec<&String> = toks[i + 1..]
+            .iter()
+            .take_while(|a| !is_shell_operator(a))
+            .collect();
+        if seg.iter().any(|a| is_recursive_flag(a)) {
+            return true;
+        }
+        if seg.iter().filter(|a| !a.starts_with('-')).count() >= 2 {
+            return true; // pattern + at least one file
+        }
+    }
+    false
+}
+
 fn deny(log: &Path, agent_name: &str, reason: &str) -> ! {
     log_decision(log, "deny", agent_name, reason);
     io::emit(&json!({
@@ -314,6 +401,36 @@ fn log_decision(log: &Path, decision: &str, agent_name: &str, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grep_guard_detects_file_reads_but_allows_piped_and_stdin() {
+        // no-grep-guard: a grep-family tool run AGAINST A FILE is a "grep-to-skip-a-read".
+        assert!(grep_reads_a_file("grep foo src/x.rs"), "pattern + file");
+        assert!(grep_reads_a_file("grep -r foo ."), "recursive over a dir");
+        assert!(
+            grep_reads_a_file("grep -rn foo src"),
+            "combined recursive flag"
+        );
+        assert!(grep_reads_a_file("rg foo"), "rg searches files by default");
+        assert!(grep_reads_a_file("ag foo"), "ag searches files by default");
+        assert!(
+            grep_reads_a_file("cat a && grep foo b.rs"),
+            "grep after && is a fresh command reading a file"
+        );
+        // Allowed: piped stdin, bare stdin grep, grep as a mere argument, non-grep commands.
+        assert!(
+            !grep_reads_a_file("cargo test | grep result"),
+            "piped -> stdin"
+        );
+        assert!(!grep_reads_a_file("cat x | rg foo"), "rg piped -> stdin");
+        assert!(!grep_reads_a_file("grep foo"), "bare grep reads stdin");
+        assert!(
+            !grep_reads_a_file("echo grep foo.rs"),
+            "grep is an echo arg, not a command"
+        );
+        assert!(!grep_reads_a_file("ls -la"), "not a grep at all");
+        assert!(!grep_reads_a_file("rustc --explain E0425"), "no grep");
+    }
 
     #[test]
     fn not_an_assembler_call_is_none() {

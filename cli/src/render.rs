@@ -326,6 +326,9 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
     let bin = q(&hook_bin(home));
     let inject = format!("{bin} inject {} {name} --main-agent {name}", q(&exp_dir));
     let gate = format!("{bin} gate --expertise {} --main-agent {name}", q(&exp_dir));
+    // enforce-research on Bash: research-before-assemble + the no-grep guard, scoped to this main agent.
+    // A promoted main carries no payload agent_type, so it needs the explicit --main-agent to fire.
+    let enforce = format!("{bin} enforce-research --main-agent {name}");
     let stop = format!(
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
@@ -341,7 +344,10 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
     }
     json!({
         "SessionStart": [{ "matcher": "startup|resume|compact", "hooks": [{ "type": "command", "command": inject }] }],
-        "PreToolUse": [{ "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": gate }] }],
+        "PreToolUse": [
+            { "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": gate }] },
+            { "matcher": "Bash", "hooks": [{ "type": "command", "command": enforce }] },
+        ],
         "Stop": [{ "hooks": stop_hooks }],
     })
 }
@@ -587,13 +593,41 @@ mod tests {
         let flat = s["hooks"].to_string();
         assert!(flat.contains("user-hook")); // preserved
         assert!(flat.contains("--main-agent bot"));
-        let gate_count = s["hooks"]["PreToolUse"]
-            .as_array()
-            .unwrap()
+        let pretool = s["hooks"]["PreToolUse"].as_array().unwrap();
+        // idempotent: exactly one gate entry and one Bash enforce-research entry for this agent
+        let gate_count = pretool
             .iter()
-            .filter(|b| b.to_string().contains("--main-agent bot"))
+            .filter(|b| {
+                let s = b.to_string();
+                s.contains("gate --expertise") && s.contains("--main-agent bot")
+            })
             .count();
-        assert_eq!(gate_count, 1); // idempotent
+        assert_eq!(gate_count, 1);
+        let enforce_count = pretool
+            .iter()
+            .filter(|b| b.to_string().contains("enforce-research --main-agent bot"))
+            .count();
+        assert_eq!(enforce_count, 1);
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_bash_enforce_research() {
+        // no-grep-guard AC7: a promoted main gets a Bash -> enforce-research hook (it had none before),
+        // so the grep-guard (and research-before-assemble) fire for it.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let pretool = h["PreToolUse"].as_array().unwrap();
+        let bash = pretool
+            .iter()
+            .find(|e| e["matcher"] == "Bash")
+            .expect("a Bash matcher entry is present");
+        assert!(bash["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("enforce-research --main-agent bot"));
+        assert!(
+            pretool.iter().any(|e| e["matcher"] == "Write|Edit"),
+            "the Write|Edit gate entry is still present"
+        );
     }
 
     #[test]
