@@ -226,6 +226,23 @@ function main() {
   // (drift: committed agents/*.md == genesis-cli build-plugin-agents output — now a Rust integration test
   //  in cli/tests/, since the generator is the native genesis-cli binary.)
 
+  // ---- resolve-issue skill (issue #6): interview-then-implement, zero-speculation ----
+  const riSkill = path.join(REPO, "skills", "resolve-issue", "SKILL.md");
+  check("skills/resolve-issue/SKILL.md exists", isFile(riSkill));
+  if (isFile(riSkill)) {
+    const [rfm, rbody] = frontmatter_and_body(riSkill);
+    const rkeys = new Set(fm_keys(rfm));
+    check("resolve-issue skill declares name + description",
+          ["name", "description"].every((k) => rkeys.has(k)));
+    const low = rbody.toLowerCase();
+    check("resolve-issue skill interviews first (context + scope, incl. deployment)",
+          low.indexOf("interview") !== -1 && low.indexOf("scope") !== -1 && low.indexOf("deploy") !== -1);
+    check("resolve-issue skill states the three zeros (speculation/shortcuts/assumptions)",
+          low.indexOf("speculat") !== -1 && low.indexOf("shortcut") !== -1 && low.indexOf("assum") !== -1);
+    check("resolve-issue skill: resolving is not building; stop only when complete or on a question",
+          low.indexOf("not building") !== -1 && low.indexOf("complete") !== -1 && low.indexOf("question") !== -1);
+  }
+
   console.log("\n" + passed + " passed, " + failed + " failed");
   process.exit(failed ? 1 : 0);
 }

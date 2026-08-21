@@ -354,6 +354,50 @@ fn validate_allows_when_declared_via_quiet_record_channel() {
     );
 }
 
+// ---- validate: reply-format guard (reply-format-guard) ----
+
+#[test]
+fn validate_blocks_genesis_engineer_on_overlong_bullet() {
+    let td = tempfile::tempdir().unwrap();
+    let long = "word ".repeat(25);
+    let human = json!({"type":"user","message":{"role":"user","content":"go"}});
+    let assistant = json!({"type":"assistant","message":{"content":[{"type":"text","text":format!("- {long}")}]}});
+    let tp = td.path().join("t.jsonl");
+    std::fs::write(&tp, format!("{human}\n{assistant}\n")).unwrap();
+    let ev = json!({"agent_type":"genesis-engineer","transcript_path":tp.to_str().unwrap(),"session_id":"s"});
+    let root = td.path().to_str().unwrap();
+    let v = parse(&run(
+        &["validate", root, "genesis-engineer", "--expertise", EXP],
+        &ev.to_string(),
+    ));
+    assert_eq!(v["decision"], "block");
+    assert!(
+        v["reason"].as_str().unwrap_or("").contains("Reply-format"),
+        "expected a reply-format block, got: {}",
+        v["reason"]
+    );
+}
+
+#[test]
+fn validate_allows_genesis_engineer_with_short_bullets() {
+    let td = tempfile::tempdir().unwrap();
+    let human = json!({"type":"user","message":{"role":"user","content":"go"}});
+    let assistant = json!({"type":"assistant","message":{"content":[
+        {"type":"text","text":"- short bullet, well under twenty words\n- another fine point"}]}});
+    let tp = td.path().join("t.jsonl");
+    std::fs::write(&tp, format!("{human}\n{assistant}\n")).unwrap();
+    let ev = json!({"agent_type":"genesis-engineer","transcript_path":tp.to_str().unwrap(),"session_id":"s"});
+    let root = td.path().to_str().unwrap();
+    assert_eq!(
+        run(
+            &["validate", root, "genesis-engineer", "--expertise", EXP],
+            &ev.to_string()
+        ),
+        "",
+        "short bullets pass"
+    );
+}
+
 // ---- inject ----
 
 #[test]
