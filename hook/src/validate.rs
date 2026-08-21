@@ -50,6 +50,8 @@ pub fn run(args: &[String]) {
     let mut reasons = offenders(&files);
 
     let mut cited: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Accepted (name, rule-id, evidence) triples for the audit log written on a clean finish.
+    let mut accepted: Vec<(String, String, String)> = Vec::new();
     let required = required_for(required_json.as_deref(), &active);
     if !required.is_empty() {
         let transcript = ev
@@ -64,8 +66,8 @@ pub fn run(args: &[String]) {
             Some((decls, bare)) => {
                 for name in &required {
                     if let Some((all_ids, _)) = load_manifest(manifest_dir.as_deref(), name) {
-                        let ids: Vec<String> = decls
-                            .get(name)
+                        let entries = decls.get(name);
+                        let ids: Vec<String> = entries
                             .map(|entries| {
                                 entries
                                     .iter()
@@ -76,6 +78,13 @@ pub fn run(args: &[String]) {
                                     .collect()
                             })
                             .unwrap_or_default();
+                        for rid in &ids {
+                            let evid = entries
+                                .and_then(|es| es.iter().find(|(r, _)| r == rid))
+                                .map(|(_, e)| e.clone())
+                                .unwrap_or_default();
+                            accepted.push((name.clone(), rid.clone(), evid));
+                        }
                         if !ids.is_empty() {
                             cited.insert(name.clone(), ids);
                         }
@@ -101,8 +110,38 @@ pub fn run(args: &[String]) {
         }));
         std::process::exit(0);
     }
+    // Feature 2 (verbose-declarations) AC3: on a clean finish, log every accepted citation to the
+    // per-repo audit trail — this happens whether or not the declarations were displayed in prose.
+    let audit = agent::runtime_dir(&cwd).join("applied-expertise.log.jsonl");
+    for rec in applied_records(&active, session, &accepted) {
+        io::append_log(&audit, &rec);
+    }
     log_decision(&log, &active, "allow", &[], &cited, session);
     std::process::exit(0);
+}
+
+/// Build the audit records written to `applied-expertise.log.jsonl` on a clean finish (Feature 2 —
+/// verbose-declarations): one JSONL record per accepted citation, so every applied rule is logged
+/// whether or not it was displayed in visible prose.
+fn applied_records(
+    agent: &str,
+    session: &str,
+    accepted: &[(String, String, String)],
+) -> Vec<Value> {
+    let ts = io::now_iso();
+    accepted
+        .iter()
+        .map(|(name, rid, evid)| {
+            json!({
+                "ts": ts,
+                "agent": agent,
+                "session": session,
+                "name": name,
+                "rule_id": rid,
+                "evidence": evid,
+            })
+        })
+        .collect()
 }
 
 /// Checkable-rule offenders (banned phrase / credential value / line budget) in produced files.
@@ -250,14 +289,19 @@ fn parse_declarations(p: &str) -> Option<Declarations> {
         if ev.get("type").and_then(Value::as_str) != Some("assistant") {
             continue;
         }
-        for t in assistant_texts(&ev) {
-            for caps in decl.captures_iter(&t) {
+        // Visible prose (verbose display) AND the quiet record channel (Feature 2) both count: a
+        // quiet agent records APPLIED-EXPERTISE by writing them to `applied-expertise.jsonl` instead
+        // of printing them, and the validator enforces either source identically.
+        let mut texts = assistant_texts(&ev);
+        texts.extend(record_channel_texts(&ev));
+        for t in &texts {
+            for caps in decl.captures_iter(t) {
                 let name = caps.get(1).map_or("", |m| m.as_str()).to_lowercase();
                 let rid = caps.get(2).map_or("", |m| m.as_str()).to_lowercase();
                 let evid = caps.get(3).map_or("", |m| m.as_str()).trim().to_string();
                 decls.entry(name).or_default().push((rid, evid));
             }
-            for caps in bare_re.captures_iter(&t) {
+            for caps in bare_re.captures_iter(t) {
                 bare.insert(caps.get(1).map_or("", |m| m.as_str()).to_lowercase());
             }
         }
@@ -282,6 +326,39 @@ fn assistant_texts(ev: &Value) -> Vec<String> {
         Some(Value::String(s)) => vec![s.clone()],
         _ => Vec::new(),
     }
+}
+
+/// Declaration text recorded via the QUIET record channel (Feature 2 — verbose-declarations): the
+/// `content` (Write) or `new_string` (Edit) of a tool_use whose target file is
+/// `applied-expertise.jsonl`. This lets an agent record its APPLIED-EXPERTISE lines without printing
+/// them in visible prose, while the validator enforces them identically. A `\`-style path is
+/// normalized so a Windows `file_path` still matches.
+fn record_channel_texts(ev: &Value) -> Vec<String> {
+    let Some(Value::Array(blocks)) = ev.get("message").and_then(|m| m.get("content")) else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter(|b| {
+            matches!(
+                b.get("name").and_then(Value::as_str),
+                Some("Write" | "Edit")
+            )
+        })
+        .filter_map(|b| {
+            let input = b.get("input")?;
+            let path = input.get("file_path").and_then(Value::as_str)?;
+            if !path.replace('\\', "/").ends_with("applied-expertise.jsonl") {
+                return None;
+            }
+            input
+                .get("content")
+                .and_then(Value::as_str)
+                .or_else(|| input.get("new_string").and_then(Value::as_str))
+                .map(ToString::to_string)
+        })
+        .collect()
 }
 
 fn quote_norm(s: &str) -> String {
@@ -516,6 +593,61 @@ mod tests {
         assert!(
             !decls.contains_key("agent-building"),
             "stale pre-user decl must be dropped (turn-scoping)"
+        );
+    }
+
+    #[test]
+    fn applied_records_builds_one_per_citation_with_evidence() {
+        // Feature 2 (verbose-declarations) AC3: on a clean finish, every accepted citation is written
+        // to the audit log — displayed or not. This builds those records deterministically.
+        let accepted = vec![
+            (
+                "expertise-application".to_string(),
+                "ea-3".to_string(),
+                "foo.md".to_string(),
+            ),
+            (
+                "test-driven-determinism".to_string(),
+                "tdd-1".to_string(),
+                "bar.rs".to_string(),
+            ),
+        ];
+        let recs = applied_records("method", "sess-1", &accepted);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0]["agent"], "method");
+        assert_eq!(recs[0]["session"], "sess-1");
+        assert_eq!(recs[0]["name"], "expertise-application");
+        assert_eq!(recs[0]["rule_id"], "ea-3");
+        assert_eq!(recs[0]["evidence"], "foo.md");
+        assert!(
+            recs[0].get("ts").is_some(),
+            "each record carries a timestamp"
+        );
+    }
+
+    #[test]
+    fn parse_decls_reads_record_channel_tool_use() {
+        // Feature 2 (verbose-declarations): a QUIET agent records its declarations by writing them to
+        // `.genesis/applied-expertise.jsonl` via a Write tool call instead of printing prose. The
+        // validator must extract APPLIED-EXPERTISE from that current-turn tool_use input, so the SAME
+        // enforcement holds without the declarations ever appearing in visible text.
+        let td = tempfile::tempdir().unwrap();
+        let tp = td.path().join("t.jsonl");
+        let human = json!({"type":"user","message":{"role":"user","content":"do the work"}});
+        // No text block carries the declaration — only the Write tool_use to the record file does.
+        let record = json!({"type":"assistant","message":{"content":[
+            {"type":"text","text":"Done — recorded my declarations."},
+            {"type":"tool_use","name":"Write","input":{
+                "file_path":"/proj/.genesis/applied-expertise.jsonl",
+                "content":"APPLIED-EXPERTISE: expertise-application#ea-3 — .genesis/expertise/expertise-application.md"
+            }}
+        ]}});
+        std::fs::write(&tp, format!("{human}\n{record}\n")).unwrap();
+        let (decls, _bare) = parse_declarations(tp.to_str().unwrap()).unwrap();
+        assert_eq!(
+            decls.get("expertise-application").map(|e| e[0].0.as_str()),
+            Some("ea-3"),
+            "declaration recorded via the applied-expertise.jsonl write channel must be parsed"
         );
     }
 
