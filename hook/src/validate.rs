@@ -14,6 +14,9 @@ use std::path::Path;
 
 const LINE_BUDGET: usize = 200;
 const FLOOR: usize = 3; // min distinct real rule-ids per required expertise (or all checkable, if fewer)
+const BULLET_WORD_LIMIT: usize = 20; // reply-format guard: max words per bullet/point
+/// Agents whose replies must be tables/bullets with ≤20 words per point (reply-format guard).
+const BULLET_FORMAT_AGENTS: [&str; 1] = ["genesis-engineer"];
 
 /// Parsed APPLIED-EXPERTISE declarations: expertise-name -> [(rule-id, evidence)], plus the set of
 /// bare (rule-id-less) declaration names.
@@ -49,15 +52,21 @@ pub fn run(args: &[String]) {
     let files = glob::produced_files(&root);
     let mut reasons = offenders(&files);
 
+    // Reply-format guard: for agents on the format list, flag any over-long bullet in THIS turn's reply.
+    let transcript = ev
+        .get("transcript_path")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    reasons.extend(format_reasons(
+        &active,
+        &current_turn_visible_text(transcript),
+    ));
+
     let mut cited: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // Accepted (name, rule-id, evidence) triples for the audit log written on a clean finish.
     let mut accepted: Vec<(String, String, String)> = Vec::new();
     let required = required_for(required_json.as_deref(), &active);
     if !required.is_empty() {
-        let transcript = ev
-            .get("transcript_path")
-            .and_then(Value::as_str)
-            .unwrap_or("");
         match parse_declarations(transcript) {
             None => reasons.push(
                 "Could not read the transcript to verify the expertise declaration — cannot finish."
@@ -255,31 +264,7 @@ fn parse_declarations(p: &str) -> Option<Declarations> {
     // a real human turn is one whose content is a string or carries a `text` block (never solely a
     // tool_result). A transcript with no human record leaves `start = 0` (parses all — prior parity).
     let lines: Vec<&str> = text.split('\n').collect();
-    let mut start = 0usize;
-    for (i, raw) in lines.iter().enumerate() {
-        let Ok(ev) = serde_json::from_str::<Value>(raw.trim_end_matches('\r')) else {
-            continue;
-        };
-        if ev.get("type").and_then(Value::as_str) != Some("user") {
-            continue;
-        }
-        // Exclude system-injected user records — Stop-hook feedback, system reminders — which are
-        // `type:"user"` with `isMeta:true`. A genuine human prompt has no `isMeta` (and carries
-        // `promptSource`). Without this, every "Stop hook feedback:" block became a false turn boundary
-        // that pushed past — and dropped — the very declarations being validated (self-defeating loop).
-        let is_meta = ev.get("isMeta").and_then(Value::as_bool) == Some(true);
-        let is_human = !is_meta
-            && match ev.get("message").and_then(|m| m.get("content")) {
-                Some(Value::String(_)) => true,
-                Some(Value::Array(blocks)) => blocks
-                    .iter()
-                    .any(|b| b.get("type").and_then(Value::as_str) == Some("text")),
-                _ => false,
-            };
-        if is_human {
-            start = i + 1;
-        }
-    }
+    let start = turn_start(&lines);
 
     for raw in &lines[start..] {
         let line = raw.trim_end_matches('\r');
@@ -357,6 +342,115 @@ fn record_channel_texts(ev: &Value) -> Vec<String> {
                 .and_then(Value::as_str)
                 .or_else(|| input.get("new_string").and_then(Value::as_str))
                 .map(ToString::to_string)
+        })
+        .collect()
+}
+
+/// The index of the first transcript line AFTER the last genuine human message — the current turn's start.
+/// Tool-result records are also `type:"user"`; a real human turn has string content or a `text` block, and
+/// never `isMeta:true` (Stop-hook feedback / system reminders are meta). No human record -> 0 (parse all).
+fn turn_start(lines: &[&str]) -> usize {
+    let mut start = 0usize;
+    for (i, raw) in lines.iter().enumerate() {
+        let Ok(ev) = serde_json::from_str::<Value>(raw.trim_end_matches('\r')) else {
+            continue;
+        };
+        if ev.get("type").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        let is_meta = ev.get("isMeta").and_then(Value::as_bool) == Some(true);
+        let is_human = !is_meta
+            && match ev.get("message").and_then(|m| m.get("content")) {
+                Some(Value::String(_)) => true,
+                Some(Value::Array(blocks)) => blocks
+                    .iter()
+                    .any(|b| b.get("type").and_then(Value::as_str) == Some("text")),
+                _ => false,
+            };
+        if is_human {
+            start = i + 1;
+        }
+    }
+    start
+}
+
+/// The concatenated VISIBLE assistant text (text blocks only, not the record channel) of the current turn.
+/// Fail-open: empty string on a missing/unreadable transcript.
+fn current_turn_visible_text(p: &str) -> String {
+    if p.is_empty() || !Path::new(p).is_file() {
+        return String::new();
+    }
+    let Ok(text) = std::fs::read_to_string(p) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = text.split('\n').collect();
+    let start = turn_start(&lines);
+    let mut out: Vec<String> = Vec::new();
+    for raw in &lines[start..] {
+        let Ok(ev) = serde_json::from_str::<Value>(raw.trim_end_matches('\r')) else {
+            continue;
+        };
+        if ev.get("type").and_then(Value::as_str) == Some("assistant") {
+            out.extend(assistant_texts(&ev));
+        }
+    }
+    out.join("\n")
+}
+
+/// The text after a markdown bullet marker (`- `/`* `/`+ `/`N. `/`N) `), or `None` if not a bullet line.
+fn bullet_body(trimmed: &str) -> Option<&str> {
+    for m in ["- ", "* ", "+ "] {
+        if let Some(b) = trimmed.strip_prefix(m) {
+            return Some(b);
+        }
+    }
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 {
+        let rest = &trimmed[digits..];
+        return rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "));
+    }
+    None
+}
+
+/// Markdown bullet lines in `text` that exceed the 20-word limit (reply-format guard). CONSERVATIVE: skips
+/// fenced code blocks and `APPLIED-EXPERTISE` lines, and only checks markdown bullets — table rows,
+/// headers, and prose are never flagged, so it cannot false-block on those.
+fn overlong_bullets(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_fence = false;
+    for raw in text.split('\n') {
+        let trimmed = raw.trim_end_matches('\r').trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence || trimmed.starts_with("APPLIED-EXPERTISE:") {
+            continue;
+        }
+        let Some(body) = bullet_body(trimmed) else {
+            continue;
+        };
+        let words = body.split_whitespace().count();
+        if words > BULLET_WORD_LIMIT {
+            let clip: String = body.chars().take(60).collect();
+            out.push(format!("{words} words: \"{clip}…\""));
+        }
+    }
+    out
+}
+
+/// Reply-format reasons for an agent on `BULLET_FORMAT_AGENTS`: one per over-long bullet in `text`.
+fn format_reasons(active: &str, text: &str) -> Vec<String> {
+    if !BULLET_FORMAT_AGENTS.contains(&active) {
+        return Vec::new();
+    }
+    overlong_bullets(text)
+        .into_iter()
+        .map(|b| {
+            format!(
+                "Reply-format rule: a bullet exceeds {BULLET_WORD_LIMIT} words ({b}). Split it into \
+                 shorter points."
+            )
         })
         .collect()
 }
@@ -593,6 +687,37 @@ mod tests {
         assert!(
             !decls.contains_key("agent-building"),
             "stale pre-user decl must be dropped (turn-scoping)"
+        );
+    }
+
+    #[test]
+    fn reply_format_flags_overlong_bullets_only() {
+        assert!(overlong_bullets("- one two three").is_empty());
+        let long = format!("- {}", "word ".repeat(25));
+        assert_eq!(overlong_bullets(&long).len(), 1, "25-word bullet flagged");
+        let twenty = format!("- {}", vec!["w"; 20].join(" "));
+        assert!(overlong_bullets(&twenty).is_empty(), "exactly 20 allowed");
+        let fenced = format!("```\n- {}\n```", "word ".repeat(25));
+        assert!(overlong_bullets(&fenced).is_empty(), "code fence exempt");
+        assert!(
+            overlong_bullets(
+                "APPLIED-EXPERTISE: a#a-1 — evidence string that keeps going and going and going \
+                 and going and going and going and going"
+            )
+            .is_empty(),
+            "APPLIED-EXPERTISE line exempt"
+        );
+        let trow = format!("| {} |", "cell ".repeat(25));
+        assert!(overlong_bullets(&trow).is_empty(), "table row exempt");
+    }
+
+    #[test]
+    fn format_reasons_scoped_to_the_list() {
+        let long = format!("- {}", "word ".repeat(25));
+        assert_eq!(format_reasons("genesis-engineer", &long).len(), 1);
+        assert!(
+            format_reasons("method", &long).is_empty(),
+            "agents not on the list are unaffected"
         );
     }
 
