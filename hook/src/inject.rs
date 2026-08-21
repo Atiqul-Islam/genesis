@@ -32,7 +32,7 @@ pub fn run(args: &[String]) {
     let cwd = std::env::current_dir().unwrap_or_default();
 
     let pointers = build_pointers(&exp_dir);
-    let required = build_required(&exp_dir, &active);
+    let required = build_required(&exp_dir, &active, verbose_on(&cwd, &active));
     let summary_block = build_summary(&exp_dir, &active, &cwd);
 
     let mut ctx = format!("{RULES}{required}{pointers}{summary_block}");
@@ -99,7 +99,7 @@ fn build_pointers(exp_dir: &str) -> String {
     )
 }
 
-fn build_required(exp_dir: &str, agent: &str) -> String {
+fn build_required(exp_dir: &str, agent: &str, verbose: bool) -> String {
     if agent.is_empty() || exp_dir.is_empty() {
         return String::new();
     }
@@ -107,18 +107,60 @@ fn build_required(exp_dir: &str, agent: &str) -> String {
     if req.is_empty() {
         return String::new();
     }
-    format!(
-        "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {}. Each has a \
-         rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
-         finishing, declare the governing rules you actually applied — ONE LINE PER RULE, carrying \
-         evidence:\n  APPLIED-EXPERTISE: <name>#<rule-id> — <evidence>\nwhere <evidence> is the file \
-         the rule is embodied in (e.g. release-manager/CLAUDE.md) or a short verbatim quote from your \
-         output. The Stop hook (validate) verifies each citation: a bare `APPLIED-EXPERTISE: <name>` \
-         with no rule-id, a rule-id not in the manifest, or evidence pointing to a nonexistent file / \
-         a quote absent from your work all BLOCK finishing. Cite at least the rules you truly used (a \
-         token gesture fails).",
-        req.join(", ")
-    )
+    declaration_instruction(agent, &req.join(", "), verbose)
+}
+
+/// Whether the active agent's declarations are DISPLAYED in prose (verbose) or recorded quietly
+/// (default). On only when `<cwd>/.genesis/verbose/<agent>.json` exists with `{"verbose":true}`.
+fn verbose_on(cwd: &Path, agent: &str) -> bool {
+    if agent.is_empty() {
+        return false;
+    }
+    let path = cwd
+        .join(".genesis")
+        .join("verbose")
+        .join(format!("{agent}.json"));
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| v.get("verbose").and_then(Value::as_bool))
+        == Some(true)
+}
+
+/// The APPLIED-EXPERTISE instruction in one of two modes (Feature 2 — verbose-declarations): verbose =
+/// declare in the visible reply (legacy); quiet (default) = record to the `applied-expertise.jsonl`
+/// file channel and do NOT print. Enforcement is identical either way — only the channel differs.
+fn declaration_instruction(agent: &str, req: &str, verbose: bool) -> String {
+    if verbose {
+        format!(
+            "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {req}. Each has \
+             a rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
+             finishing, declare the governing rules you actually applied — ONE LINE PER RULE in your \
+             reply, carrying evidence:\n  APPLIED-EXPERTISE: <name>#<rule-id> — <evidence>\nwhere \
+             <evidence> is the file the rule is embodied in (e.g. release-manager/CLAUDE.md) or a short \
+             verbatim quote from your output. The Stop hook (validate) verifies each citation: a bare \
+             `APPLIED-EXPERTISE: <name>` with no rule-id, a rule-id not in the manifest, or evidence \
+             pointing to a nonexistent file / a quote absent from your work all BLOCK finishing. Cite \
+             at least the rules you truly used (a token gesture fails). (To stop showing these in \
+             replies, run /genesis:verbose_deactivate {agent}.)"
+        )
+    } else {
+        format!(
+            "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {req}. Each has \
+             a rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
+             finishing, RECORD the governing rules you actually applied by WRITING them to \
+             `.genesis/applied-expertise.jsonl` — one line per rule, format \
+             `APPLIED-EXPERTISE: <name>#<rule-id> — <evidence>` (evidence = the file the rule is \
+             embodied in, or a short verbatim quote from your output). Do NOT print these lines in your \
+             reply; they are recorded, not displayed. The Stop hook (validate) reads that file and \
+             verifies each citation: a rule-id not in the manifest, or evidence pointing to a \
+             nonexistent file / a quote absent from your work, BLOCKS finishing. Record at least the \
+             rules you truly used (a token gesture fails). (To show these in replies, run \
+             /genesis:verbose_activate {agent}.)"
+        )
+    }
 }
 
 fn required_list(exp_dir: &str, agent: &str) -> Vec<String> {
@@ -217,6 +259,36 @@ mod tests {
         assert!(p.contains("- persona-creation: "));
         assert!(p.contains("- prompt-engineering: "));
         assert!(!p.contains("notes"));
+    }
+
+    #[test]
+    fn verbose_flag_read_from_per_agent_file() {
+        // Feature 2 (verbose-declarations): off by default; on only when the per-agent flag file exists
+        // with {"verbose":true}.
+        let td = tempfile::tempdir().unwrap();
+        let cwd = td.path();
+        assert!(!verbose_on(cwd, "method"), "absent flag => quiet (default)");
+        let vdir = cwd.join(".genesis").join("verbose");
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::write(vdir.join("method.json"), r#"{"verbose":true}"#).unwrap();
+        assert!(verbose_on(cwd, "method"), "flag present => verbose");
+        assert!(!verbose_on(cwd, "sensei"), "flag is per-agent, not global");
+        std::fs::write(vdir.join("sensei.json"), r#"{"verbose":false}"#).unwrap();
+        assert!(!verbose_on(cwd, "sensei"), "verbose:false => quiet");
+    }
+
+    #[test]
+    fn declaration_instruction_switches_on_verbose() {
+        let quiet = declaration_instruction("method", "persona-creation", false);
+        let loud = declaration_instruction("method", "persona-creation", true);
+        // Quiet: record to the file channel, do not print in prose.
+        assert!(quiet.contains("applied-expertise.jsonl"));
+        assert!(quiet.to_lowercase().contains("do not print"));
+        // Verbose: declare in the reply itself.
+        assert!(loud.contains("APPLIED-EXPERTISE"));
+        assert!(!loud.contains("applied-expertise.jsonl"));
+        // Both keep the required-expertise list and the enforcement note.
+        assert!(quiet.contains("persona-creation") && loud.contains("persona-creation"));
     }
 
     #[test]

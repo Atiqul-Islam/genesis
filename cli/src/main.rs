@@ -20,6 +20,8 @@ fn main() {
         "install" => genesis_cli::install::run(&rest),
         "bootstrap" => genesis_cli::bootstrap::run(&rest),
         "sync-gitignore" => genesis_cli::bootstrap::run_sync_gitignore(&rest),
+        "verbose" => genesis_cli::verbose::run(&rest),
+        "update-guard" => genesis_cli::update_guard::run(&rest),
         "build-plugin-agents" => genesis_cli::build_plugin_agents::run(&rest),
         // session-copy pipeline
         "capture" => genesis_cli::capture::run(&rest),
@@ -28,9 +30,9 @@ fn main() {
         "build-session-agent" => genesis_cli::build_session_agent::run(&rest),
         _ => {
             eprintln!(
-                "genesis-cli: unknown subcommand {sub:?} (expected assemble|bootstrap|promote|demote|doctor|\
-                 fix|reconcile|validate|merge|resolve|install|build-plugin-agents|capture|store|embed|\
-                 build-session-agent)"
+                "genesis-cli: unknown subcommand {sub:?} (expected assemble|bootstrap|sync-gitignore|\
+                 promote|demote|doctor|fix|reconcile|validate|merge|resolve|install|build-plugin-agents|\
+                 capture|store|embed|build-session-agent|verbose|update-guard)"
             );
             2
         }

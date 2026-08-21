@@ -29,8 +29,106 @@ fn run(args: &[&str], stdin: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// Like `run`, but with the child's working directory set to `dir` (so per-repo files like a guard at
+/// `<dir>/.genesis/team/<agent>/guard.json` resolve).
+fn run_in(dir: &std::path::Path, args: &[&str], stdin: &str) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_genesis-hook"))
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn genesis-hook");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 fn parse(out: &str) -> Value {
     serde_json::from_str(out).expect("stdout is JSON")
+}
+
+/// Deny only when the gate returned a `deny` decision.
+fn is_deny(out: &str) -> bool {
+    !out.is_empty() && parse(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+}
+
+// ---- gate: per-agent guard (Feature 1 — agent-scoped-guards) ----
+
+fn write_atlas_guard(dir: &std::path::Path, guard: &Value) {
+    let gdir = dir.join(".genesis/team/atlas");
+    std::fs::create_dir_all(&gdir).unwrap();
+    std::fs::write(gdir.join("guard.json"), guard.to_string()).unwrap();
+}
+
+#[test]
+fn gate_guard_denies_dropping_invariant_and_self_protect() {
+    let td = tempfile::tempdir().unwrap();
+    write_atlas_guard(
+        td.path(),
+        &json!({
+            "self_protect": [".genesis/team/atlas/guard.json"],
+            "invariants": [{"id":"c1","files":["persona.md"],"must_match":"per-action approval","why":"keep the approval gate"}]
+        }),
+    );
+    // AC1: a write that DROPS the invariant is denied.
+    let ev = json!({"agent_type":"atlas","tool_input":{"file_path":"persona.md","content":"no phrase here"}});
+    assert!(
+        is_deny(&run_in(
+            td.path(),
+            &["gate", "--expertise", EXP],
+            &ev.to_string()
+        )),
+        "dropping a must_match invariant must deny"
+    );
+    // AC2: a write that KEEPS the invariant is allowed (short content => silent).
+    let ev = json!({"agent_type":"atlas","tool_input":{"file_path":"persona.md","content":"requires per-action approval"}});
+    assert!(
+        run_in(td.path(), &["gate", "--expertise", EXP], &ev.to_string()).is_empty(),
+        "keeping the invariant must allow"
+    );
+    // AC3: writing the guard file itself is denied (self-protect).
+    let ev = json!({"agent_type":"atlas","tool_input":{"file_path":".genesis/team/atlas/guard.json","content":"{}"}});
+    assert!(
+        is_deny(&run_in(
+            td.path(),
+            &["gate", "--expertise", EXP],
+            &ev.to_string()
+        )),
+        "an agent must not edit its own guard"
+    );
+}
+
+#[test]
+fn gate_guard_is_scoped_to_the_active_agent() {
+    // AC4: atlas's guard must not constrain a DIFFERENT active agent.
+    let td = tempfile::tempdir().unwrap();
+    write_atlas_guard(
+        td.path(),
+        &json!({"self_protect": [], "invariants": [{"id":"c1","files":["persona.md"],"must_match":"per-action approval","why":"x"}]}),
+    );
+    let ev = json!({"agent_type":"method","tool_input":{"file_path":"persona.md","content":"a short clean persona with no such phrase"}});
+    assert!(
+        run_in(td.path(), &["gate", "--expertise", EXP], &ev.to_string()).is_empty(),
+        "atlas's guard must not fire for method"
+    );
+}
+
+#[test]
+fn gate_no_guard_behaves_like_before() {
+    // AC5: with no guard file, a clean short persona write is allowed/silent, exactly as pre-feature.
+    let td = tempfile::tempdir().unwrap();
+    let ev = json!({"agent_type":"atlas","tool_input":{"file_path":"persona.md","content":"a short clean persona"}});
+    assert!(
+        run_in(td.path(), &["gate", "--expertise", EXP], &ev.to_string()).is_empty(),
+        "absent guard => no new behavior"
+    );
 }
 
 // ---- gate ----
@@ -187,6 +285,40 @@ fn validate_blocks_when_required_expertise_undeclared() {
         .as_str()
         .unwrap_or("")
         .contains("APPLIED-EXPERTISE"));
+}
+
+#[test]
+fn validate_allows_when_declared_via_quiet_record_channel() {
+    // Feature 2 (verbose-declarations) AC1/AC6: an agent that RECORDS its declarations to
+    // `applied-expertise.jsonl` (a Write tool_use) — with NO declarations in visible prose — finishes
+    // exactly as if it had printed them. mneme requires memory-management + expertise-application.
+    let td = tempfile::tempdir().unwrap();
+    let recorded = "APPLIED-EXPERTISE: memory-management#mm-1 — applied\n\
+         APPLIED-EXPERTISE: memory-management#mm-2 — applied\n\
+         APPLIED-EXPERTISE: memory-management#mm-3 — applied\n\
+         APPLIED-EXPERTISE: expertise-application#ea-1 — applied\n\
+         APPLIED-EXPERTISE: expertise-application#ea-2 — applied\n\
+         APPLIED-EXPERTISE: expertise-application#ea-3 — applied";
+    let human = json!({"type":"user","message":{"role":"user","content":"do it"}});
+    let rec = json!({"type":"assistant","message":{"content":[
+        {"type":"text","text":"Done — declarations recorded quietly."},
+        {"type":"tool_use","name":"Write","input":{
+            "file_path":"/proj/.genesis/applied-expertise.jsonl","content":recorded}}
+    ]}});
+    let tpath = td.path().join("transcript.jsonl");
+    std::fs::write(&tpath, format!("{human}\n{rec}\n")).unwrap();
+    let ev =
+        json!({"agent_type":"mneme","transcript_path":tpath.to_str().unwrap(),"session_id":"s"});
+    let root = td.path().to_str().unwrap();
+    // Empty stdout == allow (no block emitted).
+    assert_eq!(
+        run(
+            &["validate", root, "mneme", "--expertise", EXP],
+            &ev.to_string()
+        ),
+        "",
+        "quiet record-channel declarations must satisfy validate the same as printed ones"
+    );
 }
 
 // ---- inject ----

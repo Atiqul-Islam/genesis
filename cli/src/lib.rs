@@ -25,4 +25,6 @@ pub mod render;
 pub mod resolve;
 pub mod scrub;
 pub mod store;
+pub mod update_guard;
 pub mod validate;
+pub mod verbose;

@@ -23,7 +23,8 @@ pub fn run(args: &[String]) {
     let ev = io::parse_event(&io::read_stdin());
 
     // DORMANCY GUARD: no-op unless a genesis agent is active (payload agent_type, or the --main-agent fallback).
-    if agent::resolve_agent(&ev, "", main_agent.as_deref().unwrap_or("")).is_empty() {
+    let active = agent::resolve_agent(&ev, "", main_agent.as_deref().unwrap_or(""));
+    if active.is_empty() {
         std::process::exit(0);
     }
 
@@ -82,6 +83,16 @@ pub fn run(args: &[String]) {
         }
     }
 
+    // ---- Layer 1b: per-agent guard (Feature 1 — agent-scoped-guards) ----
+    // Reuses the existing guard shape (self_protect + must_match/must_not_match invariants), scoped to
+    // the ACTIVE agent. Fail-open: a missing/malformed guard never blocks a session.
+    if let Some(guard) = load_guard(&cwd, &active) {
+        let after = proposed_content(&ti, p);
+        if let Some((reason, rule)) = guard_violation(&guard, p, &after) {
+            deny(&log, &reason, p, &rule);
+        }
+    }
+
     // ---- Layer 2: rule surfacing (non-blocking) ----
     let ctx = surface(p, content, expertise.as_deref());
     if ctx.is_empty() {
@@ -117,6 +128,105 @@ fn is_budgeted(p: &str) -> bool {
     Regex::new(r"(?i)(persona|behavior)\.md$|(^|/)CLAUDE\.md$")
         .map(|re| re.is_match(p))
         .unwrap_or(false)
+}
+
+/// Load the ACTIVE agent's guard `<cwd>/.genesis/team/<agent>/guard.json`, or `None` when it is
+/// absent or malformed (fail-open — a broken guard never blocks a session). Feature 1 —
+/// agent-scoped-guards; same schema as the existing `protected_core.json` guard.
+fn load_guard(cwd: &Path, agent: &str) -> Option<Value> {
+    if agent.is_empty() {
+        return None;
+    }
+    let path = cwd
+        .join(".genesis")
+        .join("team")
+        .join(agent)
+        .join("guard.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<Value>(&text).ok()
+}
+
+/// Does `write_path` target the guard-entry path `entry`? Suffix match on `/`-normalized paths so a
+/// repo-relative entry (`persona.md`, `.genesis/team/atlas/guard.json`) matches the absolute or
+/// relative `file_path` a tool passes.
+fn path_targets(write_path: &str, entry: &str) -> bool {
+    let w = write_path.replace('\\', "/");
+    let e = entry.trim_start_matches("./").replace('\\', "/");
+    !e.is_empty() && (w == e || w.ends_with(&format!("/{e}")))
+}
+
+/// The content the file WILL have after this tool call: `content` for a Write; for an Edit, the current
+/// file with the first `old_string` → `new_string` applied (falling back to the fragment if the file
+/// can't be read). Used to evaluate guard invariants against the real post-write state.
+fn proposed_content(ti: &Value, file_path: &str) -> String {
+    if let Some(c) = ti.get("content").and_then(Value::as_str) {
+        return c.to_string();
+    }
+    let new_s = ti.get("new_string").and_then(Value::as_str).unwrap_or("");
+    let old_s = ti.get("old_string").and_then(Value::as_str).unwrap_or("");
+    match std::fs::read_to_string(file_path) {
+        Ok(cur) if !old_s.is_empty() => cur.replacen(old_s, new_s, 1),
+        Ok(cur) => cur,
+        Err(_) => new_s.to_string(),
+    }
+}
+
+/// Evaluate the ACTIVE agent's guard against a proposed write. Returns `Some((reason, rule))` if the
+/// write would break the guard (a `self_protect` path, or a targeted invariant's `must_match` missing /
+/// `must_not_match` present), else `None`. An unparseable invariant regex is skipped (fail-open).
+fn guard_violation(guard: &Value, write_path: &str, content: &str) -> Option<(String, String)> {
+    if let Some(paths) = guard.get("self_protect").and_then(Value::as_array) {
+        for entry in paths.iter().filter_map(Value::as_str) {
+            if path_targets(write_path, entry) {
+                return Some((
+                    format!(
+                        "Guard: {write_path} is a protected guard file for this agent — an agent \
+                         cannot edit its own guard. Use the coordinator flow /genesis:update_guard."
+                    ),
+                    "guard-self-protect".to_string(),
+                ));
+            }
+        }
+    }
+    let invs = guard.get("invariants").and_then(Value::as_array)?;
+    for inv in invs {
+        let targeted = inv
+            .get("files")
+            .and_then(Value::as_array)
+            .is_some_and(|fs| {
+                fs.iter()
+                    .filter_map(Value::as_str)
+                    .any(|f| path_targets(write_path, f))
+            });
+        if !targeted {
+            continue;
+        }
+        let id = inv.get("id").and_then(Value::as_str).unwrap_or("?");
+        let why = inv.get("why").and_then(Value::as_str).unwrap_or("");
+        if let Some(mm) = inv.get("must_match").and_then(Value::as_str) {
+            if Regex::new(mm).is_ok_and(|re| !re.is_match(content)) {
+                return Some((
+                    format!(
+                        "Guard invariant {id} would be broken: {write_path} must still satisfy \
+                         /{mm}/ ({why}) — restore it before writing."
+                    ),
+                    format!("guard-{id}"),
+                ));
+            }
+        }
+        if let Some(mn) = inv.get("must_not_match").and_then(Value::as_str) {
+            if Regex::new(mn).is_ok_and(|re| re.is_match(content)) {
+                return Some((
+                    format!(
+                        "Guard invariant {id} forbids this content in {write_path}: it must NOT match \
+                         /{mn}/ ({why})."
+                    ),
+                    format!("guard-{id}"),
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Which expertise's top rules to re-assert for an artifact path, or `None`.
@@ -233,6 +343,66 @@ fn log_decision(log: &Path, decision: &str, p: &str, rule: &str, surfaced: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_guard_reads_per_agent_and_fails_open() {
+        // Feature 1 (agent-scoped-guards): the guard is per-agent, and a missing/malformed guard
+        // fails OPEN (None) so a broken guard never blocks a session.
+        let td = tempfile::tempdir().unwrap();
+        let cwd = td.path();
+        assert!(load_guard(cwd, "atlas").is_none(), "absent guard => None");
+        let gdir = cwd.join(".genesis/team/atlas");
+        std::fs::create_dir_all(&gdir).unwrap();
+        std::fs::write(
+            gdir.join("guard.json"),
+            r#"{"self_protect":[],"invariants":[]}"#,
+        )
+        .unwrap();
+        assert!(load_guard(cwd, "atlas").is_some(), "present guard => Some");
+        std::fs::write(gdir.join("guard.json"), "not json").unwrap();
+        assert!(
+            load_guard(cwd, "atlas").is_none(),
+            "malformed => None (fail-open)"
+        );
+    }
+
+    #[test]
+    fn guard_self_protect_blocks_the_guard_file() {
+        let guard = json!({"self_protect":[".genesis/team/atlas/guard.json"],"invariants":[]});
+        assert!(guard_violation(&guard, "/r/.genesis/team/atlas/guard.json", "anything").is_some());
+        assert!(guard_violation(&guard, "/r/persona.md", "anything").is_none());
+    }
+
+    #[test]
+    fn guard_must_match_blocks_when_invariant_dropped() {
+        let guard = json!({"self_protect":[],"invariants":[
+            {"id":"c1","files":["persona.md"],"must_match":"(?is)per-action\\s+approval","why":"x"}]});
+        assert!(
+            guard_violation(&guard, "/r/team/atlas/persona.md", "no phrase here").is_some(),
+            "dropping the required invariant is a violation"
+        );
+        assert!(
+            guard_violation(
+                &guard,
+                "/r/team/atlas/persona.md",
+                "needs per-action approval"
+            )
+            .is_none(),
+            "keeping the invariant passes"
+        );
+        assert!(
+            guard_violation(&guard, "/r/other.md", "no phrase here").is_none(),
+            "a file the invariant does not name is not constrained"
+        );
+    }
+
+    #[test]
+    fn guard_must_not_match_blocks_forbidden_text() {
+        let guard = json!({"self_protect":[],"invariants":[
+            {"id":"c2","files":["persona.md"],"must_not_match":"(?i)act as anyone","why":"x"}]});
+        assert!(guard_violation(&guard, "/r/persona.md", "may act as anyone").is_some());
+        assert!(guard_violation(&guard, "/r/persona.md", "acts only as Atiqul").is_none());
+    }
 
     #[test]
     fn budgeted_paths() {
