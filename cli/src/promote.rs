@@ -36,6 +36,29 @@ fn required_for(gh: &Path, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The actionable error when `<name>` is not staged in the repo. A Genesis CORE agent (sensei/method,
+/// per `render::builtin_meta`) is provisioned by BOOTSTRAPPING the folder — which stages its persona,
+/// per-agent memory, and enforcement — so point there; any other name must be BUILT first via
+/// `/genesis:new`.
+fn missing_agent_message(name: &str, agent_md: &Path) -> String {
+    if render::builtin_meta(name).is_some() {
+        format!(
+            "'{name}' is a Genesis core agent and is not set up in this folder yet ({} is absent).\n\
+             Bootstrap the folder first — that stages its persona, per-agent memory, and enforcement — \
+             then promote:\n  \
+             node \"<plugin>/bin/genesis-memory.js\" --run-cli bootstrap . \"<plugin>\"\n  \
+             then: genesis-cli promote {name}\n\
+             The /genesis:promote command does both steps for you.",
+            agent_md.display()
+        )
+    } else {
+        format!(
+            "agent not found: {}\nBuild '{name}' first (/genesis:new), or pass the target repo that contains it.",
+            agent_md.display()
+        )
+    }
+}
+
 /// Entry point. Returns the process exit code.
 #[must_use]
 pub fn run(args: &[String]) -> i32 {
@@ -55,10 +78,7 @@ pub fn run(args: &[String]) -> i32 {
         .join("agents")
         .join(format!("{name}.md"));
     if !agent_md.is_file() {
-        fsx::fail(&format!(
-            "agent not found: {}\nBuild '{name}' first (/genesis:new), or pass the target repo that contains it.",
-            agent_md.display()
-        ));
+        fsx::fail(&missing_agent_message(name, &agent_md));
     }
     let body = strip_frontmatter(&fsx::read_text(&agent_md).unwrap_or_default());
     let expertise = required_for(&gh, name);
@@ -93,5 +113,21 @@ mod tests {
     fn strip_frontmatter_returns_body() {
         let md = "---\nname: bot\ntools: Read\n---\n\n# Bot\n\nBody.\n";
         assert_eq!(strip_frontmatter(md), "# Bot\n\nBody.");
+    }
+
+    #[test]
+    fn missing_agent_message_guides_core_vs_custom() {
+        // A CORE agent (sensei/method) is provisioned by bootstrap, not built — point there.
+        let sensei = missing_agent_message("sensei", Path::new("/repo/.claude/agents/sensei.md"));
+        assert!(
+            sensei.contains("bootstrap"),
+            "core agent points at bootstrap"
+        );
+        assert!(sensei.contains("core agent"));
+        // A custom agent that was never built -> build-first, and NOT bootstrap.
+        let custom =
+            missing_agent_message("custombot", Path::new("/repo/.claude/agents/custombot.md"));
+        assert!(custom.contains("Build 'custombot' first"));
+        assert!(!custom.contains("bootstrap"));
     }
 }
