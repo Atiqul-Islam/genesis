@@ -243,6 +243,25 @@ function main() {
           low.indexOf("not building") !== -1 && low.indexOf("complete") !== -1 && low.indexOf("question") !== -1);
   }
 
+  // ---- add-issue skill (issue #6): author self-contained, sourced, zero-speculation issues ----
+  const aiSkill = path.join(REPO, "skills", "add-issue", "SKILL.md");
+  check("skills/add-issue/SKILL.md exists", isFile(aiSkill));
+  if (isFile(aiSkill)) {
+    const [afm, abody] = frontmatter_and_body(aiSkill);
+    const akeys = new Set(fm_keys(afm));
+    check("add-issue skill declares name + description",
+          ["name", "description"].every((k) => akeys.has(k)));
+    const al = abody.toLowerCase();
+    check("add-issue skill requires sourced evidence + references",
+          al.indexOf("evidence") !== -1 && al.indexOf("references") !== -1);
+    check("add-issue skill lists the required sections (problem + acceptance)",
+          al.indexOf("problem") !== -1 && al.indexOf("acceptance") !== -1);
+    check("add-issue skill is zero-speculation + self-contained (zero-context agent)",
+          al.indexOf("speculat") !== -1 && al.indexOf("zero-context") !== -1);
+    check("add-issue skill: filing is not a commitment to build (resolve != build)",
+          al.indexOf("not a commitment") !== -1 || al.indexOf("not building") !== -1);
+  }
+
   console.log("\n" + passed + " passed, " + failed + " failed");
   process.exit(failed ? 1 : 0);
 }
