@@ -11,6 +11,7 @@ fn main() {
         "gate" => genesis_hook::gate::run(&rest),
         "enforce-research" => genesis_hook::enforce_research::run(&rest),
         "inject" => genesis_hook::inject::run(&rest),
+        "precompact" => genesis_hook::precompact::run(&rest),
         "validate" => genesis_hook::validate::run(&rest),
         "session-pointer" => genesis_hook::session_pointer::run(&rest),
         "promote-offer" => genesis_hook::promote_offer::run(&rest),

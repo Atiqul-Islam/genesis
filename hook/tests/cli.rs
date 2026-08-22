@@ -354,6 +354,74 @@ fn validate_allows_when_declared_via_quiet_record_channel() {
     );
 }
 
+// ---- precompact + resume restore (issue #1) ----
+
+#[test]
+fn precompact_writes_snapshot_and_inject_restores_it() {
+    let td = tempfile::tempdir().unwrap();
+    // a transcript with recent conversation
+    let human = json!({"type":"user","message":{"role":"user","content":"resume test marker"}});
+    let asst = json!({"type":"assistant","message":{"content":[{"type":"text","text":"acknowledged marker"}]}});
+    let tp = td.path().join("t.jsonl");
+    std::fs::write(&tp, format!("{human}\n{asst}\n")).unwrap();
+
+    // precompact (run with cwd = td so runtime_dir -> td/.genesis) writes the snapshot
+    let ev = json!({"agent_type":"genesis-engineer","transcript_path":tp.to_str().unwrap(),"trigger":"manual","session_id":"s"});
+    assert_eq!(
+        run_in(td.path(), &["precompact"], &ev.to_string()),
+        "",
+        "precompact emits no decision (side-effect only)"
+    );
+    let snap = td.path().join(".genesis/resume-state.md");
+    assert!(snap.is_file(), "precompact wrote the resume snapshot");
+    let snap_text = std::fs::read_to_string(&snap).unwrap();
+    assert!(snap_text.contains("resume test marker") && snap_text.contains("acknowledged marker"));
+
+    // inject on source=compact restores it
+    let iev = json!({"agent_type":"genesis-engineer","source":"compact"});
+    let v = parse(&run_in(
+        td.path(),
+        &["inject", EXP, "genesis-engineer"],
+        &iev.to_string(),
+    ));
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        ctx.contains("Resume — recent session state"),
+        "inject restores the snapshot on compact"
+    );
+    assert!(ctx.contains("resume test marker"));
+
+    // inject on source=startup does NOT restore it
+    let sev = json!({"agent_type":"genesis-engineer","source":"startup"});
+    let v2 = parse(&run_in(
+        td.path(),
+        &["inject", EXP, "genesis-engineer"],
+        &sev.to_string(),
+    ));
+    let ctx2 = v2["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        !ctx2.contains("Resume — recent session state"),
+        "no resume on a fresh startup"
+    );
+}
+
+#[test]
+fn precompact_is_dormant_without_a_genesis_agent() {
+    let td = tempfile::tempdir().unwrap();
+    let tp = td.path().join("t.jsonl");
+    std::fs::write(&tp, "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}\n").unwrap();
+    let ev = json!({"transcript_path":tp.to_str().unwrap(),"trigger":"manual"}); // no agent_type
+    assert_eq!(run_in(td.path(), &["precompact"], &ev.to_string()), "");
+    assert!(
+        !td.path().join(".genesis/resume-state.md").exists(),
+        "dormant: no snapshot written"
+    );
+}
+
 // ---- validate: reply-format guard (reply-format-guard) ----
 
 #[test]

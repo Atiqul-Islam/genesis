@@ -339,6 +339,9 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
     // enforce-research on Bash: research-before-assemble + the no-grep guard, scoped to this main agent.
     // A promoted main carries no payload agent_type, so it needs the explicit --main-agent to fire.
     let enforce = format!("{bin} enforce-research --main-agent {name}");
+    // issue #1: capture a resume snapshot before a context compaction; inject restores it on the next
+    // SessionStart (source compact/resume). Scoped to this main agent.
+    let precompact = format!("{bin} precompact --main-agent {name}");
     let stop = format!(
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
@@ -361,6 +364,7 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
             { "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": gate }] },
             { "matcher": "Bash", "hooks": [{ "type": "command", "command": enforce }] },
         ],
+        "PreCompact": [{ "matcher": "manual|auto", "hooks": [{ "type": "command", "command": precompact }] }],
         "Stop": [{ "hooks": stop_hooks }],
     })
 }
@@ -632,6 +636,44 @@ mod tests {
         assert_eq!(
             sync_count, 1,
             "one --sync hook, not duplicated on re-promote"
+        );
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_precompact() {
+        // issue #1: a promoted main captures a resume snapshot before compaction.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let pc = h["PreCompact"][0].clone();
+        assert_eq!(pc["matcher"], "manual|auto");
+        assert!(pc["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("precompact --main-agent bot"));
+    }
+
+    #[test]
+    fn precompact_hook_is_idempotent_and_demotable() {
+        // The PreCompact command carries --main-agent, so main_settings replaces it idempotently and
+        // demote removes it (both key on --main-agent). Assert one PreCompact after two runs, gone after demote.
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join(".claude")).unwrap();
+        for _ in 0..2 {
+            main_settings(td.path(), "bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        }
+        let s: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let pc = s["hooks"]["PreCompact"].as_array().map_or(0, Vec::len);
+        assert_eq!(pc, 1, "one PreCompact block, not duplicated");
+        let _ = uninstall_main(td.path());
+        let s2: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            s2["hooks"].get("PreCompact").is_none(),
+            "demote removes the PreCompact hook"
         );
     }
 

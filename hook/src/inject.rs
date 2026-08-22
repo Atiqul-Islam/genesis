@@ -19,6 +19,7 @@ const RULES: &str =
 - These are checkable and enforced deterministically; do not rely on memory to honor them.";
 
 const SUMMARY_CAP: usize = 7000; // chars of the session-copy digest to inject; the rest is recall-only
+const RESUME_CAP: usize = 6000; // chars of the compaction resume snapshot to inject inline (rest on disk)
 const CTX_CAP: usize = 9500; // stay under the 10,000-char hook-output cap
 
 /// Entry point for `genesis-hook inject <expertise_dir> [<agent>] [--main-agent <name>]`.
@@ -33,9 +34,12 @@ pub fn run(args: &[String]) {
 
     let pointers = build_pointers(&exp_dir);
     let required = build_required(&exp_dir, &active, verbose_on(&cwd, &active));
+    // issue #1: on a post-compaction / resume start, surface the snapshot written by the precompact hook
+    // so the agent continues where it left off. Placed high so it survives the CTX cap.
+    let resume = build_resume(&ev, &cwd);
     let summary_block = build_summary(&exp_dir, &active, &cwd);
 
-    let mut ctx = format!("{RULES}{required}{pointers}{summary_block}");
+    let mut ctx = format!("{RULES}{required}{resume}{pointers}{summary_block}");
     if ctx.chars().count() > CTX_CAP {
         ctx = format!("{}\n…(truncated)", cli::take_chars(&ctx, CTX_CAP));
     }
@@ -181,6 +185,37 @@ fn required_list(exp_dir: &str, agent: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The compaction resume block (issue #1): on a SessionStart whose `source` is `compact` or `resume`,
+/// read `<cwd>/.genesis/resume-state.md` (written by the precompact hook) and return it, capped, with a
+/// pointer to the full file on disk. Empty on any other source, or when no snapshot exists (fail-open).
+fn build_resume(ev: &Value, cwd: &Path) -> String {
+    let source = ev.get("source").and_then(Value::as_str).unwrap_or("");
+    if source != "compact" && source != "resume" {
+        return String::new();
+    }
+    let path = cwd.join(".genesis").join("resume-state.md");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return String::new();
+    };
+    let body = raw.trim();
+    if body.is_empty() {
+        return String::new();
+    }
+    let disp = path.to_string_lossy();
+    let shown = if body.chars().count() > RESUME_CAP {
+        format!(
+            "{}\n…(truncated — read the full snapshot at {disp})",
+            cli::take_chars(body, RESUME_CAP)
+        )
+    } else {
+        body.to_string()
+    };
+    format!(
+        "\n\n## Resume — recent session state recovered after compaction\n{shown}\nThe full snapshot is \
+         on disk at {disp} — read it to recover anything not shown above."
+    )
+}
+
 fn build_summary(exp_dir: &str, agent: &str, cwd: &Path) -> String {
     let Some(sp) = find_summary(exp_dir, agent, cwd) else {
         return String::new();
@@ -289,6 +324,31 @@ mod tests {
         assert!(!loud.contains("applied-expertise.jsonl"));
         // Both keep the required-expertise list and the enforcement note.
         assert!(quiet.contains("persona-creation") && loud.contains("persona-creation"));
+    }
+
+    #[test]
+    fn build_resume_only_on_compact_or_resume() {
+        use serde_json::json;
+        let td = tempfile::tempdir().unwrap();
+        let cwd = td.path();
+        std::fs::create_dir_all(cwd.join(".genesis")).unwrap();
+        std::fs::write(
+            cwd.join(".genesis").join("resume-state.md"),
+            "# Genesis resume snapshot\n\nUSER: pick up here",
+        )
+        .unwrap();
+        // compact -> injected, with a disk pointer
+        let r = build_resume(&json!({"source":"compact"}), cwd);
+        assert!(r.contains("Resume — recent session state"));
+        assert!(r.contains("pick up here"));
+        assert!(r.contains("resume-state.md"));
+        // resume -> injected
+        assert!(build_resume(&json!({"source":"resume"}), cwd).contains("pick up here"));
+        // startup -> NOT injected (avoid stale re-injection)
+        assert!(build_resume(&json!({"source":"startup"}), cwd).is_empty());
+        // missing snapshot -> empty even on compact (fail-open)
+        let empty = tempfile::tempdir().unwrap();
+        assert!(build_resume(&json!({"source":"compact"}), empty.path()).is_empty());
     }
 
     #[test]
