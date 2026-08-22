@@ -324,11 +324,24 @@ pub fn main_claude_md(target: &Path, name: &str, body: &str) -> PathBuf {
 pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value {
     let exp_dir = format!("{home}/expertise");
     let bin = q(&hook_bin(home));
+    // issue #3: restage this repo's .genesis/bin to the current plugin version on session start, so a
+    // promoted-main repo (which never spawns a core subagent) still picks up /plugin update. Runs via the
+    // Node launcher (--sync is a launcher function); idempotent — gated by the .staged-version stamp. It
+    // sits in the SAME SessionStart block as inject (which carries --main-agent), so main_settings treats
+    // the whole block as this agent's and replaces it idempotently on re-promote.
+    let sync = format!(
+        "node {} --sync {}",
+        q(&format!("{home}/bin/genesis-memory.js")),
+        q(home)
+    );
     let inject = format!("{bin} inject {} {name} --main-agent {name}", q(&exp_dir));
     let gate = format!("{bin} gate --expertise {} --main-agent {name}", q(&exp_dir));
     // enforce-research on Bash: research-before-assemble + the no-grep guard, scoped to this main agent.
     // A promoted main carries no payload agent_type, so it needs the explicit --main-agent to fire.
     let enforce = format!("{bin} enforce-research --main-agent {name}");
+    // issue #1: capture a resume snapshot before a context compaction; inject restores it on the next
+    // SessionStart (source compact/resume). Scoped to this main agent.
+    let precompact = format!("{bin} precompact --main-agent {name}");
     let stop = format!(
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
@@ -343,11 +356,15 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
         }));
     }
     json!({
-        "SessionStart": [{ "matcher": "startup|resume|compact", "hooks": [{ "type": "command", "command": inject }] }],
+        "SessionStart": [{ "matcher": "startup|resume|compact", "hooks": [
+            { "type": "command", "command": sync },
+            { "type": "command", "command": inject },
+        ] }],
         "PreToolUse": [
             { "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": gate }] },
             { "matcher": "Bash", "hooks": [{ "type": "command", "command": enforce }] },
         ],
+        "PreCompact": [{ "matcher": "manual|auto", "hooks": [{ "type": "command", "command": precompact }] }],
         "Stop": [{ "hooks": stop_hooks }],
     })
 }
@@ -608,6 +625,76 @@ mod tests {
             .filter(|b| b.to_string().contains("enforce-research --main-agent bot"))
             .count();
         assert_eq!(enforce_count, 1);
+        // issue #3 AC2: exactly one SessionStart --sync hook after two runs (idempotent, no duplicate).
+        let sync_count = s["hooks"]["SessionStart"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|blk| blk["hooks"].as_array().cloned().unwrap_or_default())
+            .filter(|h| h["command"].as_str().is_some_and(|c| c.contains("--sync")))
+            .count();
+        assert_eq!(
+            sync_count, 1,
+            "one --sync hook, not duplicated on re-promote"
+        );
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_precompact() {
+        // issue #1: a promoted main captures a resume snapshot before compaction.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let pc = h["PreCompact"][0].clone();
+        assert_eq!(pc["matcher"], "manual|auto");
+        assert!(pc["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("precompact --main-agent bot"));
+    }
+
+    #[test]
+    fn precompact_hook_is_idempotent_and_demotable() {
+        // The PreCompact command carries --main-agent, so main_settings replaces it idempotently and
+        // demote removes it (both key on --main-agent). Assert one PreCompact after two runs, gone after demote.
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join(".claude")).unwrap();
+        for _ in 0..2 {
+            main_settings(td.path(), "bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        }
+        let s: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let pc = s["hooks"]["PreCompact"].as_array().map_or(0, Vec::len);
+        assert_eq!(pc, 1, "one PreCompact block, not duplicated");
+        let _ = uninstall_main(td.path());
+        let s2: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            s2["hooks"].get("PreCompact").is_none(),
+            "demote removes the PreCompact hook"
+        );
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_sessionstart_sync() {
+        // issue #3: a promoted main must restage its binary on session start (via the launcher --sync),
+        // so /plugin update reaches promoted-main repos. The sync hook sits in the SessionStart block.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let ss = h["SessionStart"][0]["hooks"].as_array().unwrap();
+        let cmds: Vec<&str> = ss.iter().filter_map(|x| x["command"].as_str()).collect();
+        assert!(
+            cmds.iter().any(|c| c.contains("--sync")
+                && c.contains("bin/genesis-memory.js")
+                && c.contains("${CLAUDE_PROJECT_DIR}/.genesis")),
+            "SessionStart must run the launcher --sync on the repo's .genesis, got: {cmds:?}"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| c.contains("inject") && c.contains("--main-agent bot")),
+            "SessionStart still injects for the agent"
+        );
     }
 
     #[test]

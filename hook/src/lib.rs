@@ -16,6 +16,7 @@ pub mod gate;
 pub mod glob;
 pub mod inject;
 pub mod io;
+pub mod precompact;
 pub mod promote_offer;
 pub mod session_pointer;
 pub mod validate;

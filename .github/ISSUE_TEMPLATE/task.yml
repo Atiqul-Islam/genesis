@@ -1,0 +1,60 @@
+name: Task (bug / feature / change)
+description: File a self-contained, sourced issue a zero-context agent can complete. Every field is required.
+title: "<type>: <short summary>"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Standard (hard rule).** Make this issue self-contained and sourced so an autonomous agent with
+        zero prior context can complete it. **Zero speculation:** verify every claim by reading the actual
+        source and cite it; never guess. If a required fact is unknown, **consult the developer-in-charge**
+        rather than inventing it. Do not put credential values or private-repo content in a public issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or wanted, in plain terms.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Cite `path:line` and/or links, verified by reading — NOT inferred.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: For a bug — exact steps + expected vs actual. For a feature, write "N/A".
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-resolution
+    attributes:
+      label: Proposed resolution
+      description: The intended fix/approach (a proposal, not a commitment to build).
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Checkable conditions that mean "done".
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Invariants to respect (fail-open, dormant-by-default, no secrets, cross-platform, …).
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: The exact documents/files an agent must read to complete this.
+    validations:
+      required: true
