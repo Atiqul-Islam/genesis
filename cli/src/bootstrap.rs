@@ -26,6 +26,7 @@ fn gitignore_block() -> String {
         "!.genesis/expertise/",
         "!.genesis/hooks/",
         "!.genesis/memory/",
+        "!.genesis/sessions/",
         ".genesis/**/__pycache__/",
         ".genesis/expertise/.genesis/",
         ".genesis/memory/*.tmp",

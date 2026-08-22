@@ -237,6 +237,32 @@ function main() {
           && ut.indexOf("${CLAUDE_PROJECT_DIR}/.genesis") !== -1);
   }
 
+  // ---- report-bug skill (issue #2): agent -> spin up Sensei -> SendMessage -> add-issue ----
+  const rbSkill = path.join(REPO, "skills", "report-bug", "SKILL.md");
+  check("skills/report-bug/SKILL.md exists (issue #2)", isFile(rbSkill));
+  if (isFile(rbSkill)) {
+    const [rbfm, rbbody] = frontmatter_and_body(rbSkill);
+    const rbkeys = new Set(fm_keys(rbfm));
+    check("report-bug skill declares name + description",
+          ["name", "description"].every((k) => rbkeys.has(k)));
+    const rl = rbbody.toLowerCase();
+    check("report-bug skill spins up Sensei and sends the report (Agent + SendMessage)",
+          rl.indexOf("sensei") !== -1 && rl.indexOf("agent tool") !== -1 && rl.indexOf("sendmessage") !== -1);
+    check("report-bug skill routes filing through the add-issue skill",
+          rl.indexOf("add-issue") !== -1);
+    check("report-bug skill captures a structured report (evidence path:line + severity)",
+          rl.indexOf("path:line") !== -1 && rl.indexOf("severity") !== -1);
+    check("report-bug skill routes security reports privately, not public issues",
+          rl.indexOf("securit") !== -1 && rl.indexOf("privat") !== -1);
+  }
+
+  // ---- add-issue dedup-first (issue #2): check for an existing issue before creating ----
+  const aiSkillPath = path.join(REPO, "skills", "add-issue", "SKILL.md");
+  const aiBody = isFile(aiSkillPath) ? readText(aiSkillPath).toLowerCase() : "";
+  check("add-issue skill checks for an existing issue before creating (dedup-first)",
+        aiBody.indexOf("gh issue list") !== -1 && aiBody.indexOf("--search") !== -1
+        && aiBody.indexOf("only") !== -1 && aiBody.indexOf("duplicate") !== -1);
+
   // ---- issue template + CONTRIBUTING standard (issue #6) ----
   const tmpl = path.join(REPO, ".github", "ISSUE_TEMPLATE", "task.yml");
   check(".github/ISSUE_TEMPLATE/task.yml exists (issue #6)", isFile(tmpl));
@@ -274,6 +300,11 @@ function main() {
           low.indexOf("speculat") !== -1 && low.indexOf("shortcut") !== -1 && low.indexOf("assum") !== -1);
     check("resolve-issue skill: resolving is not building; stop only when complete or on a question",
           low.indexOf("not building") !== -1 && low.indexOf("complete") !== -1 && low.indexOf("question") !== -1);
+    check("resolve-issue skill marks the issue in-progress FIRST (Step 0)",
+          low.indexOf("in-progress") !== -1 || low.indexOf("in progress") !== -1);
+    check("resolve-issue skill CLOSES the issue on completion (Step 5)",
+          low.indexOf("close the issue") !== -1 && low.indexOf("--reason completed") !== -1
+          && low.indexOf("never leave a fully-shipped issue") !== -1);
   }
 
   // ---- add-issue skill (issue #6): author self-contained, sourced, zero-speculation issues ----

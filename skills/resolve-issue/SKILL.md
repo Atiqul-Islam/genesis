@@ -53,7 +53,21 @@ first and leave the issue's status untouched.
 - Deploy ONLY if deployment was confirmed in Step 1; otherwise stop at author-only and report.
 - Report what was done and which requirement each part satisfies.
 
+## Step 5 — Close the issue on the tracker (hard rule)
+
+The task is not done until the issue's tracker status reflects it. When the work is complete AND delivered
+per the Step 1 scope (author-only committed, or released if deployment was in scope):
+
+- CLOSE the issue on the tracker (e.g. `gh issue close <n> --reason completed`) and remove the
+  `in progress` label.
+- Add a closing comment naming HOW it was resolved and WHERE it shipped (commit and/or release version).
+- If the work is only partially done, or blocked on a question, do NOT close — leave it `in progress` and
+  say what remains.
+
+Never leave a fully-shipped issue sitting `in progress`. Marking active (Step 0) and closing on completion
+(this step) are the two mandatory tracker updates that bracket every resolution.
+
 ## Do / Don't
 
-- **Do:** ask first, verify by reading, follow the user, finish completely.
-- **Don't:** speculate, shortcut, assume intent, or treat "resolve" as "build".
+- **Do:** ask first, verify by reading, follow the user, finish completely, close the issue when shipped.
+- **Don't:** speculate, shortcut, assume intent, treat "resolve" as "build", or leave a shipped issue open.

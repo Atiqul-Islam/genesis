@@ -342,11 +342,17 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
     // issue #1: capture a resume snapshot before a context compaction; inject restores it on the next
     // SessionStart (source compact/resume). Scoped to this main agent.
     let precompact = format!("{bin} precompact --main-agent {name}");
+    // issue #9: capture the live transcript into the repo on Stop so it travels; inject restores it on the
+    // target machine. Carries --main-agent so main_settings replaces + demote removes it idempotently.
+    let capture = format!("{bin} capture-session --main-agent {name}");
     let stop = format!(
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
     );
-    let mut stop_hooks = vec![json!({ "type": "command", "command": stop })];
+    let mut stop_hooks = vec![
+        json!({ "type": "command", "command": capture }),
+        json!({ "type": "command", "command": stop }),
+    ];
     if !expertise.is_empty() {
         stop_hooks.push(json!({
             "type": "agent",
@@ -636,6 +642,23 @@ mod tests {
         assert_eq!(
             sync_count, 1,
             "one --sync hook, not duplicated on re-promote"
+        );
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_capture_session() {
+        // issue #9: a promoted main captures its transcript on Stop so it travels for cross-system resume.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let stop = h["Stop"][0]["hooks"].as_array().unwrap();
+        let cmds: Vec<&str> = stop.iter().filter_map(|x| x["command"].as_str()).collect();
+        assert!(
+            cmds.iter()
+                .any(|c| c.contains("capture-session --main-agent bot")),
+            "Stop must capture the session, got: {cmds:?}"
+        );
+        assert!(
+            cmds.iter().any(|c| c.contains("validate . bot")),
+            "validate still present"
         );
     }
 
