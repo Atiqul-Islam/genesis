@@ -31,9 +31,13 @@ knowledge, no "ask the person who wrote it".
 ## Procedure
 
 1. Read the request and every source it names, in full. Verify each fact by reading.
-2. Draft the issue with all seven sections. Leave nothing to tribal knowledge.
-3. Genericize: no credential values, no private-repo/user content in a public issue.
-4. File it (e.g. `gh issue create`), then report the URL.
+2. **Dedup FIRST — check for an existing issue before creating one.** Search the tracker for a matching
+   issue by its key terms, e.g. `gh issue list --repo <owner>/<repo> --state all --search "<key terms>"`.
+   If a matching issue already exists, do NOT create a duplicate — comment on / point to that existing
+   issue instead, and report its URL. Only create a new issue when none matches.
+3. Draft the issue with all seven sections. Leave nothing to tribal knowledge.
+4. Genericize: no credential values, no private-repo/user content in a public issue.
+5. Create it (e.g. `gh issue create`) ONLY if step 2 found no existing match, then report the URL.
 
 ## Do / Don't
 
