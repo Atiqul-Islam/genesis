@@ -226,6 +226,17 @@ function main() {
   // (drift: committed agents/*.md == genesis-cli build-plugin-agents output — now a Rust integration test
   //  in cli/tests/, since the generator is the native genesis-cli binary.)
 
+  // ---- /genesis:update-repo command (issue #3): on-demand restage via launcher --sync ----
+  const updateRepoCmd = path.join(REPO, "commands", "update-repo.md");
+  check("commands/update-repo.md exists (issue #3 on-demand restage)", isFile(updateRepoCmd));
+  if (isFile(updateRepoCmd)) {
+    const ut = readText(updateRepoCmd);
+    check("commands/update-repo.md runs the launcher --sync on the repo's .genesis",
+          ut.indexOf("--sync") !== -1
+          && ut.indexOf("bin/genesis-memory.js") !== -1
+          && ut.indexOf("${CLAUDE_PROJECT_DIR}/.genesis") !== -1);
+  }
+
   // ---- resolve-issue skill (issue #6): interview-then-implement, zero-speculation ----
   const riSkill = path.join(REPO, "skills", "resolve-issue", "SKILL.md");
   check("skills/resolve-issue/SKILL.md exists", isFile(riSkill));
