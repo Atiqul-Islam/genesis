@@ -274,6 +274,11 @@ function main() {
           low.indexOf("speculat") !== -1 && low.indexOf("shortcut") !== -1 && low.indexOf("assum") !== -1);
     check("resolve-issue skill: resolving is not building; stop only when complete or on a question",
           low.indexOf("not building") !== -1 && low.indexOf("complete") !== -1 && low.indexOf("question") !== -1);
+    check("resolve-issue skill marks the issue in-progress FIRST (Step 0)",
+          low.indexOf("in-progress") !== -1 || low.indexOf("in progress") !== -1);
+    check("resolve-issue skill CLOSES the issue on completion (Step 5)",
+          low.indexOf("close the issue") !== -1 && low.indexOf("--reason completed") !== -1
+          && low.indexOf("never leave a fully-shipped issue") !== -1);
   }
 
   // ---- add-issue skill (issue #6): author self-contained, sourced, zero-speculation issues ----
