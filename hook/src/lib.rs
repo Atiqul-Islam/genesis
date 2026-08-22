@@ -10,6 +10,7 @@
 //! / target on a large tree.
 
 pub mod agent;
+pub mod capture_session;
 pub mod cli;
 pub mod enforce_research;
 pub mod gate;
@@ -19,4 +20,5 @@ pub mod io;
 pub mod precompact;
 pub mod promote_offer;
 pub mod session_pointer;
+pub mod session_transfer;
 pub mod validate;

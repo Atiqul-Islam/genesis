@@ -422,6 +422,42 @@ fn precompact_is_dormant_without_a_genesis_agent() {
     );
 }
 
+// ---- capture-session (issue #9) ----
+
+#[test]
+fn capture_session_copies_transcript_into_repo() {
+    let td = tempfile::tempdir().unwrap();
+    let tp = td.path().join("sess-42.jsonl");
+    std::fs::write(
+        &tp,
+        "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n",
+    )
+    .unwrap();
+    let ev = json!({"agent_type":"genesis-engineer","transcript_path":tp.to_str().unwrap()});
+    assert_eq!(
+        run_in(td.path(), &["capture-session"], &ev.to_string()),
+        "",
+        "capture-session emits no decision"
+    );
+    assert!(
+        td.path().join(".genesis/sessions/sess-42.jsonl").is_file(),
+        "transcript captured into the repo"
+    );
+}
+
+#[test]
+fn capture_session_is_dormant_without_a_genesis_agent() {
+    let td = tempfile::tempdir().unwrap();
+    let tp = td.path().join("s.jsonl");
+    std::fs::write(&tp, "x").unwrap();
+    let ev = json!({"transcript_path":tp.to_str().unwrap()}); // no agent_type
+    assert_eq!(run_in(td.path(), &["capture-session"], &ev.to_string()), "");
+    assert!(
+        !td.path().join(".genesis/sessions").exists(),
+        "dormant: nothing captured"
+    );
+}
+
 // ---- validate: reply-format guard (reply-format-guard) ----
 
 #[test]

@@ -37,9 +37,12 @@ pub fn run(args: &[String]) {
     // issue #1: on a post-compaction / resume start, surface the snapshot written by the precompact hook
     // so the agent continues where it left off. Placed high so it survives the CTX cap.
     let resume = build_resume(&ev, &cwd);
+    // issue #9: on a startup/resume start, restore any committed transcript(s) into this machine's Claude
+    // Code store so native `claude -c` / `--resume` works, and notify the user with the exact command.
+    let session_restore = build_session_restore(&ev, &cwd);
     let summary_block = build_summary(&exp_dir, &active, &cwd);
 
-    let mut ctx = format!("{RULES}{required}{resume}{pointers}{summary_block}");
+    let mut ctx = format!("{RULES}{required}{resume}{session_restore}{pointers}{summary_block}");
     if ctx.chars().count() > CTX_CAP {
         ctx = format!("{}\n…(truncated)", cli::take_chars(&ctx, CTX_CAP));
     }
@@ -216,6 +219,30 @@ fn build_resume(ev: &Value, cwd: &Path) -> String {
     )
 }
 
+/// The cross-system resume block (issue #9): on a SessionStart whose `source` is `startup` or `resume`,
+/// restore committed transcripts from `<cwd>/.genesis/sessions/` into this machine's Claude Code store,
+/// and return a notice naming the exact `claude --resume <id>`. Empty on other sources or when nothing
+/// was restored (fail-open).
+fn build_session_restore(ev: &Value, cwd: &Path) -> String {
+    let source = ev.get("source").and_then(Value::as_str).unwrap_or("");
+    if source != "startup" && source != "resume" {
+        return String::new();
+    }
+    let Some(home) = home_dir() else {
+        return String::new();
+    };
+    let cwd_str = cwd.to_string_lossy();
+    let ids = crate::session_transfer::restore(cwd, &home, &cwd_str);
+    crate::session_transfer::resume_notice(&ids)
+}
+
+/// The user's home directory (`HOME`, or `USERPROFILE` on Windows). `None` if neither is set.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 fn build_summary(exp_dir: &str, agent: &str, cwd: &Path) -> String {
     let Some(sp) = find_summary(exp_dir, agent, cwd) else {
         return String::new();
@@ -349,6 +376,42 @@ mod tests {
         // missing snapshot -> empty even on compact (fail-open)
         let empty = tempfile::tempdir().unwrap();
         assert!(build_resume(&json!({"source":"compact"}), empty.path()).is_empty());
+    }
+
+    #[test]
+    fn build_session_restore_only_on_startup_or_resume() {
+        use serde_json::json;
+        let td = tempfile::tempdir().unwrap();
+        let repo = td.path().join("repo");
+        let home = td.path().join("home");
+        std::fs::create_dir_all(repo.join(".genesis/sessions")).unwrap();
+        std::fs::write(repo.join(".genesis/sessions/sess-9.jsonl"), "x").unwrap();
+        // point home_dir() at our temp home for the duration of this test
+        std::env::set_var("HOME", &home);
+
+        let cwd_str = repo.to_string_lossy().to_string();
+        let enc = crate::session_transfer::encode_project_dir(&cwd_str);
+        let placed = home
+            .join(".claude/projects")
+            .join(&enc)
+            .join("sess-9.jsonl");
+
+        // startup -> restores + notice with the resume command
+        let out = build_session_restore(&json!({"source":"startup"}), &repo);
+        assert!(
+            out.contains("claude --resume sess-9"),
+            "notice names the resume command"
+        );
+        assert!(
+            placed.is_file(),
+            "transcript placed into the machine's project dir"
+        );
+        // a non-startup/resume source -> nothing
+        let td2 = tempfile::tempdir().unwrap();
+        let repo2 = td2.path().join("r");
+        std::fs::create_dir_all(repo2.join(".genesis/sessions")).unwrap();
+        std::fs::write(repo2.join(".genesis/sessions/s.jsonl"), "x").unwrap();
+        assert!(build_session_restore(&json!({"source":"compact"}), &repo2).is_empty());
     }
 
     #[test]
