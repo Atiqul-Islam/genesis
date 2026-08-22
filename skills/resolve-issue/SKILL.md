@@ -19,7 +19,14 @@ It is the approach for ALL issues.
   explicit "build/implement" instruction. Confirm the resolution before acting.
 - **Follow the user every step.** Consult the developer-in-charge whenever a needed fact is unknown.
 
-## Step 1 — Interview the user (before doing ANYTHING, including a spec)
+## Step 0 — Mark the issue in-progress FIRST (hard rule)
+
+The moment the user says to START or resolve an issue, update its tracker status BEFORE anything else —
+add the `in progress` label and assign it (and optionally comment that you are starting). Interviewing is
+PART OF starting; asking a clarifying question does NOT defer this status update. Never ask a question
+first and leave the issue's status untouched.
+
+## Step 1 — Interview the user (before doing ANYTHING else, including a spec)
 
 - Gather FULL context about the task: what the issue actually asks, the definition of done, constraints.
 - Establish SCOPE, and ask explicitly: does resolving this involve **deployment** (a release), or author-only?
