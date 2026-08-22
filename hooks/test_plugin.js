@@ -237,6 +237,28 @@ function main() {
           && ut.indexOf("${CLAUDE_PROJECT_DIR}/.genesis") !== -1);
   }
 
+  // ---- issue template + CONTRIBUTING standard (issue #6) ----
+  const tmpl = path.join(REPO, ".github", "ISSUE_TEMPLATE", "task.yml");
+  check(".github/ISSUE_TEMPLATE/task.yml exists (issue #6)", isFile(tmpl));
+  if (isFile(tmpl)) {
+    const tt = readText(tmpl);
+    const SECTIONS = ["Problem", "Evidence", "Reproduction", "Proposed resolution",
+                      "Acceptance criteria", "Constraints", "References"];
+    check("task.yml is a GitHub issue form (name + body)",
+          tt.indexOf("name:") !== -1 && tt.indexOf("body:") !== -1);
+    check("task.yml prompts every required section",
+          SECTIONS.every((s) => tt.indexOf(s) !== -1));
+    check("task.yml demands sourced evidence (path:line, verified — not inferred)",
+          tt.indexOf("path:line") !== -1 && tt.toLowerCase().indexOf("not infer") !== -1);
+    check("task.yml states zero-speculation / consult-the-developer",
+          tt.toLowerCase().indexOf("speculat") !== -1 && tt.toLowerCase().indexOf("consult") !== -1);
+  }
+  const contrib = readText(path.join(REPO, "CONTRIBUTING.md"));
+  check("CONTRIBUTING.md documents the self-contained/sourced issue standard + add-issue skill",
+        contrib.indexOf("self-contained") !== -1 && contrib.indexOf("add-issue") !== -1);
+  check("CONTRIBUTING.md states the no-speculation / consult-the-developer issue rule",
+        contrib.toLowerCase().indexOf("consult") !== -1 && contrib.toLowerCase().indexOf("speculat") !== -1);
+
   // ---- resolve-issue skill (issue #6): interview-then-implement, zero-speculation ----
   const riSkill = path.join(REPO, "skills", "resolve-issue", "SKILL.md");
   check("skills/resolve-issue/SKILL.md exists", isFile(riSkill));

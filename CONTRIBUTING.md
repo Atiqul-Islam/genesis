@@ -230,6 +230,17 @@ auto-runs when the server binary + model are built (`server/target/release` + `s
 
 ## Opening issues
 
+**The issue standard (hard rule).** Every issue must be **self-contained and sourced** so an autonomous
+agent with **zero prior context** can pick it up and complete it — no tribal knowledge, no "ask the person
+who wrote it". File issues with the **`add-issue`** skill (or the `.github/ISSUE_TEMPLATE/task.yml` form),
+which requires these sections: **Problem**, **Evidence** (cite `path:line` and/or links, **verified by
+reading — not inferred**), **Reproduction** (bugs; features write "N/A"), **Proposed resolution**,
+**Acceptance criteria**, **Constraints**, **References** (the exact docs/files an agent must read).
+
+**Zero speculation.** Do not guess or infer — verify every load-bearing claim against a primary source. If
+a required fact is genuinely unknown, **consult the developer-in-charge** (ask in the issue) rather than
+inventing it. Filing an issue is **not** a commitment to build it.
+
 - **Bugs:** include the OS, `node` version (and `rustc`/`cargo` if the memory server is
   involved), the exact command you
   ran, what you expected, and the full output. A minimal reproduction is worth more than a
@@ -237,7 +248,8 @@ auto-runs when the server binary + model are built (`server/target/release` + `s
 - **Features / changes in behavior:** open an issue describing the problem and the intended
   approach *before* writing a large change, so the design can be agreed on first.
 - **Security / credentials:** if you find a committed secret or a vulnerability, report it
-  privately to the maintainer rather than opening a public issue.
+  privately to the maintainer rather than opening a public issue. Never put a credential value or
+  private-repo content in a public issue.
 
 ## Opening pull requests
 
