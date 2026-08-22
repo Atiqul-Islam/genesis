@@ -285,6 +285,17 @@ function main() {
   check("CONTRIBUTING.md states the no-speculation / consult-the-developer issue rule",
         contrib.toLowerCase().indexOf("consult") !== -1 && contrib.toLowerCase().indexOf("speculat") !== -1);
 
+  // ---- /genesis:verbose_status command (issue #5) ----
+  const vsCmd = path.join(REPO, "commands", "verbose_status.md");
+  check("commands/verbose_status.md exists (issue #5)", isFile(vsCmd));
+  if (isFile(vsCmd)) {
+    const vt = readText(vsCmd);
+    check("verbose_status runs the launcher --run-cli verbose status",
+          vt.indexOf("--run-cli verbose status") !== -1 && vt.indexOf("bin/genesis-memory.js") !== -1);
+    check("verbose_status is read-only + passes $ARGUMENTS",
+          vt.toLowerCase().indexOf("read") !== -1 && vt.indexOf("$ARGUMENTS") !== -1);
+  }
+
   // ---- resolve-issue skill (issue #6): interview-then-implement, zero-speculation ----
   const riSkill = path.join(REPO, "skills", "resolve-issue", "SKILL.md");
   check("skills/resolve-issue/SKILL.md exists", isFile(riSkill));
