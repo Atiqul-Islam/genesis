@@ -52,6 +52,13 @@ body:
     validations:
       required: true
   - type: textarea
+    id: propagation
+    attributes:
+      label: Propagation
+      description: How this reaches ALL agents in EVERY repo on the system (and Genesis itself) — per the "updates on open" standard. Name the path (on-open --sync); don't assume it.
+    validations:
+      required: true
+  - type: textarea
     id: references
     attributes:
       label: References
