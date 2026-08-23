@@ -335,8 +335,8 @@ function main() {
           al.indexOf("speculat") !== -1 && al.indexOf("zero-context") !== -1);
     check("add-issue skill: filing is not a commitment to build (resolve != build)",
           al.indexOf("not a commitment") !== -1 || al.indexOf("not building") !== -1);
-    check("add-issue skill requires a system-wide Propagation section (all agents, every repo)",
-          al.indexOf("propagation") !== -1 && al.indexOf("every repo") !== -1 && al.indexOf("all agents") !== -1);
+    check("add-issue skill requires a system-wide Propagation section (every repo)",
+          al.indexOf("propagation") !== -1 && al.indexOf("every repo") !== -1);
   }
 
   console.log("\n" + passed + " passed, " + failed + " failed");

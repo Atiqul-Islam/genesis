@@ -26,9 +26,9 @@ knowledge, no "ask the person who wrote it".
 4. **Proposed resolution** — the intended fix/approach (a proposal, not a commitment).
 5. **Acceptance criteria** — checkable conditions that mean "done".
 6. **Constraints** — invariants to respect (fail-open, dormant-by-default, no secrets, etc.).
-7. **Propagation** — how the change reaches **all agents in every repo on the system** (and Genesis itself in
-   every repo), per the "updates on open" standard. Append this to EVERY issue: a feature/fix is not done
-   until existing agents/repos pick it up on open; name the path (the on-open `--sync`), never assume it.
+7. **Propagation** — how the change reaches **every repo on the system** (Genesis itself, updated in every
+   repo), per the "updates on open" standard. Append this to EVERY issue: a feature/fix is not done until
+   existing repos pick it up on open; name the path (the on-open `--sync`), never assume it.
 8. **References** — the exact documents/files an agent must read to complete it.
 
 ## Procedure
@@ -39,7 +39,7 @@ knowledge, no "ask the person who wrote it".
    If a matching issue already exists, do NOT create a duplicate — comment on / point to that existing
    issue instead, and report its URL. Only create a new issue when none matches.
 3. Draft the issue with all eight sections. Leave nothing to tribal knowledge. ALWAYS include Propagation —
-   every task must state how it reaches all agents in every repo on the system (and Genesis in every repo).
+   every task must state how it reaches every repo on the system (Genesis updated in every repo), on open.
 4. Genericize: no credential values, no private-repo/user content in a public issue.
 5. Create it (e.g. `gh issue create`) ONLY if step 2 found no existing match, then report the URL.
 
