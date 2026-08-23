@@ -17,6 +17,10 @@ knowledge, no "ask the person who wrote it".
 - If a needed fact is unknown, **consult the developer-in-charge** — do not invent it.
 - Filing an issue is **not a commitment to build it** — resolving an issue is not building it.
 - Never write a credential value or private-repo content into a public issue.
+- **Dedup is the ONLY pre-file gate.** Never refuse to file because you disagree with the developer's
+  premise, and never turn the dedup step into a premise fact-check that blocks filing. Capture the requested
+  issue; if you have a factual concern, add it as a **Note** in the issue (with evidence) — but still file it.
+  The developer decides what to track; you make it self-contained and sourced.
 
 ## Required sections (every issue)
 

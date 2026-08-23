@@ -337,6 +337,8 @@ function main() {
           al.indexOf("not a commitment") !== -1 || al.indexOf("not building") !== -1);
     check("add-issue skill requires a system-wide Propagation section (every repo)",
           al.indexOf("propagation") !== -1 && al.indexOf("every repo") !== -1);
+    check("add-issue skill: dedup is the ONLY pre-file gate; never refuse over the premise",
+          al.indexOf("only pre-file gate") !== -1 && al.indexOf("never refuse") !== -1);
   }
 
   console.log("\n" + passed + " passed, " + failed + " failed");
