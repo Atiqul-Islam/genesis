@@ -171,6 +171,27 @@ mod tests {
     }
 
     #[test]
+    fn restore_lands_in_claude_code_dir_for_windows_path() {
+        // END-TO-END regression for the cross-system-resume Windows bug: restore must place the transcript
+        // in the SAME project dir Claude Code uses (every non-alnum -> '-', incl. the drive colon and the
+        // spaces in " - Copy"), or `claude -c` / `--resume` finds nothing. The old encoder produced
+        // `C:-...-repo - Copy` and the transcript never landed where Claude Code looks.
+        let td = tempfile::tempdir().unwrap();
+        let repo = td.path().join("repo");
+        let home = td.path().join("home");
+        std::fs::create_dir_all(repo.join(".genesis/sessions")).unwrap();
+        std::fs::write(repo.join(".genesis/sessions/7d2ff59b.jsonl"), "x").unwrap();
+        let cwd = r"C:\Users\me\ifs-repo - Copy";
+        let ids = restore(&repo, &home, cwd);
+        assert_eq!(ids, vec!["7d2ff59b".to_string()]);
+        assert!(
+            home.join(".claude/projects/C--Users-me-ifs-repo---Copy/7d2ff59b.jsonl")
+                .is_file(),
+            "transcript must land in Claude Code's real project dir for a Windows path"
+        );
+    }
+
+    #[test]
     fn restore_empty_when_no_sessions() {
         let td = tempfile::tempdir().unwrap();
         assert!(restore(&td.path().join("repo"), &td.path().join("home"), "/x").is_empty());
