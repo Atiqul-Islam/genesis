@@ -269,7 +269,7 @@ function main() {
   if (isFile(tmpl)) {
     const tt = readText(tmpl);
     const SECTIONS = ["Problem", "Evidence", "Reproduction", "Proposed resolution",
-                      "Acceptance criteria", "Constraints", "References"];
+                      "Acceptance criteria", "Constraints", "Propagation", "References"];
     check("task.yml is a GitHub issue form (name + body)",
           tt.indexOf("name:") !== -1 && tt.indexOf("body:") !== -1);
     check("task.yml prompts every required section",
@@ -284,6 +284,17 @@ function main() {
         contrib.indexOf("self-contained") !== -1 && contrib.indexOf("add-issue") !== -1);
   check("CONTRIBUTING.md states the no-speculation / consult-the-developer issue rule",
         contrib.toLowerCase().indexOf("consult") !== -1 && contrib.toLowerCase().indexOf("speculat") !== -1);
+
+  // ---- /genesis:verbose_status command (issue #5) ----
+  const vsCmd = path.join(REPO, "commands", "verbose_status.md");
+  check("commands/verbose_status.md exists (issue #5)", isFile(vsCmd));
+  if (isFile(vsCmd)) {
+    const vt = readText(vsCmd);
+    check("verbose_status runs the launcher --run-cli verbose status",
+          vt.indexOf("--run-cli verbose status") !== -1 && vt.indexOf("bin/genesis-memory.js") !== -1);
+    check("verbose_status is read-only + passes $ARGUMENTS",
+          vt.toLowerCase().indexOf("read") !== -1 && vt.indexOf("$ARGUMENTS") !== -1);
+  }
 
   // ---- resolve-issue skill (issue #6): interview-then-implement, zero-speculation ----
   const riSkill = path.join(REPO, "skills", "resolve-issue", "SKILL.md");
@@ -324,6 +335,18 @@ function main() {
           al.indexOf("speculat") !== -1 && al.indexOf("zero-context") !== -1);
     check("add-issue skill: filing is not a commitment to build (resolve != build)",
           al.indexOf("not a commitment") !== -1 || al.indexOf("not building") !== -1);
+    check("add-issue skill requires a system-wide Propagation section (every repo)",
+          al.indexOf("propagation") !== -1 && al.indexOf("every repo") !== -1);
+    check("add-issue skill: dedup is the ONLY pre-file gate; never refuse over the premise",
+          al.indexOf("only pre-file gate") !== -1 && al.indexOf("never refuse") !== -1);
+  }
+
+  // issue #12: the launcher --sync must refresh settings.json hook WIRING (sync-settings), not just binaries.
+  {
+    const launcher = path.join(REPO, "bin", "genesis-memory.js");
+    const lt = isFile(launcher) ? readText(launcher) : "";
+    check("launcher --sync refreshes settings.json hook wiring (calls sync-settings)",
+          lt.indexOf("sync-settings") !== -1);
   }
 
   console.log("\n" + passed + " passed, " + failed + " failed");

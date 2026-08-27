@@ -20,6 +20,7 @@ fn main() {
         "install" => genesis_cli::install::run(&rest),
         "bootstrap" => genesis_cli::bootstrap::run(&rest),
         "sync-gitignore" => genesis_cli::bootstrap::run_sync_gitignore(&rest),
+        "sync-settings" => genesis_cli::render::run_sync_settings(&rest),
         "verbose" => genesis_cli::verbose::run(&rest),
         "update-guard" => genesis_cli::update_guard::run(&rest),
         "build-plugin-agents" => genesis_cli::build_plugin_agents::run(&rest),
@@ -31,8 +32,8 @@ fn main() {
         _ => {
             eprintln!(
                 "genesis-cli: unknown subcommand {sub:?} (expected assemble|bootstrap|sync-gitignore|\
-                 promote|demote|doctor|fix|reconcile|validate|merge|resolve|install|build-plugin-agents|\
-                 capture|store|embed|build-session-agent|verbose|update-guard)"
+                 sync-settings|promote|demote|doctor|fix|reconcile|validate|merge|resolve|install|\
+                 build-plugin-agents|capture|store|embed|build-session-agent|verbose|update-guard)"
             );
             2
         }

@@ -42,7 +42,7 @@ const childProcess = require("child_process");
 
 // The GitHub Release tag (minus the leading "v") to fetch, and the repo. BUMP RELEASE_VERSION per
 // release (same commit as the git tag). This is the single source of truth for which assets to pull.
-const RELEASE_VERSION = "0.2.0-beta.9";
+const RELEASE_VERSION = "0.2.0-beta.10";
 const REPO = "Atiqul-Islam/genesis";
 const SERVER_STEM = "genesis-memory-server";
 const HOOK_STEM = "genesis-hook";
@@ -328,6 +328,19 @@ async function syncRepo(genesisHome) {
       }
     } catch (_e) {
       // ignore — never block on a gitignore heal
+    }
+    // issue #12: refresh the promoted agent's main-thread hook WIRING in .claude/settings.json. New hooks
+    // (issue #9 capture-session, issue #1 precompact, the --sync hook itself) reach an already-promoted
+    // repo ONLY if settings.json is re-merged on update — staging the binary is not enough. Single-sourced
+    // in the Rust cli (`sync-settings` re-runs `main_settings`); a no-op when no agent is promoted here.
+    // Fail-open: a settings refresh must never break session start.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["sync-settings", path.dirname(genesisHome)], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on a settings refresh
     }
     fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
     log("synced " + genesisHome + " -> v" + RELEASE_VERSION);
