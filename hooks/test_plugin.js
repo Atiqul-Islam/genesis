@@ -341,6 +341,14 @@ function main() {
           al.indexOf("only pre-file gate") !== -1 && al.indexOf("never refuse") !== -1);
   }
 
+  // issue #12: the launcher --sync must refresh settings.json hook WIRING (sync-settings), not just binaries.
+  {
+    const launcher = path.join(REPO, "bin", "genesis-memory.js");
+    const lt = isFile(launcher) ? readText(launcher) : "";
+    check("launcher --sync refreshes settings.json hook wiring (calls sync-settings)",
+          lt.indexOf("sync-settings") !== -1);
+  }
+
   console.log("\n" + passed + " passed, " + failed + " failed");
   process.exit(failed ? 1 : 0);
 }

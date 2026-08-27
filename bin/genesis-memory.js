@@ -329,6 +329,19 @@ async function syncRepo(genesisHome) {
     } catch (_e) {
       // ignore — never block on a gitignore heal
     }
+    // issue #12: refresh the promoted agent's main-thread hook WIRING in .claude/settings.json. New hooks
+    // (issue #9 capture-session, issue #1 precompact, the --sync hook itself) reach an already-promoted
+    // repo ONLY if settings.json is re-merged on update — staging the binary is not enough. Single-sourced
+    // in the Rust cli (`sync-settings` re-runs `main_settings`); a no-op when no agent is promoted here.
+    // Fail-open: a settings refresh must never break session start.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["sync-settings", path.dirname(genesisHome)], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on a settings refresh
+    }
     fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
     log("synced " + genesisHome + " -> v" + RELEASE_VERSION);
   } catch (e) {

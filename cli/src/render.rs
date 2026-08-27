@@ -537,6 +537,74 @@ pub fn uninstall_main(target: &Path) -> Option<String> {
     name
 }
 
+/// The promoted agent's name from `<target>/CLAUDE.md`'s managed sentinel, parsed READ-ONLY. `None` if
+/// there is no managed block. Single source for "which agent is promoted here" (issue #12 update path).
+#[must_use]
+pub fn promoted_agent(target: &Path) -> Option<String> {
+    let existing = fsx::read_text(&target.join("CLAUDE.md"))?;
+    let start_prefix = "# >>> genesis agent: ";
+    let si = existing.find(start_prefix)?;
+    let line_end = existing[si..].find('\n').map_or(existing.len(), |n| si + n);
+    let after = existing[si..line_end]
+        .strip_prefix(start_prefix)
+        .unwrap_or("");
+    // the name ends at the first " (" (the "(managed …)" note) or the closing " >>>" sentinel marker
+    let name = after
+        .split(" (")
+        .next()
+        .unwrap_or(after)
+        .trim_end_matches(">>>")
+        .trim()
+        .to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The agent's required expertise from `<gh>/expertise/required.json`; empty on a missing file/key.
+#[must_use]
+pub fn required_expertise(gh: &Path, name: &str) -> Vec<String> {
+    fsx::read_json(&gh.join("expertise").join("required.json"))
+        .and_then(|d| {
+            d.get(name).and_then(Value::as_array).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(ToString::to_string))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Refresh the promoted agent's main-thread hooks in `<target>/.claude/settings.json` to the CURRENT
+/// template (issue #12: the update path must refresh hook WIRING, not just binaries). Detects the agent
+/// from the managed CLAUDE.md block, reads its expertise, and re-runs the idempotent `main_settings`
+/// merge. Returns the settings path, or `None` if no agent is promoted here (no-op).
+#[must_use]
+pub fn sync_settings(target: &Path) -> Option<PathBuf> {
+    let name = promoted_agent(target)?;
+    let gh = target.join(".genesis");
+    let expertise = required_expertise(&gh, &name);
+    let home = portable_home(target, &gh);
+    Some(main_settings(target, &name, &home, &expertise))
+}
+
+/// `genesis-cli sync-settings <target_repo>` — refresh the promoted agent's hook wiring on update.
+pub fn run_sync_settings(args: &[String]) -> i32 {
+    let target = args.first().map_or_else(
+        || std::env::current_dir().unwrap_or_default(),
+        PathBuf::from,
+    );
+    match sync_settings(&target) {
+        Some(p) => println!(
+            "{}",
+            fsx::json_pretty(&json!({"synced_settings": p.to_string_lossy()}))
+        ),
+        None => println!(
+            "{}",
+            fsx::json_pretty(&json!({"synced_settings": Value::Null}))
+        ),
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -787,5 +855,112 @@ mod tests {
 
         // idempotent + safe when nothing is promoted
         assert_eq!(uninstall_main(td.path()), None);
+    }
+
+    // ---- issue #12: sync-settings refreshes the hook WIRING on update ----------------------------
+
+    fn write(p: std::path::PathBuf, s: &str) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, s).unwrap();
+    }
+
+    #[test]
+    fn sync_settings_refreshes_old_wiring_idempotently() {
+        // A repo promoted with the OLD template (inject/gate/validate only) must, on sync-settings, gain
+        // capture-session (Stop), precompact (PreCompact), and --sync (SessionStart) — the current set —
+        // while preserving the user's own hook; and running it twice must be byte-identical.
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write(
+            root.join("CLAUDE.md"),
+            "# Mine\n\n# >>> genesis agent: bot (managed) >>>\npersona\n# <<< genesis agent: bot <<<\n",
+        );
+        write(
+            root.join(".genesis/expertise/required.json"),
+            r#"{"bot":["persona-creation"]}"#,
+        );
+        write(
+            root.join(".claude/settings.json"),
+            r#"{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"x inject y bot --main-agent bot"}]}],"PreToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"user-hook"}]}],"Stop":[{"hooks":[{"type":"command","command":"x validate . bot --main-agent bot"}]}]}}"#,
+        );
+
+        let p = sync_settings(root).expect("agent promoted -> Some");
+        assert!(p.ends_with("settings.json"));
+        let run1 = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+        let _ = sync_settings(root); // AC3/AC6: idempotent
+        let run2 = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+        assert_eq!(run1, run2, "sync-settings is idempotent (byte-identical)");
+
+        let s: Value = serde_json::from_str(&run2).unwrap();
+        let flat = s["hooks"].to_string();
+        assert!(flat.contains("user-hook"), "user hook preserved");
+        assert!(
+            flat.contains("capture-session --main-agent bot"),
+            "capture wired"
+        );
+        assert!(
+            flat.contains("precompact --main-agent bot"),
+            "precompact wired"
+        );
+        assert!(
+            s["hooks"]["PreCompact"].is_array(),
+            "PreCompact event present"
+        );
+        let sync_present = s["hooks"]["SessionStart"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
+            .any(|h| h["command"].as_str().is_some_and(|c| c.contains("--sync")));
+        assert!(sync_present, "--sync added to SessionStart");
+        // AC4: reviewer present because required expertise is non-empty
+        let reviewer = s["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
+            .any(|h| h["type"] == "agent");
+        assert!(reviewer, "reviewer hook present when expertise non-empty");
+    }
+
+    #[test]
+    fn sync_settings_noop_when_not_promoted() {
+        // AC5: no managed CLAUDE.md block -> no agent -> None, settings untouched.
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write(root.join("CLAUDE.md"), "# just mine\n");
+        write(
+            root.join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"user-hook"}]}]}}"#,
+        );
+        let before = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+        assert!(sync_settings(root).is_none(), "not promoted -> None");
+        let after = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+        assert_eq!(before, after, "settings untouched when not promoted");
+    }
+
+    #[test]
+    fn sync_settings_detects_agent_and_omits_reviewer_when_no_expertise() {
+        // AC4 (negative) + agent detection: no required.json -> empty expertise -> no reviewer hook.
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write(
+            root.join("CLAUDE.md"),
+            "# >>> genesis agent: bot (managed) >>>\np\n# <<< genesis agent: bot <<<\n",
+        );
+        write(root.join(".claude/settings.json"), "{}");
+        assert_eq!(promoted_agent(root).as_deref(), Some("bot"));
+        let _ = sync_settings(root).expect("promoted -> Some");
+        let s: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let reviewer = s["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
+            .any(|h| h["type"] == "agent");
+        assert!(!reviewer, "no reviewer when expertise empty");
     }
 }
