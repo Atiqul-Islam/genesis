@@ -9,12 +9,16 @@
 
 use std::path::{Path, PathBuf};
 
-/// Claude Code's project-dir name for a working directory: each path separator (`/` or `\`) becomes `-`.
-/// e.g. `/mnt/c/Users/x/proj` -> `-mnt-c-Users-x-proj`.
+/// Claude Code's project-dir name for a working directory: EVERY non-alphanumeric character becomes `-`
+/// (not just path separators — also `:`, spaces, `()`, `.`, …), with no run-collapsing. Verified against a
+/// real `~/.claude/projects` listing: `/mnt/c/Users/x/proj` -> `-mnt-c-Users-x-proj`,
+/// `C:\Users\me\proj` -> `C--Users-me-proj`, `…repo - Copy` -> `…repo---Copy`. Matching this exactly is
+/// what lets cross-system resume (issue #9) land the transcript where `claude -c` looks — the old
+/// separators-only encoder broke on Windows drive-letters and spaces.
 #[must_use]
 pub fn encode_project_dir(cwd: &str) -> String {
     cwd.chars()
-        .map(|c| if c == '/' || c == '\\' { '-' } else { c })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
 }
 
@@ -106,13 +110,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encode_replaces_separators() {
+    fn encode_matches_claude_code_scheme() {
+        // Claude Code names its project dir by replacing EVERY non-alphanumeric char with '-' (verified
+        // against ~/.claude/projects on a real Windows install): `:`, `\`, `/`, spaces, and `()` each
+        // become '-', with NO run-collapsing. The old code only handled `/`+`\`, so Windows paths (drive
+        // colon, spaces like " - Copy") landed in the WRONG project dir and cross-system resume failed.
         assert_eq!(
             encode_project_dir("/mnt/c/Users/x/proj"),
             "-mnt-c-Users-x-proj"
         );
         assert_eq!(encode_project_dir("/home/user/p"), "-home-user-p");
-        assert_eq!(encode_project_dir(r"C:\Users\me\proj"), "C:-Users-me-proj");
+        // Windows drive + backslashes: `C:\` -> `C--` (colon AND backslash each become '-').
+        assert_eq!(encode_project_dir(r"C:\Users\me\proj"), "C--Users-me-proj");
+        // spaces and parens also become '-', not preserved (the actual bug that broke a copied folder).
+        assert_eq!(
+            encode_project_dir(r"C:\Users\me\repo - Copy"),
+            "C--Users-me-repo---Copy"
+        );
+        assert_eq!(encode_project_dir("New Folder (5)"), "New-Folder--5-");
     }
 
     #[test]
