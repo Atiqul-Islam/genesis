@@ -194,6 +194,12 @@ pub(crate) fn required_for(required_json: Option<&Path>, agent: &str) -> Vec<Str
     let Some(path) = required_json else {
         return Vec::new();
     };
+    // Feature 2: DB-first (expertise.db under the expertise root = required.json's parent); file fallback.
+    if let Some(root) = path.parent() {
+        if let Some(v) = crate::expertise_db::required(root, agent) {
+            return v;
+        }
+    }
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -215,7 +221,14 @@ fn load_manifest(
     manifest_dir: Option<&Path>,
     name: &str,
 ) -> Option<(HashSet<String>, HashSet<String>)> {
-    let path = manifest_dir?.join(format!("{name}.json"));
+    let dir = manifest_dir?;
+    // Feature 2: DB-first (expertise root = manifests dir's parent); file fallback below.
+    if let Some(root) = dir.parent() {
+        if let Some(ids) = crate::expertise_db::manifest_ids(root, name) {
+            return Some(ids);
+        }
+    }
+    let path = dir.join(format!("{name}.json"));
     let text = std::fs::read_to_string(path).ok()?;
     let data = serde_json::from_str::<Value>(&text).ok()?;
     let mut ids = HashSet::new();
@@ -470,6 +483,12 @@ pub(crate) fn manifest_rule_texts(
     let Some(dir) = manifest_dir else {
         return out;
     };
+    // Feature 2: DB-first (expertise root = manifests dir's parent); file fallback below.
+    if let Some(root) = dir.parent() {
+        if let Some(m) = crate::expertise_db::rule_texts(root, name) {
+            return m;
+        }
+    }
     let Ok(text) = std::fs::read_to_string(dir.join(format!("{name}.json"))) else {
         return out;
     };

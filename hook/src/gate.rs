@@ -267,6 +267,25 @@ fn top_rules(expertise: Option<&str>, name: &str, n: usize) -> Vec<String> {
     let Some(root) = expertise else {
         return Vec::new();
     };
+    // Feature 2: DB-first source of checkable (RAW id, raw text) pairs in file order; file fallback. The
+    // surfacing FORMAT (first sentence, 170-char clip, `id: text`) is applied here so both paths match.
+    let pairs = crate::expertise_db::top_checkable(Path::new(root), name)
+        .unwrap_or_else(|| top_checkable_from_file(root, name));
+    let mut out = Vec::new();
+    for (id, raw) in pairs {
+        let first = first_sentence(raw.trim());
+        let clipped = cli::take_chars(first, 170);
+        out.push(format!("{id}: {}", clipped.trim_end()));
+        if out.len() >= n {
+            break;
+        }
+    }
+    out
+}
+
+/// Checkable rules as `(raw id, raw text)` in file order, from the manifest JSON — the file fallback for
+/// `top_rules` when `expertise.db` is absent (parity source for `expertise_db::top_checkable`).
+fn top_checkable_from_file(root: &str, name: &str) -> Vec<(String, String)> {
     let path = Path::new(root)
         .join("manifests")
         .join(format!("{name}.json"));
@@ -282,14 +301,17 @@ fn top_rules(expertise: Option<&str>, name: &str, n: usize) -> Vec<String> {
             if r.get("type").and_then(Value::as_str) != Some("checkable") {
                 continue;
             }
-            let raw = r.get("text").and_then(Value::as_str).unwrap_or("").trim();
-            let first = first_sentence(raw);
-            let id = r.get("id").and_then(Value::as_str).unwrap_or("");
-            let clipped = cli::take_chars(first, 170);
-            out.push(format!("{id}: {}", clipped.trim_end()));
-            if out.len() >= n {
-                break;
-            }
+            let raw = r
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let id = r
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            out.push((id, raw));
         }
     }
     out

@@ -176,6 +176,10 @@ fn declaration_instruction(agent: &str, req: &str, verbose: bool) -> String {
 }
 
 fn required_list(exp_dir: &str, agent: &str) -> Vec<String> {
+    // Feature 2: DB-first (expertise.db under exp_dir); file fallback below.
+    if let Some(v) = crate::expertise_db::required(Path::new(exp_dir), agent) {
+        return v;
+    }
     let path = Path::new(exp_dir).join("required.json");
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
