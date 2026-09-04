@@ -342,6 +342,17 @@ async function syncRepo(genesisHome) {
     } catch (_e) {
       // ignore — never block on a settings refresh
     }
+    // Feature 2 (expertise -> SQLite): rebuild the derived expertise.db from the committed substrate so the
+    // hooks read the current (incl. newly-learned) rules after an update. Regenerable + gitignored; the
+    // readers fall back to the committed JSON/MD if it is stale/absent. Fail-open — never block on it.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["migrate-expertise", path.join(genesisHome, "expertise")], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on the expertise.db rebuild
+    }
     fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
     log("synced " + genesisHome + " -> v" + RELEASE_VERSION);
   } catch (e) {
