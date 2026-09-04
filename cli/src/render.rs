@@ -238,9 +238,10 @@ pub fn reflect_prompt_text(name: &str) -> String {
          present at <path>\". Reason step by step: is there a DURABLE, generalizable rule (an always/never \
          that would prevent a repeat mistake), not a one-off fact? \
          (1) If the USER EXPLICITLY directed it (\"memorize\", \"remember this\", \"save this rule\", \"add a \
-         rule\", \"for the record\"): the directive IS the approval — write it ENFORCED now by running \
-         `.genesis/bin/genesis-cli expertise-learn .genesis/expertise add --expertise <bucket> --text \
-         \"<one-sentence imperative rule>\" --status active --agents {name}` (reuse an existing bucket from \
+         rule\", \"for the record\"): the directive IS the approval — write it ENFORCED now by running (via \
+         the Node launcher, so it works on macOS/Linux/Windows alike) `node .genesis/bin/genesis-memory.js \
+         --run-cli expertise-learn .genesis/expertise add --expertise <bucket> --text \"<one-sentence \
+         imperative rule>\" --status active --agents {name}` (reuse an existing bucket from \
          .genesis/expertise/manifests, or a short new one). \
          (2) Otherwise, if you noticed a durable lesson AUTONOMOUSLY: do NOT enforce it — append ONE JSON \
          line to .genesis/mneme/proposals/pending.jsonl (create the dir) of the form \

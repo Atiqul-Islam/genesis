@@ -44,10 +44,11 @@ both rules in plain English + a 1-line conflict)`. Write it to an HTML file unde
 rule, or **reject**. There is no "approve everything" shortcut for enforced rules.
 
 **6. Apply ONLY what the user approves**, in that candidate's ORIGIN repo, via the deterministic writer —
-never by editing files yourself:
-- approve → `"<repo>/.genesis/bin/genesis-cli" expertise-learn "<repo>/.genesis/expertise" add --expertise <bucket> --text "<rule>" --status active --agents <agent>`
-- replace → add the new rule, then `set-status --expertise <bucket> --id <old-id> --status retired` (history is kept, never deleted).
-- reject → record nothing (or `set-status ... rejected` if a proposal row already exists).
+never by editing files yourself. Invoke it through the Node launcher so it works on macOS/Linux/Windows
+alike (`<repo>` is that repo's root):
+- approve → `node "<repo>/.genesis/bin/genesis-memory.js" --run-cli expertise-learn "<repo>/.genesis/expertise" add --expertise <bucket> --text "<rule>" --status active --agents <agent>`
+- replace → add the new rule, then the same launcher call with `... set-status --expertise <bucket> --id <old-id> --status retired` (history is kept, never deleted).
+- reject → record nothing (or `... set-status ... --status rejected` if a proposal row already exists).
 Each write re-migrates that repo's `expertise.db`, so the rule is enforced there from the next turn.
 
 **7. Cross-repo propagation is a SEPARATE, explicit decision.** A rule learned in repo A is proposed only to
