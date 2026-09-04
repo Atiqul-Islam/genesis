@@ -352,12 +352,22 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
     // issue #9: capture the live transcript into the repo on Stop so it travels; inject restores it on the
     // target machine. Carries --main-agent so main_settings replaces + demote removes it idempotently.
     let capture = format!("{bin} capture-session --main-agent {name}");
+    // vector-completeness-warn: the background skip-detector SPAWNER — reads the Stop event, detaches a
+    // worker that embeds the response vs. the required rules (via the Node launcher) and writes
+    // .genesis/expertise-warnings.md for the next SessionStart. Exits 0 immediately (never blocks Stop).
+    // Carries --main-agent so it is co-marked with the block (idempotent replace + demote removal).
+    let ewarn = format!(
+        "{bin} expertise-warn --agent {name} --expertise {} --launcher {} --main-agent {name}",
+        q(&exp_dir),
+        q(&format!("{home}/bin/genesis-memory.js")),
+    );
     let stop = format!(
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
     );
     let mut stop_hooks = vec![
         json!({ "type": "command", "command": capture }),
+        json!({ "type": "command", "command": ewarn }),
         json!({ "type": "command", "command": stop }),
     ];
     if !expertise.is_empty() {
@@ -745,6 +755,28 @@ mod tests {
             cmds.iter().any(|c| c.contains("validate . bot")),
             "validate still present"
         );
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_expertise_warn() {
+        // vector-completeness-warn AC8: a promoted main wires the expertise-warn Stop command (the
+        // background skip-detector spawner), carrying the launcher path + --main-agent so it detaches a
+        // worker on Stop and is removed on demote with the rest of the block.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let stop = h["Stop"][0]["hooks"].as_array().unwrap();
+        let cmds: Vec<&str> = stop.iter().filter_map(|x| x["command"].as_str()).collect();
+        assert!(
+            cmds.iter().any(|c| c.contains("expertise-warn")
+                && c.contains("--launcher")
+                && c.contains("bin/genesis-memory.js")
+                && c.contains("--main-agent bot")),
+            "Stop must wire expertise-warn with the launcher, got: {cmds:?}"
+        );
+        // still co-hosts validate + capture in the same Stop block
+        assert!(cmds.iter().any(|c| c.contains("validate . bot")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("capture-session --main-agent bot")));
     }
 
     #[test]

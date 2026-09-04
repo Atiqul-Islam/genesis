@@ -40,9 +40,13 @@ pub fn run(args: &[String]) {
     // issue #9: on a startup/resume start, restore any committed transcript(s) into this machine's Claude
     // Code store so native `claude -c` / `--resume` works, and notify the user with the exact command.
     let session_restore = build_session_restore(&ev, &cwd);
+    // vector-completeness-warn AC7: surface the background skip-detector's advisory (rules the last turn
+    // looked like it used but did not declare) and DELETE it (surface-once). Advisory only — never blocks.
+    let warnings = build_warnings(&cwd);
     let summary_block = build_summary(&exp_dir, &active, &cwd);
 
-    let mut ctx = format!("{RULES}{required}{resume}{session_restore}{pointers}{summary_block}");
+    let mut ctx =
+        format!("{RULES}{required}{resume}{session_restore}{warnings}{pointers}{summary_block}");
     if ctx.chars().count() > CTX_CAP {
         ctx = format!("{}\n…(truncated)", cli::take_chars(&ctx, CTX_CAP));
     }
@@ -218,6 +222,25 @@ fn build_resume(ev: &Value, cwd: &Path) -> String {
         "\n\n## Resume — recent session state recovered after compaction\n{shown}\nThe full snapshot is \
          on disk at {disp} — read it to recover anything not shown above."
     )
+}
+
+/// The expertise skip-warning block (vector-completeness-warn AC7): surface the background worker's
+/// `<cwd>/.genesis/expertise-warnings.md` (rules the last turn looked like it used but did not declare) and
+/// DELETE it (surface-once), so it appears exactly at the next SessionStart. Advisory only — never blocks.
+/// Fail-open: a missing/empty/unreadable file injects nothing (and a stale empty file is cleared).
+fn build_warnings(cwd: &Path) -> String {
+    let path = cwd.join(".genesis").join("expertise-warnings.md");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return String::new();
+    };
+    let body = raw.trim();
+    if body.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return String::new();
+    }
+    let out = format!("\n\n{body}");
+    let _ = std::fs::remove_file(&path); // surface-once
+    out
 }
 
 /// The cross-system resume block (issue #9): on a SessionStart whose `source` is `startup` or `resume`,
@@ -413,6 +436,31 @@ mod tests {
         std::fs::create_dir_all(repo2.join(".genesis/sessions")).unwrap();
         std::fs::write(repo2.join(".genesis/sessions/s.jsonl"), "x").unwrap();
         assert!(build_session_restore(&json!({"source":"compact"}), &repo2).is_empty());
+    }
+
+    #[test]
+    fn build_warnings_surfaces_and_clears() {
+        // vector-completeness-warn AC7: SessionStart surfaces the background worker's warnings file into
+        // context and DELETES it (surface-once); a missing/empty file injects nothing.
+        let td = tempfile::tempdir().unwrap();
+        let cwd = td.path();
+        std::fs::create_dir_all(cwd.join(".genesis")).unwrap();
+        let p = cwd.join(".genesis").join("expertise-warnings.md");
+        // missing file -> empty, no panic
+        assert!(build_warnings(cwd).is_empty());
+        std::fs::write(
+            &p,
+            "## Expertise skip-warning (advisory)\n- test-driven-determinism#tdd-1\n",
+        )
+        .unwrap();
+        let out = build_warnings(cwd);
+        assert!(out.contains("skip-warning") && out.contains("tdd-1"));
+        assert!(
+            !p.exists(),
+            "surface-once: the file is deleted after being surfaced"
+        );
+        // second call -> empty (already cleared)
+        assert!(build_warnings(cwd).is_empty());
     }
 
     #[test]

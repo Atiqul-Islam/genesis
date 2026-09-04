@@ -20,7 +20,7 @@ const BULLET_FORMAT_AGENTS: [&str; 1] = ["genesis-engineer"];
 
 /// Parsed APPLIED-EXPERTISE declarations: expertise-name -> [(rule-id, evidence)], plus the set of
 /// bare (rule-id-less) declaration names.
-type Declarations = (HashMap<String, Vec<(String, String)>>, HashSet<String>);
+pub(crate) type Declarations = (HashMap<String, Vec<(String, String)>>, HashSet<String>);
 
 /// Entry point for `genesis-hook validate <root> [agent] [--expertise <root>] [--main-agent <name>]`.
 pub fn run(args: &[String]) {
@@ -187,7 +187,7 @@ fn offenders(files: &[(String, String)]) -> Vec<String> {
     out
 }
 
-fn required_for(required_json: Option<&Path>, agent: &str) -> Vec<String> {
+pub(crate) fn required_for(required_json: Option<&Path>, agent: &str) -> Vec<String> {
     if agent.is_empty() {
         return Vec::new();
     }
@@ -241,7 +241,7 @@ fn load_manifest(
 
 /// `(declarations, bare-set)` or `None` if the transcript existed but was unreadable (fail closed).
 /// A missing/empty transcript yields empty declarations (not `None`) — parity with the Node hook.
-fn parse_declarations(p: &str) -> Option<Declarations> {
+pub(crate) fn parse_declarations(p: &str) -> Option<Declarations> {
     if p.is_empty() || !Path::new(p).is_file() {
         return Some((HashMap::new(), HashSet::new()));
     }
@@ -375,7 +375,7 @@ fn turn_start(lines: &[&str]) -> usize {
 
 /// The concatenated VISIBLE assistant text (text blocks only, not the record channel) of the current turn.
 /// Fail-open: empty string on a missing/unreadable transcript.
-fn current_turn_visible_text(p: &str) -> String {
+pub(crate) fn current_turn_visible_text(p: &str) -> String {
     if p.is_empty() || !Path::new(p).is_file() {
         return String::new();
     }
@@ -462,7 +462,10 @@ fn quote_norm(s: &str) -> String {
 }
 
 /// Rule-id -> rule `text`, from `expertise/manifests/<name>.json` (for the verbatim-quote evidence check).
-fn manifest_rule_texts(manifest_dir: Option<&Path>, name: &str) -> HashMap<String, String> {
+pub(crate) fn manifest_rule_texts(
+    manifest_dir: Option<&Path>,
+    name: &str,
+) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let Some(dir) = manifest_dir else {
         return out;
