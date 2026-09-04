@@ -1,0 +1,20 @@
+# Feature 2 added bundled SQLite (rusqlite `bundled`) to genesis-hook, which compiles C (sqlite3.c) and, on
+# Windows, links the MSVC C runtime. This mirrors server/.cargo/config.toml so the hook binary stays
+# SELF-CONTAINED across platforms — the same proven config the memory-server ships with.
+#
+# Statically link the MSVC C runtime on Windows so the distributed hook binary needs no VC++ redistributable
+# (the dynamic build imports MSVCP140/VCRUNTIME140, absent on a fresh Windows — and a hook that can't load is
+# a SILENTLY disabled guard). Applies to both Windows targets.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# musl C-compile shim for the vendored sqlite3.c (compiled by cc-rs via rusqlite `bundled`). musl lacks the
+# BSD type aliases u_int8_t/u_int16_t/u_int64_t that glibc provides via <sys/types.h>; map them onto the
+# standard uint*_t types (already available via <stdint.h>) so the fully-static musl targets compile. cc-rs
+# reads these target-scoped CFLAGS_<triple> vars, so glibc/macOS/Windows C compiles are untouched.
+[env]
+CFLAGS_x86_64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
+CFLAGS_aarch64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"

@@ -129,35 +129,43 @@ jobs:
           esac
           cargo zigbuild --release --target "$tgt" --bin "$BIN_STEM"
 
+      # Build from the crate dir (working-directory) so cargo discovers hook/.cargo/config.toml — Feature 2
+      # added bundled SQLite to the hook, which needs the same +crt-static (Windows) / musl CFLAGS shim as
+      # the server. (Cargo reads .cargo/config.toml from the CWD upward, not from --manifest-path.)
       - name: Build hook (cargo)
         if: matrix.tool == 'cargo'
         shell: bash
-        run: cargo build --release --target "${{ matrix.target }}" --manifest-path hook/Cargo.toml
+        working-directory: hook
+        run: cargo build --release --target "${{ matrix.target }}"
 
       - name: Build hook (zigbuild)
         if: matrix.tool == 'zigbuild'
         shell: bash
+        working-directory: hook
         run: |
           case "${{ matrix.target }}" in
             *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
             *)           tgt="${{ matrix.target }}" ;;
           esac
-          cargo zigbuild --release --target "$tgt" --manifest-path hook/Cargo.toml
+          cargo zigbuild --release --target "$tgt"
 
+      # Likewise for cli (bundled SQLite + sqlite-vec.c); build from cli/ so cli/.cargo/config.toml applies.
       - name: Build cli (cargo)
         if: matrix.tool == 'cargo'
         shell: bash
-        run: cargo build --release --target "${{ matrix.target }}" --manifest-path cli/Cargo.toml
+        working-directory: cli
+        run: cargo build --release --target "${{ matrix.target }}"
 
       - name: Build cli (zigbuild)
         if: matrix.tool == 'zigbuild'
         shell: bash
+        working-directory: cli
         run: |
           case "${{ matrix.target }}" in
             *-linux-gnu) tgt="${{ matrix.target }}.2.17" ;;
             *)           tgt="${{ matrix.target }}" ;;
           esac
-          cargo zigbuild --release --target "$tgt" --manifest-path cli/Cargo.toml
+          cargo zigbuild --release --target "$tgt"
 
       - name: Collect + rename all binaries to platform-suffixed asset names
         id: assets
