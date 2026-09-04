@@ -145,11 +145,11 @@ fn declaration_instruction(agent: &str, req: &str, verbose: bool) -> String {
             "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {req}. Each has \
              a rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
              finishing, declare the governing rules you actually applied — ONE LINE PER RULE in your \
-             reply, carrying evidence:\n  APPLIED-EXPERTISE: <name>#<rule-id> — <evidence>\nwhere \
-             <evidence> is the file the rule is embodied in (e.g. release-manager/CLAUDE.md) or a short \
-             verbatim quote from your output. The Stop hook (validate) verifies each citation: a bare \
-             `APPLIED-EXPERTISE: <name>` with no rule-id, a rule-id not in the manifest, or evidence \
-             pointing to a nonexistent file / a quote absent from your work all BLOCK finishing. Cite \
+             reply:\n  APPLIED-EXPERTISE: <name>#<rule-id> — <verbatim quote of the rule's text>\nThe \
+             evidence MUST be a verbatim snippet (>= 20 chars) of THAT rule's own `text` from the \
+             manifest — you cannot quote a rule you did not read. The Stop hook (validate) verifies each \
+             citation: a bare `APPLIED-EXPERTISE: <name>` with no rule-id, a rule-id not in the \
+             manifest, or evidence that is NOT a verbatim quote of the rule all BLOCK finishing. Cite \
              at least the rules you truly used (a token gesture fails). (To stop showing these in \
              replies, run /genesis:verbose_deactivate {agent}.)"
         )
@@ -159,11 +159,12 @@ fn declaration_instruction(agent: &str, req: &str, verbose: bool) -> String {
              a rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
              finishing, RECORD the governing rules you actually applied by WRITING them to \
              `.genesis/applied-expertise.jsonl` — one line per rule, format \
-             `APPLIED-EXPERTISE: <name>#<rule-id> — <evidence>` (evidence = the file the rule is \
-             embodied in, or a short verbatim quote from your output). Do NOT print these lines in your \
+             `APPLIED-EXPERTISE: <name>#<rule-id> — <verbatim quote of the rule's text>` (evidence MUST \
+             be a verbatim snippet, >= 20 chars, of THAT rule's own `text` from the manifest — you \
+             cannot quote a rule you did not read). Do NOT print these lines in your \
              reply; they are recorded, not displayed. The Stop hook (validate) reads that file and \
-             verifies each citation: a rule-id not in the manifest, or evidence pointing to a \
-             nonexistent file / a quote absent from your work, BLOCKS finishing. Record at least the \
+             verifies each citation: a rule-id not in the manifest, or evidence that is not a verbatim \
+             quote of the rule, BLOCKS finishing. Record at least the \
              rules you truly used (a token gesture fails). (To show these in replies, run \
              /genesis:verbose_activate {agent}.)"
         )

@@ -326,12 +326,13 @@ fn validate_allows_when_declared_via_quiet_record_channel() {
     // `applied-expertise.jsonl` (a Write tool_use) — with NO declarations in visible prose — finishes
     // exactly as if it had printed them. mneme requires memory-management + expertise-application.
     let td = tempfile::tempdir().unwrap();
-    let recorded = "APPLIED-EXPERTISE: memory-management#mm-1 — applied\n\
-         APPLIED-EXPERTISE: memory-management#mm-2 — applied\n\
-         APPLIED-EXPERTISE: memory-management#mm-3 — applied\n\
-         APPLIED-EXPERTISE: expertise-application#ea-1 — applied\n\
-         APPLIED-EXPERTISE: expertise-application#ea-2 — applied\n\
-         APPLIED-EXPERTISE: expertise-application#ea-3 — applied";
+    // Evidence must be a VERBATIM quote of each rule's text (verbatim-rule-quote check).
+    let recorded = "APPLIED-EXPERTISE: memory-management#mm-1 — Model memory as a six-phase lifecycle\n\
+         APPLIED-EXPERTISE: memory-management#mm-2 — The single most important correctness feature\n\
+         APPLIED-EXPERTISE: memory-management#mm-3 — The vector DB stays the recall engine\n\
+         APPLIED-EXPERTISE: expertise-application#ea-1 — Decompose expertise into scoped\n\
+         APPLIED-EXPERTISE: expertise-application#ea-2 — Compile each rule into a bucket\n\
+         APPLIED-EXPERTISE: expertise-application#ea-3 — Force the agent to CITE the governing";
     let human = json!({"type":"user","message":{"role":"user","content":"do it"}});
     let rec = json!({"type":"assistant","message":{"content":[
         {"type":"text","text":"Done — declarations recorded quietly."},

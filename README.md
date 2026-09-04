@@ -80,7 +80,7 @@ Each item below is backed by a file in this repo, named so you can check it.
 - **A team of specialists, not a prompt template.** Coordination (Sensei), authoring (Method), and memory (Mneme) are separate roles with separate tools; Method is test-first and ships nothing untested.
   *Proof:* `agents/sensei.md`, `agents/method.md`, `agents/mneme.md`, `skills/build-agent/SKILL.md`.
 
-- **Enforced expertise (fail-closed).** Every agent is required to load named expertise and, before it can end a turn, declare which rules it applied. The declaration is checked against a rule manifest, and the cited evidence is spot-checked against the files the agent produced — a fabricated rule id or made-up evidence blocks the turn.
+- **Enforced expertise (fail-closed).** Every agent is required to load named expertise and, before it can end a turn, declare which rules it applied. The declaration is checked against a rule manifest, and the cited evidence must be a **verbatim quote of the rule's own text** — you cannot quote a rule you did not read, so a fabricated rule id or non-quote evidence blocks the turn.
   *Proof:* the `genesis-hook` binary (`validate`), `expertise/required.json`, `expertise/manifests/`.
 
 - **Deterministic house rules.** A pre-write gate blocks any edit that contains a banned phrase, a credential value, or that exceeds the persona/behavior/`CLAUDE.md` line budget — enforced by regex at the moment of writing, not by trusting the model to remember.

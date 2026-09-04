@@ -2,8 +2,8 @@
 //!
 //! Faithful port of `hooks/validate.js`. Refuses to FINISH while a checkable rule is still violated,
 //! OR while the agent never *credibly* declared it applied its required expertise. Three enforcement
-//! layers: (1) checkable-rule offenders in produced files; (2) evidence-carrying declaration
-//! integrity (real rule-ids, coverage floor, evidence spot-check); (3) artifact spot-check.
+//! layers: (1) checkable-rule offenders in produced files; (2) declaration integrity — real rule-ids,
+//! a coverage floor, and evidence that is a VERBATIM quote of the rule's own text (forces reading).
 //! Fail-closed; guards an infinite block loop via `stop_hook_active`. Self-guards on the active agent.
 
 use crate::{agent, cli, glob, io};
@@ -104,7 +104,6 @@ pub fn run(args: &[String]) {
                     &required,
                     &decls,
                     &bare,
-                    &files,
                 ));
             }
         }
@@ -462,49 +461,45 @@ fn quote_norm(s: &str) -> String {
         .to_lowercase()
 }
 
-fn basename(p: &str) -> &str {
-    p.rsplit('/').next().unwrap_or(p)
-}
-
-/// Spot-check one evidence string. Returns a violation string if verifiably fabricated, else `None`.
-fn check_evidence(
-    evid: &str,
-    keys: &[String],
-    blob_norm: &str,
-    pathish: &Regex,
-    quoted: &Regex,
-) -> Option<String> {
-    if let Some(m) = pathish.find(evid) {
-        let tok = m.as_str().replace('\\', "/");
-        let base = basename(&tok);
-        let ok = Path::new(&tok).is_file()
-            || keys.iter().any(|k| {
-                let kk = k.replace('\\', "/");
-                kk.ends_with(&tok) || basename(&kk) == base
-            });
-        if !ok {
-            return Some(format!(
-                "evidence points to \"{tok}\" but no such produced file exists"
-            ));
-        }
-        return None;
-    }
-    if let Some(caps) = quoted.captures(evid) {
-        let g = (1..=3)
-            .filter_map(|i| caps.get(i))
-            .map(|m| m.as_str())
-            .find(|s| !s.is_empty());
-        if let Some(g) = g {
-            let q = quote_norm(g);
-            if !q.is_empty() && !blob_norm.contains(&q) {
-                let clip: String = q.chars().take(40).collect();
-                return Some(format!(
-                    "quoted evidence \"{clip}…\" does not appear in any produced artifact"
-                ));
+/// Rule-id -> rule `text`, from `expertise/manifests/<name>.json` (for the verbatim-quote evidence check).
+fn manifest_rule_texts(manifest_dir: Option<&Path>, name: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(dir) = manifest_dir else {
+        return out;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join(format!("{name}.json"))) else {
+        return out;
+    };
+    let Ok(data) = serde_json::from_str::<Value>(&text) else {
+        return out;
+    };
+    if let Some(rules) = data.get("rules").and_then(Value::as_array) {
+        for r in rules {
+            let id = r
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase();
+            let t = r.get("text").and_then(Value::as_str).unwrap_or("");
+            if !id.is_empty() && !t.is_empty() {
+                out.insert(id, t.to_string());
             }
         }
     }
-    None
+    out
+}
+
+/// Minimum normalized length of a rule quote that counts as evidence (blocks trivial matches).
+const MIN_RULE_QUOTE: usize = 20;
+
+/// True if `evid` contains a verbatim (normalized, >= `MIN_RULE_QUOTE` chars) snippet of `rule_text`.
+/// Forces the agent to have READ the rule — you cannot quote what you did not open. Deterministic, no LLM.
+fn quote_is_from_rule(evid: &str, rule_text: &str) -> bool {
+    let stripped = evid
+        .trim()
+        .trim_matches(|c| c == '"' || c == '`' || c == '\'');
+    let cand = quote_norm(stripped);
+    cand.chars().count() >= MIN_RULE_QUOTE && quote_norm(rule_text).contains(&cand)
 }
 
 fn verify_declaration(
@@ -512,19 +507,7 @@ fn verify_declaration(
     required: &[String],
     decls: &HashMap<String, Vec<(String, String)>>,
     bare: &HashSet<String>,
-    files: &[(String, String)],
 ) -> Vec<String> {
-    let pathish =
-        Regex::new(r"(?i)[A-Za-z0-9_./\\-]+\.(?:md|jsonc?|toml|ya?ml|txt|py|js|ts|rs|cfg|ini)");
-    let quoted = Regex::new(r#""([^"]{8,})"|`([^`]{8,})`|'([^']{8,})'"#);
-    let keys: Vec<String> = files.iter().map(|(k, _)| k.clone()).collect();
-    let blob_norm = quote_norm(
-        &files
-            .iter()
-            .map(|(_, v)| v.as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
     let empty: Vec<(String, String)> = Vec::new();
 
     let mut reasons = Vec::new();
@@ -545,7 +528,7 @@ fn verify_declaration(
             reasons.push(format!(
                 "You did not credibly declare applying '{name}'.{hint} Re-read expertise/{name}.md, \
                  then emit one line per governing rule you applied: `APPLIED-EXPERTISE: {name}#<rule-id> \
-                 — <evidence>` (evidence = the file it's embodied in, or a short quote from it)."
+                 — <evidence>` (evidence = a VERBATIM quote of that rule's own text from the manifest)."
             ));
             continue;
         }
@@ -582,15 +565,20 @@ fn verify_declaration(
                 good.len()
             ));
         }
-        // (c) evidence spot-check
-        if let (Ok(pathish), Ok(quoted)) = (&pathish, &quoted) {
-            for (rid, evid) in entries {
-                if !all_ids.contains(rid) {
-                    continue;
-                }
-                if let Some(v) = check_evidence(evid, &keys, &blob_norm, pathish, quoted) {
-                    reasons.push(format!("'{name}#{rid}': {v}."));
-                }
+        // (c) evidence = a VERBATIM quote of the rule's own text (forces reading; deterministic, no LLM).
+        let texts = manifest_rule_texts(manifest_dir, name);
+        for (rid, evid) in entries {
+            if !all_ids.contains(rid) {
+                continue;
+            }
+            let Some(rule_text) = texts.get(rid) else {
+                continue; // tolerant: a rule with no text can't be quote-checked
+            };
+            if !quote_is_from_rule(evid, rule_text) {
+                reasons.push(format!(
+                    "'{name}#{rid}': evidence must be a VERBATIM quote (>= {MIN_RULE_QUOTE} chars) from the \
+                     rule's text — read expertise/manifests/{name}.json and quote rule {rid}."
+                ));
             }
         }
     }
@@ -784,32 +772,51 @@ mod tests {
         assert!(d2.is_empty());
     }
 
+    // ---- verbatim rule-quote evidence (spec: test/specs/verbatim-rule-quote-evidence.md) ----------
+
     #[test]
-    fn check_evidence_detects_fabricated_path_and_quote() {
-        let pathish =
-            Regex::new(r"(?i)[A-Za-z0-9_./\\-]+\.(?:md|jsonc?|toml|ya?ml|txt|py|js|ts|rs|cfg|ini)")
-                .unwrap();
-        let quoted = Regex::new(r#""([^"]{8,})"|`([^`]{8,})`|'([^']{8,})'"#).unwrap();
-        let keys = vec!["release-manager/CLAUDE.md".to_string()];
-        let blob = quote_norm("the persona says be terse and skeptical always");
-        // real path -> ok
+    fn quote_is_from_rule_matches_only_real_substrings() {
+        let rule = "always read every relevant file fully before acting";
         assert!(
-            check_evidence("release-manager/CLAUDE.md", &keys, &blob, &pathish, &quoted).is_none()
+            quote_is_from_rule("read every relevant file fully", rule),
+            "a real >=20-char substring passes"
         );
-        // fabricated path -> violation
-        assert!(check_evidence("ghost/missing.md", &keys, &blob, &pathish, &quoted).is_some());
-        // present quote -> ok
-        assert!(check_evidence(
-            r#""be terse and skeptical""#,
-            &keys,
-            &blob,
-            &pathish,
-            &quoted
-        )
-        .is_none());
-        // absent quote -> violation
         assert!(
-            check_evidence(r#""this text is nowhere""#, &keys, &blob, &pathish, &quoted).is_some()
+            quote_is_from_rule("`read every relevant file fully`", rule),
+            "surrounding backticks are ignored"
+        );
+        assert!(
+            !quote_is_from_rule("this snippet is nowhere in that rule", rule),
+            "text not in the rule is rejected"
+        );
+        assert!(
+            !quote_is_from_rule("read", rule),
+            "too-short snippet rejected"
+        );
+        assert!(
+            !quote_is_from_rule("/x/expertise/foo.md", rule),
+            "a file path is rejected (fixes the trivial-pass gap)"
+        );
+    }
+
+    #[test]
+    fn manifest_rule_texts_maps_id_to_text() {
+        let td = tempfile::tempdir().unwrap();
+        let mdir = td.path().join("manifests");
+        std::fs::create_dir_all(&mdir).unwrap();
+        std::fs::write(
+            mdir.join("foo.json"),
+            r#"{"rules":[{"id":"foo-1","text":"quote me exactly from the rule text"},{"id":"foo-2","text":"another rule statement"}]}"#,
+        )
+        .unwrap();
+        let m = manifest_rule_texts(Some(&mdir), "foo");
+        assert_eq!(
+            m.get("foo-1").map(String::as_str),
+            Some("quote me exactly from the rule text")
+        );
+        assert_eq!(
+            m.get("foo-2").map(String::as_str),
+            Some("another rule statement")
         );
     }
 }
