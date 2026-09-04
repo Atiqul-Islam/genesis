@@ -1,0 +1,20 @@
+# genesis-cli bundles SQLite (rusqlite `bundled`) + the vendored sqlite-vec.c, and Feature 2 makes it a
+# RUNTIME dependency (migrate-expertise on `--sync`, expertise-learn from the reflection loop) — so its
+# binary must be SELF-CONTAINED on every platform, exactly like the memory-server. This mirrors
+# server/.cargo/config.toml.
+#
+# Statically link the MSVC C runtime on Windows so the distributed cli binary needs no VC++ redistributable
+# (the dynamic build imports MSVCP140/VCRUNTIME140, absent on a fresh Windows). Applies to both Windows targets.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# musl C-compile shim for the vendored sqlite-vec.c (and sqlite3.c): musl lacks the BSD type aliases
+# u_int8_t/u_int16_t/u_int64_t that glibc provides via <sys/types.h>; map them onto the standard uint*_t
+# types so the fully-static musl targets compile. cc-rs reads these target-scoped CFLAGS_<triple> vars, so
+# glibc/macOS/Windows C compiles are untouched.
+[env]
+CFLAGS_x86_64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
+CFLAGS_aarch64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
