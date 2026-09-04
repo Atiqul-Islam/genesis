@@ -275,8 +275,15 @@ pub fn frontmatter(
         );
     }
 
+    // genesis-default-ultracode: Mneme is a SUBAGENT, so it can't take session-level ultracode — pin it
+    // to xhigh via the `effort:` frontmatter field. Other agents get ultracode at the repo (settings.json).
+    let effort_line = if name == "mneme" {
+        "effort: xhigh\n"
+    } else {
+        ""
+    };
     format!(
-        "---\nname: {name}\ndescription: {}\ntools: {}\n{skills_line}hooks:\n  SessionStart:\n    - matcher: \"startup|resume|compact\"\n      hooks:\n        - type: command\n{}{pretooluse}{stop_hooks}---\n",
+        "---\nname: {name}\ndescription: {}\ntools: {}\n{effort_line}{skills_line}hooks:\n  SessionStart:\n    - matcher: \"startup|resume|compact\"\n      hooks:\n        - type: command\n{}{pretooluse}{stop_hooks}---\n",
         Value::String(meta.description.clone()),
         meta.tools.join(", "),
         yaml_cmd(&inject),
@@ -345,12 +352,22 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
     // issue #9: capture the live transcript into the repo on Stop so it travels; inject restores it on the
     // target machine. Carries --main-agent so main_settings replaces + demote removes it idempotently.
     let capture = format!("{bin} capture-session --main-agent {name}");
+    // vector-completeness-warn: the background skip-detector SPAWNER — reads the Stop event, detaches a
+    // worker that embeds the response vs. the required rules (via the Node launcher) and writes
+    // .genesis/expertise-warnings.md for the next SessionStart. Exits 0 immediately (never blocks Stop).
+    // Carries --main-agent so it is co-marked with the block (idempotent replace + demote removal).
+    let ewarn = format!(
+        "{bin} expertise-warn --agent {name} --expertise {} --launcher {} --main-agent {name}",
+        q(&exp_dir),
+        q(&format!("{home}/bin/genesis-memory.js")),
+    );
     let stop = format!(
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
     );
     let mut stop_hooks = vec![
         json!({ "type": "command", "command": capture }),
+        json!({ "type": "command", "command": ewarn }),
         json!({ "type": "command", "command": stop }),
     ];
     if !expertise.is_empty() {
@@ -420,6 +437,12 @@ pub fn main_settings(target: &Path, name: &str, home: &str, expertise: &[String]
             }
             hooks.insert(ev.clone(), json!(kept));
         }
+    }
+    // genesis-default-ultracode: a promoted main starts its sessions in ultracode (xhigh effort + workflow
+    // planning). Claude Code READS this key but never writes it, so a user's in-session `/effort` override
+    // survives. Takes precedence over effortLevel/modelSettings (docs: settings-reference#ultracode).
+    if let Some(o) = s.as_object_mut() {
+        o.insert("ultracode".to_string(), json!(true));
     }
     let _ = fsx::write_text(&p, &fsx::json_pretty(&s));
     p
@@ -524,6 +547,10 @@ pub fn demote_settings(target: &Path) {
         if let Some(o) = s.as_object_mut() {
             o.remove("hooks");
         }
+    }
+    // genesis-default-ultracode: remove the managed `ultracode` key on demote (inverse of main_settings).
+    if let Some(o) = s.as_object_mut() {
+        o.remove("ultracode");
     }
     let _ = fsx::write_text(&p, &fsx::json_pretty(&s));
 }
@@ -731,6 +758,28 @@ mod tests {
     }
 
     #[test]
+    fn main_thread_hooks_wire_expertise_warn() {
+        // vector-completeness-warn AC8: a promoted main wires the expertise-warn Stop command (the
+        // background skip-detector spawner), carrying the launcher path + --main-agent so it detaches a
+        // worker on Stop and is removed on demote with the rest of the block.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let stop = h["Stop"][0]["hooks"].as_array().unwrap();
+        let cmds: Vec<&str> = stop.iter().filter_map(|x| x["command"].as_str()).collect();
+        assert!(
+            cmds.iter().any(|c| c.contains("expertise-warn")
+                && c.contains("--launcher")
+                && c.contains("bin/genesis-memory.js")
+                && c.contains("--main-agent bot")),
+            "Stop must wire expertise-warn with the launcher, got: {cmds:?}"
+        );
+        // still co-hosts validate + capture in the same Stop block
+        assert!(cmds.iter().any(|c| c.contains("validate . bot")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("capture-session --main-agent bot")));
+    }
+
+    #[test]
     fn main_thread_hooks_wire_precompact() {
         // issue #1: a promoted main captures a resume snapshot before compaction.
         let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
@@ -812,6 +861,91 @@ mod tests {
     fn json_dump_ascii_escapes_nonascii() {
         let v = json!({"_doc": "em—dash"});
         assert!(json_dump_ascii(&v).contains("em\\u2014dash"));
+    }
+
+    // ---- genesis-default-ultracode (spec: test/specs/genesis-default-ultracode.md) --------------
+
+    #[test]
+    fn mneme_frontmatter_pins_xhigh_effort() {
+        // Mneme is a SUBAGENT, so it can't get session-level ultracode; it is pinned to xhigh via the
+        // `effort:` frontmatter field. Every OTHER agent gets ultracode at the repo level (settings.json)
+        // and carries no effort pin.
+        let m = builtin_meta("mneme").unwrap();
+        let fm = frontmatter(
+            "mneme",
+            &m,
+            "${CLAUDE_PROJECT_DIR}/.genesis",
+            &[],
+            &m.expertise,
+        );
+        assert!(
+            fm.contains("effort: xhigh"),
+            "mneme frontmatter pins xhigh effort"
+        );
+        let mm = builtin_meta("method").unwrap();
+        let fm2 = frontmatter(
+            "method",
+            &mm,
+            "${CLAUDE_PROJECT_DIR}/.genesis",
+            &[],
+            &mm.expertise,
+        );
+        assert!(
+            !fm2.contains("effort:"),
+            "non-mneme agents carry no effort pin"
+        );
+    }
+
+    #[test]
+    fn main_settings_sets_ultracode_default() {
+        // A promoted Genesis main starts its sessions in ultracode: `{"ultracode": true}` at the top level
+        // of the repo's settings.json (Claude Code reads but never writes it). Idempotent; preserves the
+        // user's own keys.
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join(".claude")).unwrap();
+        std::fs::write(
+            td.path().join(".claude/settings.json"),
+            r#"{"env":{"FOO":"bar"}}"#,
+        )
+        .unwrap();
+        for _ in 0..2 {
+            main_settings(td.path(), "bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        }
+        let s: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s["ultracode"], Value::Bool(true), "ultracode:true set");
+        assert_eq!(s["env"]["FOO"], "bar", "user's own settings preserved");
+    }
+
+    #[test]
+    fn demote_removes_ultracode() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join(".claude")).unwrap();
+        std::fs::write(td.path().join("CLAUDE.md"), "# mine\n").unwrap();
+        std::fs::write(td.path().join(".claude/settings.json"), "{}").unwrap();
+        let _ = install_as_main(
+            td.path(),
+            "bot",
+            "${CLAUDE_PROJECT_DIR}/.genesis",
+            &[],
+            "PERSONA",
+        );
+        let s1: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s1["ultracode"], Value::Bool(true), "install sets ultracode");
+        let _ = uninstall_main(td.path());
+        let s2: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            s2.get("ultracode").is_none(),
+            "demote removes the ultracode key"
+        );
     }
 
     // demote is the exact inverse of install-as-main: it removes ONLY genesis's block + main-thread hooks,

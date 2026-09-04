@@ -415,7 +415,7 @@
           <div class="rows">
             <div class="row"><b>inject</b><span>Hands it the rules at the start of every session.</span></div>
             <div class="row"><b>gate</b><span>Blocks the write itself — a banned phrase, a password, an over-long file.</span></div>
-            <div class="row"><b>validate</b><span>Won't let it finish until it cites which rules it applied — and the evidence matches the files it actually wrote.</span></div>
+            <div class="row"><b>validate</b><span>Won't let it finish until it cites which rules it applied — and the evidence is a verbatim quote of the rule it cites.</span></div>
             <div class="row"><b>review</b><span>A separate, faster model reads the artifacts and the rule manifests itself — and can only block, never bless.</span></div>
           </div>
           <p class="p-tech">one native binary — a check costs 2–10 ms, not a Node process per tool call · fail-closed · a fabricated rule-id or invented evidence blocks the turn</p>
@@ -528,7 +528,7 @@
         <p>Refuses to assemble a new agent unless the expertise-research step actually ran. <b>Resume-safe:</b> it scans sibling transcripts and writes a durable marker, so a compaction can't make confirmed research invisible.</p>
         <span class="where">PreToolUse on Bash · Sensei-scoped · built-in agents exempt</span></div></div>
       <div class="fn"><code>validate</code><div>
-        <p>Won't let the agent finish. It must cite the rules it applied — real ids from the manifest, at least three, with evidence that resolves to a file it actually produced or a quote that appears in one. Fabricate any of it and the turn is blocked.</p>
+        <p>Won't let the agent finish. It must cite the rules it applied — real ids from the manifest, at least three, with evidence that is a verbatim quote of each rule's own text. Fabricate any of it and the turn is blocked.</p>
         <span class="where">Stop / SubagentStop · fail-closed · a 21,000-file tree checks in 0.55 s</span></div></div>
       <div class="fn"><code>session-pointer</code><div>
         <p>Records the live session id so "copy my current session into an agent" knows which session to capture. Fails open and silent — it must never disturb a session.</p>
@@ -772,7 +772,7 @@
         <div class="mini"><b>It won't decide for you</b><p>Single agent or a team, subagent or main Claude, what the agent must know — Sensei asks and waits. Tell it "you decide" and it will still put the choice back to you.</p></div>
         <div class="mini"><b>It won't skip the research</b><p>A hook blocks assembly unless the expertise step ran. Being in a hurry is not an accepted reason.</p></div>
         <div class="mini"><b>It won't ship untested</b><p>Method writes the tests before the agent and returns only when they pass. Ask it to skip them and it refuses.</p></div>
-        <div class="mini"><b>It won't let an agent finish quietly</b><p>An agent must cite the rules it applied, with evidence that resolves to something it actually wrote. Fabricate a rule id and the turn is blocked.</p></div>
+        <div class="mini"><b>It won't let an agent finish quietly</b><p>An agent must cite the rules it applied, with evidence that verbatim-quotes the rule it cites. Fabricate a rule id and the turn is blocked.</p></div>
       </div>
     </section>
 

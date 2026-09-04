@@ -37,8 +37,16 @@ fn plugin_frontmatter(
     } else {
         format!("skills: {}\n", skills.join(", "))
     };
+    // genesis-default-ultracode: Mneme is a subagent, so it can't take session ultracode — pin it to xhigh
+    // via the `effort:` frontmatter field (supported; not in the plugin-blocked set). Others get ultracode
+    // at the repo level (settings.json) as promoted mains.
+    let effort_line = if name == "mneme" {
+        "effort: xhigh\n"
+    } else {
+        ""
+    };
     format!(
-        "---\nname: {name}\ndescription: {}\ntools: {}\n{skills_line}---\n",
+        "---\nname: {name}\ndescription: {}\ntools: {}\n{effort_line}{skills_line}---\n",
         Value::String(description.to_string()),
         tools.join(", "),
     )
@@ -95,4 +103,26 @@ pub fn run(args: &[String]) -> i32 {
         fsx::json_pretty(&json!({ "plugin_root": repo.to_string_lossy(), "agents": out }))
     );
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_frontmatter_pins_mneme_xhigh_only() {
+        // genesis-default-ultracode: the shipped mneme plugin agent is pinned to xhigh via the `effort:`
+        // frontmatter field (a supported, non-security-blocked field). Other plugin agents carry no pin —
+        // as promoted mains they get ultracode from the repo's settings.json instead.
+        let fm = plugin_frontmatter("mneme", "d", &["Read".to_string()], &[]);
+        assert!(
+            fm.contains("effort: xhigh"),
+            "mneme plugin agent pinned to xhigh, got: {fm}"
+        );
+        let fm2 = plugin_frontmatter("method", "d", &["Read".to_string()], &[]);
+        assert!(
+            !fm2.contains("effort:"),
+            "non-mneme plugin agents carry no effort pin"
+        );
+    }
 }
