@@ -21,6 +21,7 @@ pub mod inject;
 pub mod io;
 pub mod precompact;
 pub mod promote_offer;
+pub mod reflect_surface;
 pub mod session_pointer;
 pub mod session_transfer;
 pub mod validate;
