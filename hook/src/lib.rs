@@ -13,6 +13,7 @@ pub mod agent;
 pub mod capture_session;
 pub mod cli;
 pub mod enforce_research;
+pub mod expertise_warn;
 pub mod gate;
 pub mod glob;
 pub mod inject;
