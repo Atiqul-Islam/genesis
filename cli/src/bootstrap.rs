@@ -207,6 +207,10 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
 
+    // 1a. Feature 2: build the derived expertise.db from the just-copied substrate so the hooks read it
+    // immediately. Fail-open — a bad migrate must never abort bootstrap (the readers fall back to files).
+    let _ = crate::expertise_migrate::build(&dest.join("expertise"));
+
     // 1b. Stage the native binaries into .genesis/bin (via the copied launcher). Non-fatal.
     let hook_bin_staged = stage_binaries(&dest);
 

@@ -42,7 +42,7 @@ const childProcess = require("child_process");
 
 // The GitHub Release tag (minus the leading "v") to fetch, and the repo. BUMP RELEASE_VERSION per
 // release (same commit as the git tag). This is the single source of truth for which assets to pull.
-const RELEASE_VERSION = "0.2.0-beta.12";
+const RELEASE_VERSION = "0.2.0-beta.13";
 const REPO = "Atiqul-Islam/genesis";
 const SERVER_STEM = "genesis-memory-server";
 const HOOK_STEM = "genesis-hook";
@@ -341,6 +341,17 @@ async function syncRepo(genesisHome) {
       }
     } catch (_e) {
       // ignore — never block on a settings refresh
+    }
+    // Feature 2 (expertise -> SQLite): rebuild the derived expertise.db from the committed substrate so the
+    // hooks read the current (incl. newly-learned) rules after an update. Regenerable + gitignored; the
+    // readers fall back to the committed JSON/MD if it is stale/absent. Fail-open — never block on it.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["migrate-expertise", path.join(genesisHome, "expertise")], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on the expertise.db rebuild
     }
     fs.writeFileSync(stamp, RELEASE_VERSION + "\n");
     log("synced " + genesisHome + " -> v" + RELEASE_VERSION);

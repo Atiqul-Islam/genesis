@@ -25,6 +25,15 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # Pure-Rust, cross-compiles cleanly for every release target. ASCII classes are spelled out
 # explicitly (e.g. [0-9], [A-Za-z0-9_]) so behavior matches the Node hooks' ASCII regex semantics.
 regex = "1"
+# Feature 2 (expertise -> SQLite): the hooks READ the derived expertise.db. Read-only, prepared
+# statements, no WAL/extensions -> sub-ms open+select, preserving the cold-spawn budget. Same pin as
+# cli/server (=0.39.0, bundled; 0.40 breaks under toolchain 1.93.0). Behind a default-on feature so a
+# size-sensitive build can compile file-only (the readers degrade to their JSON/MD fallback).
+rusqlite = { version = "=0.39.0", features = ["bundled"], optional = true }
+
+[features]
+default = ["expertise-db"]
+expertise-db = ["dep:rusqlite"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -24,6 +24,8 @@ fn main() {
         "verbose" => genesis_cli::verbose::run(&rest),
         "update-guard" => genesis_cli::update_guard::run(&rest),
         "build-plugin-agents" => genesis_cli::build_plugin_agents::run(&rest),
+        "migrate-expertise" => genesis_cli::expertise_migrate::run(&rest),
+        "expertise-learn" => genesis_cli::expertise_learn::run(&rest),
         // session-copy pipeline
         "capture" => genesis_cli::capture::run(&rest),
         "store" => genesis_cli::store::run(&rest),

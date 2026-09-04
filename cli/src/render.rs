@@ -223,6 +223,35 @@ pub fn review_prompt_text(name: &str, expertise: &[String]) -> String {
     )
 }
 
+/// The Mneme reflection prompt (Feature 2, Phase B), baked into the promoted-main Stop `type: agent` hook.
+/// Runs Mneme after `name` finishes a turn: it reads the turn and, ONLY on an explicit user directive
+/// ("memorize"/"remember"), writes a rule directly (enforced); otherwise it QUEUES a proposal for the user
+/// to approve next turn. Never enforces autonomously (ea-6); never writes a credential value (mm-8). Uses
+/// project-relative paths (Mneme's cwd is the project root). Carries "the Genesis agent '<name>'" so
+/// `main_settings`/`demote` identify + replace/remove it exactly like the reviewer hook.
+#[must_use]
+pub fn reflect_prompt_text(name: &str) -> String {
+    format!(
+        "You are Mneme, the memory agent, running the reflection loop for the Genesis agent '{name}' right \
+         after it answered the user. Read ONLY the most recent turn from the transcript (the user's last \
+         message and '{name}'s response). NEVER write a credential value — reference it as \"credential \
+         present at <path>\". Reason step by step: is there a DURABLE, generalizable rule (an always/never \
+         that would prevent a repeat mistake), not a one-off fact? \
+         (1) If the USER EXPLICITLY directed it (\"memorize\", \"remember this\", \"save this rule\", \"add a \
+         rule\", \"for the record\"): the directive IS the approval — write it ENFORCED now by running (via \
+         the Node launcher, so it works on macOS/Linux/Windows alike) `node .genesis/bin/genesis-memory.js \
+         --run-cli expertise-learn .genesis/expertise add --expertise <bucket> --text \"<one-sentence \
+         imperative rule>\" --status active --agents {name}` (reuse an existing bucket from \
+         .genesis/expertise/manifests, or a short new one). \
+         (2) Otherwise, if you noticed a durable lesson AUTONOMOUSLY: do NOT enforce it — append ONE JSON \
+         line to .genesis/mneme/proposals/pending.jsonl (create the dir) of the form \
+         {{\"expertise\":\"<bucket>\",\"text\":\"<one-sentence rule>\",\"mode\":\"autonomous\"}}; the next \
+         UserPromptSubmit surfaces it for the user to approve. \
+         (3) If there is no durable lesson, do NOTHING. Keep it minimal; you are non-blocking and must never \
+         fail the turn. Reply with a one-line summary (or 'no lesson'). $ARGUMENTS"
+    )
+}
+
 /// The native `genesis-hook` binary path under `home` (`.exe` on Windows).
 fn hook_bin(home: &str) -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
@@ -365,6 +394,9 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
         "{bin} validate . {name} --expertise {} --main-agent {name}",
         q(&exp_dir)
     );
+    // Feature 2, Phase B: reflect-surface presents Mneme's pending learning proposals to the user at the
+    // next prompt (Mneme has no SendMessage). Carries --main-agent (idempotent replace + demote removal).
+    let reflect_surface = format!("{bin} reflect-surface --main-agent {name}");
     let mut stop_hooks = vec![
         json!({ "type": "command", "command": capture }),
         json!({ "type": "command", "command": ewarn }),
@@ -378,11 +410,22 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
             "prompt": review_prompt_text(name, expertise),
         }));
     }
+    // Feature 2, Phase B: the Mneme reflection loop — after every turn Mneme judges whether a durable rule
+    // should be learned (user-directed → enforced now; autonomous → queued for approval). Runs AFTER
+    // validate so it never affects the block/allow decision; non-blocking + fail-open. The prompt marker
+    // "the Genesis agent '<name>'" lets main_settings/demote replace + remove it like the reviewer hook.
+    stop_hooks.push(json!({
+        "type": "agent",
+        "model": "claude-haiku-4-5-20251001",
+        "timeout": 120,
+        "prompt": reflect_prompt_text(name),
+    }));
     json!({
         "SessionStart": [{ "matcher": "startup|resume|compact", "hooks": [
             { "type": "command", "command": sync },
             { "type": "command", "command": inject },
         ] }],
+        "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": reflect_surface }] }],
         "PreToolUse": [
             { "matcher": "Write|Edit", "hooks": [{ "type": "command", "command": gate }] },
             { "matcher": "Bash", "hooks": [{ "type": "command", "command": enforce }] },
@@ -406,7 +449,9 @@ pub fn main_settings(target: &Path, name: &str, home: &str, expertise: &[String]
     }
     let fresh = main_thread_hooks(name, home, expertise);
     let cmd_mark = format!("--main-agent {name}");
-    let prompt_mark = format!("reviewer for the Genesis agent '{name}'");
+    // Per-agent marker shared by BOTH `type: agent` hooks (the reviewer and the Mneme reflection loop):
+    // each prompt contains "the Genesis agent '<name>'", so a re-promote replaces both idempotently.
+    let prompt_mark = format!("the Genesis agent '{name}'");
     let is_this_agent = |blk: &Value| -> bool {
         blk.get("hooks")
             .and_then(Value::as_array)
@@ -510,7 +555,7 @@ fn is_genesis_main_block(blk: &Value) -> bool {
                     || (h.get("type").and_then(Value::as_str) == Some("agent")
                         && h.get("prompt")
                             .and_then(Value::as_str)
-                            .is_some_and(|pr| pr.contains("reviewer for the Genesis agent")))
+                            .is_some_and(|pr| pr.contains("the Genesis agent")))
             })
         })
 }
@@ -777,6 +822,78 @@ mod tests {
         assert!(cmds
             .iter()
             .any(|c| c.contains("capture-session --main-agent bot")));
+    }
+
+    #[test]
+    fn main_thread_hooks_wire_reflection_loop() {
+        // Feature 2 Phase B: reflect-surface on UserPromptSubmit + the Mneme reflection type:agent on Stop.
+        let h = main_thread_hooks("bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[]);
+        let ups = h["UserPromptSubmit"][0]["hooks"].as_array().unwrap();
+        assert!(
+            ups.iter().any(|x| x["command"]
+                .as_str()
+                .is_some_and(|c| c.contains("reflect-surface --main-agent bot"))),
+            "UserPromptSubmit wires reflect-surface"
+        );
+        let stop = h["Stop"][0]["hooks"].as_array().unwrap();
+        assert!(
+            stop.iter().any(|x| x["type"] == "agent"
+                && x["prompt"]
+                    .as_str()
+                    .is_some_and(|p| p.contains("reflection loop for the Genesis agent 'bot'"))),
+            "Stop wires the Mneme reflection agent"
+        );
+    }
+
+    #[test]
+    fn reflection_loop_idempotent_and_demotable() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join(".claude")).unwrap();
+        std::fs::write(td.path().join("CLAUDE.md"), "# mine\n").unwrap();
+        std::fs::write(td.path().join(".claude/settings.json"), "{}").unwrap();
+        for _ in 0..2 {
+            let _ = install_as_main(td.path(), "bot", "${CLAUDE_PROJECT_DIR}/.genesis", &[], "P");
+        }
+        let s: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let ups_count = s["hooks"]["UserPromptSubmit"].as_array().map_or(0, |a| {
+            a.iter()
+                .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
+                .filter(|h| {
+                    h["command"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("reflect-surface"))
+                })
+                .count()
+        });
+        assert_eq!(ups_count, 1, "one reflect-surface after two runs");
+        let reflect_agents = s["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
+            .filter(|h| {
+                h["prompt"]
+                    .as_str()
+                    .is_some_and(|p| p.contains("reflection loop for the Genesis agent 'bot'"))
+            })
+            .count();
+        assert_eq!(reflect_agents, 1, "one reflection agent after two runs");
+        let _ = uninstall_main(td.path());
+        let s2: Value = serde_json::from_str(
+            &std::fs::read_to_string(td.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            s2["hooks"].get("UserPromptSubmit").is_none(),
+            "demote removes reflect-surface (its only UserPromptSubmit hook)"
+        );
+        assert!(
+            !s2["hooks"].to_string().contains("reflection loop"),
+            "demote removes the Mneme reflection agent"
+        );
     }
 
     #[test]
@@ -1089,12 +1206,27 @@ mod tests {
             &std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
         )
         .unwrap();
-        let reviewer = s["hooks"]["Stop"]
+        // The REVIEWER (review-specific prompt) is omitted; the Mneme reflection agent is still present
+        // (it is unconditional, independent of expertise).
+        let stop_agents: Vec<String> = s["hooks"]["Stop"]
             .as_array()
             .unwrap()
             .iter()
             .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
-            .any(|h| h["type"] == "agent");
-        assert!(!reviewer, "no reviewer when expertise empty");
+            .filter(|h| h["type"] == "agent")
+            .filter_map(|h| h["prompt"].as_str().map(ToString::to_string))
+            .collect();
+        assert!(
+            !stop_agents
+                .iter()
+                .any(|p| p.contains("reviewer for the Genesis agent")),
+            "no reviewer when expertise empty"
+        );
+        assert!(
+            stop_agents
+                .iter()
+                .any(|p| p.contains("reflection loop for the Genesis agent 'bot'")),
+            "the Mneme reflection agent is present regardless of expertise"
+        );
     }
 }
