@@ -14,6 +14,7 @@ pub mod capture;
 pub mod demote;
 pub mod doctor;
 pub mod embed;
+pub mod expertise_migrate;
 pub mod fix;
 pub mod fsx;
 pub mod install;

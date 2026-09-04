@@ -19,9 +19,10 @@ fail-open file fallback so the guard stack can never brick.
 - A2: `hook/expertise_db` queries return results EQUAL to the file-path readers over the same store
   (per-reader parity: required_for, load_manifest ids+checkable, manifest_rule_texts, top_rules, guides).
 - A3: With `expertise.db` absent or corrupt, every reader falls back to the file body — no panic, no block.
-- A4: `migrate-expertise --export` regenerates required.json + each manifest byte-identically (json_dump_ascii).
+- A4: `build` NEVER rewrites the committed substrate (manifests/required.json/*.md stay the source of
+  truth; existing byte-parity drift tests are unaffected). It only writes the gitignored `expertise.db`.
 - A5: Running `migrate-expertise` twice is a no-op on the second run (source_sha unchanged); the canonical
-  logical dump of the DB is byte-identical across runs.
+  logical dump (`--dump`) of the DB is byte-identical across runs (idempotence).
 - A6: A `learned.jsonl` row with status "active" appears as an enforced rule (in ids + rule_texts + required);
   a row with status "proposed" does NOT appear in the active set.
 - A7: The hook crate still builds and its cold-spawn stays within budget after adding rusqlite; a
@@ -44,7 +45,7 @@ expertise(name PRIMARY KEY, source, note, origin DEFAULT 'migrated')
 rules(expertise, id, section, text, type, predicate, reviewer_criterion,
       origin DEFAULT 'migrated', status DEFAULT 'active', ordinal, PRIMARY KEY(expertise,id))
 required(agent, expertise, ordinal, PRIMARY KEY(agent,expertise))
-guides(stem PRIMARY KEY, rel_path, sha256, body)
+guides(stem PRIMARY KEY, rel_path, content_hash, body)
 ```
 
 ## Non-goals (later phases)
