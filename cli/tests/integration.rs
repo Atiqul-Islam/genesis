@@ -142,10 +142,15 @@ fn assemble_frontmatter_is_absolute_when_gh_is_outside_target() {
 
     assemble::assemble_one(&gh.join("team").join("method"), "method", target, gh, false)
         .expect("assemble (gh outside target)");
-    let text = read(&target.join(".claude").join("agents").join("method.md"));
-    let abs = gh.join("bin").join("genesis-memory.js");
+    // The shim forward-slashes the path (render::portable_home normalizes), so compare slash-normalized.
+    let text = read(&target.join(".claude").join("agents").join("method.md")).replace('\\', "/");
+    let abs = gh
+        .join("bin")
+        .join("genesis-memory.js")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert!(
-        text.contains(&abs.to_string_lossy().to_string()),
+        text.contains(&abs),
         "absolute launcher-shim path when gh is outside target (#24), got:\n{text}"
     );
     assert!(
