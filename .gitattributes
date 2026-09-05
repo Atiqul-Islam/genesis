@@ -9,6 +9,10 @@
 *.cjs  text eol=lf
 *.mjs  text eol=lf
 *.json text eol=lf
+# Force LF on Markdown too: build-plugin-agents reads team/*.md and writes agents/*.md, and the committed
+# agents are LF — without this, a Windows checkout (core.autocrlf) makes both CRLF and the no-drift test
+# fails on Windows only (the committed LF files "drift" from CRLF-regenerated output). See #25 CI triage.
+*.md   text eol=lf
 
 # Extensionless shell/python helpers that carry a shebang. (scripts/fetch-model.mjs is covered
 # by the `*.mjs eol=lf` rule above.)

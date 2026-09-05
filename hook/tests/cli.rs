@@ -19,12 +19,13 @@ fn run(args: &[&str], stdin: &str) -> String {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn genesis-hook");
-    child
+    // Best-effort write: a no-op / early-exit subcommand may close stdin before we finish writing, so a
+    // broken pipe here is NOT a failure (it raced across OSes = flaky). The decision on stdout is asserted.
+    let _ = child
         .stdin
         .take()
         .expect("stdin")
-        .write_all(stdin.as_bytes())
-        .expect("write stdin");
+        .write_all(stdin.as_bytes());
     let out = child.wait_with_output().expect("wait");
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
@@ -40,12 +41,13 @@ fn run_in(dir: &std::path::Path, args: &[&str], stdin: &str) -> String {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn genesis-hook");
-    child
+    // Best-effort write: a no-op / early-exit subcommand may close stdin before we finish writing, so a
+    // broken pipe here is NOT a failure (it raced across OSes = flaky). The decision on stdout is asserted.
+    let _ = child
         .stdin
         .take()
         .expect("stdin")
-        .write_all(stdin.as_bytes())
-        .expect("write stdin");
+        .write_all(stdin.as_bytes());
     let out = child.wait_with_output().expect("wait");
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }

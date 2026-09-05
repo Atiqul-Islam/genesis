@@ -350,6 +350,75 @@ function testModelFreeSubcommand() {
   });
 }
 
+// ── #25: the launcher resolves GENESIS_MEMORY_DB/EXPORT against the project root (absolute, no ${}) ──
+function testMcpMemPathDefaults() {
+  withTempDir((td) => {
+    const dbServer = path.join(td, "db_server.js");
+    fs.writeFileSync(
+      dbServer,
+      "'use strict';\n" +
+        "process.stdout.write('DB=' + (process.env.GENESIS_MEMORY_DB || '') + '\\n');\n" +
+        "process.stdout.write('EXPORT=' + (process.env.GENESIS_MEMORY_EXPORT || '') + '\\n');\n" +
+        "process.exit(0);\n"
+    );
+    const modelDir = makeModelDir(td);
+    const proj = path.join(td, "proj");
+    fs.mkdirSync(proj, { recursive: true });
+    const expectDb = path.join(proj, ".genesis", "memory.db").replace(/\\/g, "/");
+    const norm = (s) => (s || "").trim().replace(/\\/g, "/");
+    const readDb = (proc) => norm(((proc.stdout || "").match(/DB=(.*)/) || [])[1]);
+
+    // unset / relative / still-literal-${ all resolve to <proj>/.genesis/memory.db
+    for (const [label, val] of [
+      ["unset", undefined],
+      ["relative", ".genesis/memory.db"],
+      ["literal-var", "${CLAUDE_PROJECT_DIR}/.genesis/memory.db"],
+    ]) {
+      const env = baseEnv({ GENESIS_MEMORY_BIN: NODE, GENESIS_MODEL_DIR: modelDir, CLAUDE_PROJECT_DIR: proj });
+      if (val === undefined) delete env.GENESIS_MEMORY_DB;
+      else env.GENESIS_MEMORY_DB = val;
+      const db = readDb(spawnSync(NODE, [LAUNCHER, dbServer], { encoding: "utf-8", timeout: 60000, env }));
+      check(`mem-path (${label}): resolved to <proj>/.genesis/memory.db`, db === expectDb);
+      check(`mem-path (${label}): no unexpanded variable`, !db.includes("${"));
+    }
+    // an absolute dev override is left untouched
+    const abs = path.join(td, "custom.db");
+    const env = baseEnv({
+      GENESIS_MEMORY_BIN: NODE,
+      GENESIS_MODEL_DIR: modelDir,
+      CLAUDE_PROJECT_DIR: proj,
+      GENESIS_MEMORY_DB: abs,
+    });
+    const db = readDb(spawnSync(NODE, [LAUNCHER, dbServer], { encoding: "utf-8", timeout: 60000, env }));
+    check("mem-path: absolute dev override is honored", db === abs.replace(/\\/g, "/"));
+  });
+}
+
+// ── #26: --sync invokes `sync-mcp <repo-root>` (alongside sync-settings) via the staged cli ──
+function testSyncRunsMcp() {
+  if (process.platform === "win32") {
+    // A .cmd copied to genesis-cli.exe won't exec as a PE; the cli `sync-mcp` command itself is covered
+    // cross-platform by the Rust integration test. Skip the exec-based wiring probe on Windows.
+    check("--sync invokes sync-mcp (exec probe skipped on win32)", true);
+    return;
+  }
+  withTempDir((td) => {
+    const log = path.join(td, "cli-calls.log");
+    const cliWrap = path.join(td, "cli.sh");
+    fs.writeFileSync(cliWrap, '#!/bin/sh\necho "$@" >> "' + log + '"\nexit 0\n');
+    fs.chmodSync(cliWrap, 0o755);
+    const repo = path.join(td, "repo");
+    const gh = path.join(repo, ".genesis");
+    fs.mkdirSync(gh, { recursive: true });
+    const env = baseEnv({ GENESIS_HOOK_BIN: cliWrap, GENESIS_CLI_BIN: cliWrap });
+    const p = spawnSync(NODE, [LAUNCHER, "--sync", gh], { encoding: "utf-8", timeout: 60000, env });
+    check("--sync exits 0 (logging cli)", p.status === 0);
+    const calls = fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "";
+    check("--sync invokes sync-mcp on the repo root", /(^|\n)sync-mcp\b/.test(calls) && calls.includes(repo));
+    check("--sync still invokes sync-settings", /(^|\n)sync-settings\b/.test(calls));
+  });
+}
+
 function main() {
   check("launcher file exists", fs.existsSync(LAUNCHER));
   testTransparentExec();
@@ -361,6 +430,8 @@ function main() {
   testRunCli();
   testSync();
   testModelFreeSubcommand();
+  testMcpMemPathDefaults();
+  testSyncRunsMcp();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

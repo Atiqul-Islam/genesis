@@ -214,21 +214,24 @@ pub fn run(args: &[String]) -> i32 {
     // 1b. Stage the native binaries into .genesis/bin (via the copied launcher). Non-fatal.
     let hook_bin_staged = stage_binaries(&dest);
 
-    // 2. Memory + launcher paths — written into .mcp.json / settings.json as ${CLAUDE_PROJECT_DIR}-relative
-    //    strings. `dest` is always `<repo>/.genesis` (inside `target`), so `portable_home` yields
-    //    `${CLAUDE_PROJECT_DIR}/.genesis`; the generated config then survives a clone/move/commit instead of
-    //    baking in the building machine's absolute path. Claude Code expands the variable in both the MCP
-    //    server config and the hook command at runtime.
-    let home = render::portable_home(&target, &dest);
-    let launcher = format!("{home}/bin/genesis-memory.js");
-    let mem_db = format!("{home}/memory.db");
-    let mem_export = format!("{home}/memory/memory.jsonl");
+    // 2. Memory + launcher paths. `dest` is always `<repo>/.genesis` (inside `target`).
+    //    - settings.json hook commands use the `${CLAUDE_PROJECT_DIR}/.genesis` form (`portable_home`);
+    //      Claude Code expands the variable in hook commands, and it survives a clone/move/commit.
+    //    - .mcp.json uses the repo-ROOT-RELATIVE form (`relative_home`, e.g. `.genesis`): a PROJECT
+    //      `.mcp.json` is NOT given `${CLAUDE_PROJECT_DIR}` expansion (see #25), and the client launches the
+    //      server with cwd = the repo root, so a relative path resolves and still travels with the repo.
+    let hook_home = render::portable_home(&target, &dest);
+    let hook_launcher = format!("{hook_home}/bin/genesis-memory.js");
+    let mcp_rel = render::relative_home(&target, &dest);
+    let mcp_launcher = format!("{mcp_rel}/bin/genesis-memory.js");
+    let mem_db = format!("{mcp_rel}/memory.db");
+    let mem_export = format!("{mcp_rel}/memory/memory.jsonl");
 
     // 3. Register the repo-local memory MCP server (launched via the Node launcher in .genesis/bin).
-    let mcp_path = write_mcp(&target, &launcher, &mem_db, &mem_export);
+    let mcp_path = write_mcp(&target, &mcp_launcher, &mem_db, &mem_export);
 
     // 3b. Install the repo-local SessionStart promote-offer hook (workspace-only; plugin stays dormant).
-    let settings_path = write_promote_offer_hook(&target, &launcher);
+    let settings_path = write_promote_offer_hook(&target, &hook_launcher);
 
     // 4. Manage the .gitignore block (commit the brain + portable memory; ignore machine-local junk).
     merge_gitignore(&target);
@@ -253,7 +256,7 @@ pub fn run(args: &[String]) -> i32 {
             "memory_db": mem_db,
             "memory_export": mem_export,
             "mcp_json": mcp_path.to_string_lossy(),
-            "mcp_server": format!("node {launcher}"),
+            "mcp_server": format!("node {mcp_launcher}"),
             "promote_offer_settings": settings_path.to_string_lossy(),
             "next": "Open Claude Code in the repo; talk to Sensei to build agents.",
         }))
@@ -283,6 +286,35 @@ pub fn run_sync_gitignore(args: &[String]) -> i32 {
         fsx::json_pretty(&json!({
             "synced_gitignore": target.join(".gitignore").to_string_lossy(),
         }))
+    );
+    0
+}
+
+/// `genesis-cli sync-mcp <target>` — regenerate ONLY the `genesis-memory` entry in an existing repo's
+/// `.mcp.json` to the current, correct form (repo-relative `args` + repo-relative memory env), so a workspace
+/// bootstrapped with the OLDER `${CLAUDE_PROJECT_DIR}`-based generator self-heals on update (#25/#26). Single-
+/// sourced through the same `write_mcp` bootstrap uses, so the two can never drift; it MERGES, preserving any
+/// other MCP servers. Idempotent (a second run is byte-identical). The launcher's `--sync` runs this on every
+/// plugin update. Returns the process exit code.
+#[must_use]
+pub fn run_sync_mcp(args: &[String]) -> i32 {
+    let Some(target_arg) = args.first() else {
+        fsx::fail("usage: genesis-cli sync-mcp <target_repo>");
+    };
+    let target = std::fs::canonicalize(target_arg).unwrap_or_else(|_| PathBuf::from(target_arg));
+    if !target.is_dir() {
+        fsx::fail(&format!("target repo not found: {}", target.display()));
+    }
+    // Same repo-relative paths as bootstrap step 2 (single-sourced via `write_mcp` + `relative_home`).
+    let dest = target.join(".genesis");
+    let rel = render::relative_home(&target, &dest);
+    let launcher = format!("{rel}/bin/genesis-memory.js");
+    let mem_db = format!("{rel}/memory.db");
+    let mem_export = format!("{rel}/memory/memory.jsonl");
+    let p = write_mcp(&target, &launcher, &mem_db, &mem_export);
+    println!(
+        "{}",
+        fsx::json_pretty(&json!({ "synced_mcp": p.to_string_lossy() }))
     );
     0
 }
