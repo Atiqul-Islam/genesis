@@ -115,6 +115,22 @@ pub fn portable_home(target: &Path, gh: &Path) -> String {
     gh.to_string_lossy().replace('\\', "/")
 }
 
+/// Repo-root-RELATIVE genesis-home for `.mcp.json` (e.g. `.genesis`) when `gh` is under `target`, else the
+/// absolute path. Unlike `portable_home` this emits NO `${CLAUDE_PROJECT_DIR}` variable: a project
+/// `.mcp.json` is NOT given `${CLAUDE_PROJECT_DIR}` expansion by Claude Code (it is for `settings.json` hook
+/// commands and for `${CLAUDE_PLUGIN_ROOT}` in the plugin's own `.mcp.json`), and the client launches a
+/// project MCP server with cwd = the project root, so a repo-relative path resolves correctly. See #25.
+#[must_use]
+pub fn relative_home(target: &Path, gh: &Path) -> String {
+    if let Ok(rel) = gh.strip_prefix(target) {
+        let r = rel.to_string_lossy().replace('\\', "/");
+        if !r.is_empty() && !r.starts_with("..") {
+            return r;
+        }
+    }
+    gh.to_string_lossy().replace('\\', "/")
+}
+
 /// A frontmatter hook `command:` YAML line: a single-quoted scalar (only `'` doubles).
 fn yaml_cmd(shell: &str) -> String {
     format!("          command: '{}'\n", shell.replace('\'', "''"))

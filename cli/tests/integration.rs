@@ -52,8 +52,8 @@ fn assemble_subagent_writes_agent_md_and_registers_expertise() {
     let text = read(&md);
     assert!(text.starts_with("---\nname: method\n"), "frontmatter name");
     assert!(
-        text.contains("genesis-hook"),
-        "wires the native hook binary"
+        text.contains("--run-hook") && text.contains("bin/genesis-memory.js"),
+        "wires the hooks via the cross-platform --run-hook launcher shim (#24)"
     );
     // required expertise auto-registered in the (temp) genesis-home
     let required = read(&gh.join("expertise").join("required.json"));
@@ -126,8 +126,9 @@ fn assemble_frontmatter_is_portable_when_gh_is_inside_target() {
     .expect("assemble (gh inside target)");
     let text = read(&target.join(".claude").join("agents").join("method.md"));
     assert!(
-        text.contains("${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-hook"),
-        "portable ${{CLAUDE_PROJECT_DIR}} hook path, got:\n{text}"
+        text.contains("${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js")
+            && text.contains("--run-hook"),
+        "portable ${{CLAUDE_PROJECT_DIR}} launcher-shim hook path (#24), got:\n{text}"
     );
 }
 
@@ -142,10 +143,10 @@ fn assemble_frontmatter_is_absolute_when_gh_is_outside_target() {
     assemble::assemble_one(&gh.join("team").join("method"), "method", target, gh, false)
         .expect("assemble (gh outside target)");
     let text = read(&target.join(".claude").join("agents").join("method.md"));
-    let abs = gh.join("bin").join("genesis-hook");
+    let abs = gh.join("bin").join("genesis-memory.js");
     assert!(
         text.contains(&abs.to_string_lossy().to_string()),
-        "absolute hook path when gh is outside target"
+        "absolute launcher-shim path when gh is outside target (#24), got:\n{text}"
     );
     assert!(
         !text.contains("${CLAUDE_PROJECT_DIR}"),
@@ -273,19 +274,34 @@ fn bootstrap_emits_portable_project_dir_paths_not_absolute() {
         .to_string_lossy()
         .replace('\\', "/");
 
-    let mcp = read(&target.join(".mcp.json")).replace('\\', "/");
-    assert!(
-        mcp.contains("${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js"),
-        ".mcp.json launcher must be ${{CLAUDE_PROJECT_DIR}}-relative, got:\n{mcp}"
+    // #25: a project .mcp.json is NOT given ${CLAUDE_PROJECT_DIR} expansion by the client, so the paths
+    // must be repo-root-relative (the client launches project MCP servers with cwd = the project root).
+    let mcp_txt = read(&target.join(".mcp.json"));
+    let mcp_json: serde_json::Value =
+        serde_json::from_str(&mcp_txt).expect(".mcp.json must be valid JSON");
+    let srv = &mcp_json["mcpServers"]["genesis-memory"];
+    assert_eq!(
+        srv["args"][0].as_str(),
+        Some(".genesis/bin/genesis-memory.js"),
+        ".mcp.json launcher must be the repo-relative path, got:\n{mcp_txt}"
+    );
+    assert_eq!(
+        srv["env"]["GENESIS_MEMORY_DB"].as_str(),
+        Some(".genesis/memory.db"),
+        ".mcp.json GENESIS_MEMORY_DB must be repo-relative, got:\n{mcp_txt}"
+    );
+    assert_eq!(
+        srv["env"]["GENESIS_MEMORY_EXPORT"].as_str(),
+        Some(".genesis/memory/memory.jsonl"),
+        ".mcp.json GENESIS_MEMORY_EXPORT must be repo-relative, got:\n{mcp_txt}"
     );
     assert!(
-        mcp.contains("${CLAUDE_PROJECT_DIR}/.genesis/memory.db")
-            && mcp.contains("${CLAUDE_PROJECT_DIR}/.genesis/memory/memory.jsonl"),
-        ".mcp.json memory paths must be ${{CLAUDE_PROJECT_DIR}}-relative, got:\n{mcp}"
+        !mcp_txt.contains("${"),
+        ".mcp.json must contain no unexpanded ${{...}} variable, got:\n{mcp_txt}"
     );
     assert!(
-        !mcp.contains(&abs_prefix),
-        ".mcp.json must not contain the absolute target path {abs_prefix}, got:\n{mcp}"
+        !mcp_txt.replace('\\', "/").contains(&abs_prefix),
+        ".mcp.json must not contain the absolute target path {abs_prefix}, got:\n{mcp_txt}"
     );
 
     // Assert on the portable substring (not the full quoted command) so the check is agnostic to JSON
@@ -336,6 +352,62 @@ fn sync_gitignore_heals_stale_block_to_commit_memory_db() {
         gi,
         read(&target.join(".gitignore")),
         "sync-gitignore is idempotent"
+    );
+}
+
+// ── sync-mcp: an update heals a stale .mcp.json to the repo-relative form (GitHub #26) ────────
+#[test]
+fn sync_mcp_heals_stale_mcp_json() {
+    let tgt_dir = tempdir().unwrap();
+    let target = tgt_dir.path();
+    // A stale .mcp.json from the buggy generator: ${CLAUDE_PROJECT_DIR} paths + a user's own server.
+    let stale = r#"{
+  "mcpServers": {
+    "genesis-memory": {
+      "command": "node",
+      "args": ["${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js"],
+      "env": {
+        "GENESIS_MEMORY_DB": "${CLAUDE_PROJECT_DIR}/.genesis/memory.db",
+        "GENESIS_MEMORY_EXPORT": "${CLAUDE_PROJECT_DIR}/.genesis/memory/memory.jsonl"
+      }
+    },
+    "user-own": { "command": "foo", "args": ["bar"] }
+  }
+}
+"#;
+    std::fs::write(target.join(".mcp.json"), stale).unwrap();
+
+    let code = bootstrap::run_sync_mcp(&[target.to_string_lossy().into_owned()]);
+    assert_eq!(code, 0, "sync-mcp exits 0");
+
+    let txt = read(&target.join(".mcp.json"));
+    let j: serde_json::Value = serde_json::from_str(&txt).expect("valid JSON after heal");
+    let srv = &j["mcpServers"]["genesis-memory"];
+    assert_eq!(
+        srv["args"][0].as_str(),
+        Some(".genesis/bin/genesis-memory.js"),
+        "sync-mcp rewrites the launcher to the repo-relative path, got:\n{txt}"
+    );
+    assert!(
+        !txt.contains("${"),
+        "no unexpanded variable after heal, got:\n{txt}"
+    );
+    // the user's own server is preserved
+    assert_eq!(
+        j["mcpServers"]["user-own"]["command"].as_str(),
+        Some("foo"),
+        "sync-mcp preserves other servers, got:\n{txt}"
+    );
+
+    // idempotent: a second heal is byte-identical.
+    assert_eq!(
+        bootstrap::run_sync_mcp(&[target.to_string_lossy().into_owned()]),
+        0
+    );
+    assert_eq!(
+        txt,
+        read(&target.join(".mcp.json")),
+        "sync-mcp is idempotent"
     );
 }
 

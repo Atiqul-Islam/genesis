@@ -342,6 +342,17 @@ async function syncRepo(genesisHome) {
     } catch (_e) {
       // ignore — never block on a settings refresh
     }
+    // #25/#26: heal .mcp.json to the current repo-relative form (single-sourced from bootstrap's write_mcp),
+    // so a repo bootstrapped with the OLDER ${CLAUDE_PROJECT_DIR}-based generator — which Claude Code does not
+    // expand in a project .mcp.json — self-heals on update. Fail-open: never block session start on it.
+    try {
+      const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
+      if (fs.existsSync(cliBin)) {
+        childProcess.spawnSync(cliBin, ["sync-mcp", path.dirname(genesisHome)], { stdio: "ignore" });
+      }
+    } catch (_e) {
+      // ignore — never block on a .mcp.json heal
+    }
     // Feature 2 (expertise -> SQLite): rebuild the derived expertise.db from the committed substrate so the
     // hooks read the current (incl. newly-learned) rules after an update. Regenerable + gitignored; the
     // readers fall back to the committed JSON/MD if it is stale/absent. Fail-open — never block on it.
@@ -360,10 +371,30 @@ async function syncRepo(genesisHome) {
   }
 }
 
+// #25: a project .mcp.json is NOT given ${CLAUDE_PROJECT_DIR} expansion by Claude Code, and a relative value
+// depends on the process working directory — so RESOLVE the memory paths here to an absolute path against the
+// project root (CLAUDE_PROJECT_DIR when set, else the cwd, which Claude Code sets to the project root for a
+// project MCP server). Expand a still-literal ${CLAUDE_PROJECT_DIR}, resolve a relative value, and leave an
+// already-absolute value (a dev override) untouched. This makes the server open the right DB even on a repo
+// whose .mcp.json still carries the old, unexpanded ${CLAUDE_PROJECT_DIR} form.
+function resolveMemEnv(env) {
+  const proj = env.CLAUDE_PROJECT_DIR || process.cwd();
+  const fix = (v, relDefault) => {
+    if (!v) return path.join(proj, relDefault);
+    let s = v.split("${CLAUDE_PROJECT_DIR}").join(proj);
+    if (!path.isAbsolute(s)) s = path.resolve(proj, s);
+    return s;
+  };
+  env.GENESIS_MEMORY_DB = fix(env.GENESIS_MEMORY_DB, path.join(".genesis", "memory.db"));
+  env.GENESIS_MEMORY_EXPORT = fix(env.GENESIS_MEMORY_EXPORT, path.join(".genesis", "memory", "memory.jsonl"));
+}
+
 function execServer(binPath, modelDir) {
-  // Only override GENESIS_MODEL_DIR when a model dir was actually resolved (the stdio server + `import`
-  // need it); model-free one-shots (`structure`, `export`) pass the environment through untouched.
-  const env = modelDir ? Object.assign({}, process.env, { GENESIS_MODEL_DIR: modelDir }) : process.env;
+  // Build the child env: set GENESIS_MODEL_DIR only when a model dir was resolved (the stdio server + `import`
+  // need it; model-free one-shots pass none), and RESOLVE the memory paths to absolute (see resolveMemEnv).
+  const env = Object.assign({}, process.env);
+  if (modelDir) env.GENESIS_MODEL_DIR = modelDir;
+  resolveMemEnv(env);
   const child = childProcess.spawn(binPath, process.argv.slice(2), { stdio: "inherit", env });
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGBREAK"];
