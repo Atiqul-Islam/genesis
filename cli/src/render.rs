@@ -252,10 +252,14 @@ pub fn reflect_prompt_text(name: &str) -> String {
     )
 }
 
-/// The native `genesis-hook` binary path under `home` (`.exe` on Windows).
-fn hook_bin(home: &str) -> String {
-    let ext = if cfg!(windows) { ".exe" } else { "" };
-    format!("{home}/bin/genesis-hook{ext}")
+/// A hook command routed through the launcher's cross-platform `--run-hook` shim (issue #24): the launcher
+/// resolves the correct per-OS `genesis-hook[.exe]` at RUNTIME, so the committed settings.json / frontmatter
+/// stay OS-agnostic (one file works on Windows/macOS/Linux). `rest` is `<subcommand> <args…>`.
+fn run_hook(home: &str, rest: &str) -> String {
+    format!(
+        "node {} --run-hook {rest}",
+        q(&format!("{home}/bin/genesis-memory.js"))
+    )
 }
 
 /// Render a SUBAGENT's `.claude/agents/<name>.md` frontmatter (byte-parity with the Node assembler).
@@ -268,10 +272,12 @@ pub fn frontmatter(
     expertise: &[String],
 ) -> String {
     let exp_dir = format!("{home}/expertise");
-    let bin = q(&hook_bin(home));
-    let inject = format!("{bin} inject {} {name}", q(&exp_dir));
-    let gate = format!("{bin} gate --expertise {}", q(&exp_dir));
-    let stop = format!("{bin} validate . {name} --expertise {}", q(&exp_dir));
+    let inject = run_hook(home, &format!("inject {} {name}", q(&exp_dir)));
+    let gate = run_hook(home, &format!("gate --expertise {}", q(&exp_dir)));
+    let stop = run_hook(
+        home,
+        &format!("validate . {name} --expertise {}", q(&exp_dir)),
+    );
     let skills_line = if skills.is_empty() {
         String::new()
     } else {
@@ -283,7 +289,7 @@ pub fn frontmatter(
         yaml_cmd(&gate)
     );
     if name == "sensei" {
-        let enforce = format!("{bin} enforce-research");
+        let enforce = run_hook(home, "enforce-research");
         let _ = write!(
             pretooluse,
             "    - matcher: \"Bash\"\n      hooks:\n        - type: command\n{}",
@@ -359,7 +365,6 @@ pub fn main_claude_md(target: &Path, name: &str, body: &str) -> PathBuf {
 #[must_use]
 pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value {
     let exp_dir = format!("{home}/expertise");
-    let bin = q(&hook_bin(home));
     // issue #3: restage this repo's .genesis/bin to the current plugin version on session start, so a
     // promoted-main repo (which never spawns a core subagent) still picks up /plugin update. Runs via the
     // Node launcher (--sync is a launcher function); idempotent — gated by the .staged-version stamp. It
@@ -370,33 +375,48 @@ pub fn main_thread_hooks(name: &str, home: &str, expertise: &[String]) -> Value 
         q(&format!("{home}/bin/genesis-memory.js")),
         q(home)
     );
-    let inject = format!("{bin} inject {} {name} --main-agent {name}", q(&exp_dir));
-    let gate = format!("{bin} gate --expertise {} --main-agent {name}", q(&exp_dir));
+    // issue #24: every genesis-hook command routes through the launcher `--run-hook` shim (dynamic per-OS
+    // binary resolution) so the committed settings.json is OS-agnostic. Each keeps its `--main-agent <name>`
+    // marker so main_settings replaces + demote removes them idempotently.
+    let inject = run_hook(
+        home,
+        &format!("inject {} {name} --main-agent {name}", q(&exp_dir)),
+    );
+    let gate = run_hook(
+        home,
+        &format!("gate --expertise {} --main-agent {name}", q(&exp_dir)),
+    );
     // enforce-research on Bash: research-before-assemble + the no-grep guard, scoped to this main agent.
     // A promoted main carries no payload agent_type, so it needs the explicit --main-agent to fire.
-    let enforce = format!("{bin} enforce-research --main-agent {name}");
+    let enforce = run_hook(home, &format!("enforce-research --main-agent {name}"));
     // issue #1: capture a resume snapshot before a context compaction; inject restores it on the next
     // SessionStart (source compact/resume). Scoped to this main agent.
-    let precompact = format!("{bin} precompact --main-agent {name}");
+    let precompact = run_hook(home, &format!("precompact --main-agent {name}"));
     // issue #9: capture the live transcript into the repo on Stop so it travels; inject restores it on the
     // target machine. Carries --main-agent so main_settings replaces + demote removes it idempotently.
-    let capture = format!("{bin} capture-session --main-agent {name}");
+    let capture = run_hook(home, &format!("capture-session --main-agent {name}"));
     // vector-completeness-warn: the background skip-detector SPAWNER — reads the Stop event, detaches a
     // worker that embeds the response vs. the required rules (via the Node launcher) and writes
     // .genesis/expertise-warnings.md for the next SessionStart. Exits 0 immediately (never blocks Stop).
     // Carries --main-agent so it is co-marked with the block (idempotent replace + demote removal).
-    let ewarn = format!(
-        "{bin} expertise-warn --agent {name} --expertise {} --launcher {} --main-agent {name}",
-        q(&exp_dir),
-        q(&format!("{home}/bin/genesis-memory.js")),
+    let ewarn = run_hook(
+        home,
+        &format!(
+            "expertise-warn --agent {name} --expertise {} --launcher {} --main-agent {name}",
+            q(&exp_dir),
+            q(&format!("{home}/bin/genesis-memory.js")),
+        ),
     );
-    let stop = format!(
-        "{bin} validate . {name} --expertise {} --main-agent {name}",
-        q(&exp_dir)
+    let stop = run_hook(
+        home,
+        &format!(
+            "validate . {name} --expertise {} --main-agent {name}",
+            q(&exp_dir)
+        ),
     );
     // Feature 2, Phase B: reflect-surface presents Mneme's pending learning proposals to the user at the
     // next prompt (Mneme has no SendMessage). Carries --main-agent (idempotent replace + demote removal).
-    let reflect_surface = format!("{bin} reflect-surface --main-agent {name}");
+    let reflect_surface = run_hook(home, &format!("reflect-surface --main-agent {name}"));
     let mut stop_hooks = vec![
         json!({ "type": "command", "command": capture }),
         json!({ "type": "command", "command": ewarn }),
@@ -692,12 +712,11 @@ mod tests {
             &meta.expertise,
         );
         assert!(fm.contains("name: method"));
-        // The hook binary carries a `.exe` suffix on Windows (see `hook_bin`), so the gate command is
-        // `...genesis-hook.exe" gate` there — assert with the platform-correct extension.
-        let ext = if cfg!(windows) { ".exe" } else { "" };
-        assert!(fm.contains(&format!(
-            "\"${{CLAUDE_PROJECT_DIR}}/.genesis/bin/genesis-hook{ext}\" gate --expertise"
-        )));
+        // issue #24: hooks route through the OS-agnostic launcher shim, not a baked genesis-hook[.exe] path.
+        assert!(fm.contains(
+            "node \"${CLAUDE_PROJECT_DIR}/.genesis/bin/genesis-memory.js\" --run-hook gate --expertise"
+        ));
+        assert!(!fm.contains("/bin/genesis-hook\"") && !fm.contains("/bin/genesis-hook.exe\""));
         assert!(fm.contains("- type: agent")); // method has expertise -> review hook
         assert!(!fm.contains("matcher: \"Bash\"")); // method is not sensei
     }
@@ -893,6 +912,79 @@ mod tests {
         assert!(
             !s2["hooks"].to_string().contains("reflection loop"),
             "demote removes the Mneme reflection agent"
+        );
+    }
+
+    #[test]
+    fn hooks_route_via_run_hook_shim_cross_platform() {
+        // issue #24: committed hooks must NOT bake a per-OS genesis-hook path; they route through the
+        // launcher `--run-hook` shim so the same settings.json/frontmatter works on win/mac/linux.
+        let h = main_thread_hooks(
+            "bot",
+            "${CLAUDE_PROJECT_DIR}/.genesis",
+            &["persona-creation".to_string()],
+        );
+        let cmds: Vec<String> = [
+            "SessionStart",
+            "PreToolUse",
+            "PreCompact",
+            "Stop",
+            "UserPromptSubmit",
+        ]
+        .iter()
+        .flat_map(|ev| h[*ev].as_array().cloned().unwrap_or_default())
+        .flat_map(|b| b["hooks"].as_array().cloned().unwrap_or_default())
+        .filter_map(|hk| hk["command"].as_str().map(ToString::to_string))
+        .collect();
+        for c in &cmds {
+            assert!(
+                !c.contains("/bin/genesis-hook\""),
+                "no baked genesis-hook path: {c}"
+            );
+            assert!(
+                !c.contains("/bin/genesis-hook.exe\""),
+                "no baked .exe path: {c}"
+            );
+        }
+        // the genesis-hook subcommands are present, each via the shim + carrying --main-agent
+        for sub in [
+            "inject",
+            "gate",
+            "enforce-research",
+            "capture-session",
+            "expertise-warn",
+            "validate",
+            "precompact",
+            "reflect-surface",
+        ] {
+            assert!(
+                cmds.iter().any(|c| c.contains(&format!("--run-hook {sub}"))
+                    && c.starts_with("node ")
+                    && c.contains("bin/genesis-memory.js")
+                    && c.contains("--main-agent bot")),
+                "hook `{sub}` must route via `node …genesis-memory.js --run-hook {sub} … --main-agent bot`"
+            );
+        }
+        // subagent frontmatter also routes via the shim (no baked path)
+        let m = builtin_meta("method").unwrap();
+        let fm = frontmatter(
+            "method",
+            &m,
+            "${CLAUDE_PROJECT_DIR}/.genesis",
+            &[],
+            &m.expertise,
+        );
+        assert!(
+            !fm.contains("/bin/genesis-hook\"") && !fm.contains("/bin/genesis-hook.exe\""),
+            "frontmatter must not bake a genesis-hook path"
+        );
+        assert!(
+            fm.contains("--run-hook gate --expertise"),
+            "frontmatter gate via shim"
+        );
+        assert!(
+            fm.contains("--run-hook validate . method"),
+            "frontmatter validate via shim"
         );
     }
 
