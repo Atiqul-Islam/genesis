@@ -12,7 +12,7 @@ own expertise. Do NOT run the memory CLIs yourself.
 `migrate`); anything after it is an optional path (used by `merge`). If the subcommand is missing or not one of
 those five, ask the user which of them they want — do not guess.
 
-**Do this now:** invoke the **`mneme`** agent (via the Agent tool), telling it the subcommand, the repo
+**Do this now:** invoke the **`genesis:mneme`** agent (via the Agent tool), telling it the subcommand, the repo
 (`${CLAUDE_PROJECT_DIR}`), and any path from `$ARGUMENTS`. Mneme carries out exactly the requested operation:
 
 - **validate** — Mneme runs `node "${CLAUDE_PLUGIN_ROOT}/bin/genesis-memory.js" --run-cli validate --repo

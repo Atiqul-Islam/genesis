@@ -31,7 +31,7 @@ repos + agents you found and confirm the set with the user before reading anythi
 absolute path to `-`). **Redact credentials on sight** — never carry a secret value into a proposal;
 reference it as "credential present at <path>".
 
-**4. Ask Mneme to propose (no writes).** Invoke the **`mneme`** agent per repo with the gathered, redacted
+**4. Ask Mneme to propose (no writes).** Invoke the **`genesis:mneme`** agent per repo with the gathered, redacted
 history and: "Propose durable, generalizable expertise rules (always/never that would prevent a repeat
 mistake), one sentence each, with the target bucket. Skip one-off facts. Dedup against the repo's existing
 rules (`.genesis/expertise/manifests` + `learned.jsonl`) and flag any that CONTRADICT an existing rule with a
