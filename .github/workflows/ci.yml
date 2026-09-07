@@ -116,7 +116,7 @@ jobs:
           set -e
           for t in \
             hooks/test_plugin.js hooks/test_vendored_skills.js \
-            test/launcher.test.js; do
+            test/launcher.test.js test/commands-agents.test.js; do
             if [ -f "$t" ]; then echo "== $t =="; node "$t"; else echo "skip (absent): $t"; fi
           done
 
