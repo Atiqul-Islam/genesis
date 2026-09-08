@@ -1,0 +1,87 @@
+{
+  "expertise": "expertise-application",
+  "source": "expertise/expertise-application.md",
+  "note": "Faithful rule manifest. The .md is authoritative and unchanged; this indexes every actionable rule in it, typed checkable|judgment|principle, with a predicate (checkable) or proxy/reviewer criterion (judgment). No rule in the source is dropped — see sections_accounted.",
+  "schema": {
+    "id": "stable rule id",
+    "section": "source section the rule comes from",
+    "text": "faithful statement of the rule (same meaning as the source)",
+    "type": "checkable = a program can verify it | judgment = needs the independent reviewer | principle = governing rationale, not per-artifact checkable",
+    "predicate": "checkable only: {kind, spec} the hook evaluates against produced artifacts",
+    "reviewer_criterion": "judgment only: the yes/no question the independent LLM-reviewer answers"
+  },
+  "rules": [
+    {
+      "id": "ea-0", "section": "§0/§2", "type": "principle",
+      "text": "Determinism lives outside the forward pass: maximize the fraction of expertise expressed as a mechanically-checkable predicate, guarantee those in the harness, and route the irreducibly-semantic remainder to an independent grounded critic (raised + audited)."
+    },
+    {
+      "id": "ea-1", "section": "§3.1", "type": "checkable",
+      "text": "Decompose expertise into scoped, positively-framed, ID'd imperative rules. Say 'apply to every X', never 'apply generally'. Give each rule a stable ID.",
+      "predicate": {"kind": "structure", "spec": "the built agent's expertise has a manifest with ID'd rules; each rule text is imperative and scoped (no bare 'apply generally')."}
+    },
+    {
+      "id": "ea-2", "section": "§3.2", "type": "checkable",
+      "text": "Compile each rule into a bucket: (a) mechanically-checkable predicate -> harness gate (preferred), or (b) semantic rubric item -> independent grounded judge.",
+      "predicate": {"kind": "structure", "spec": "every rule in the manifest has type in {checkable,judgment}; checkable rules carry a predicate, judgment rules carry a reviewer_criterion."}
+    },
+    {
+      "id": "ea-3", "section": "§3.3", "type": "checkable",
+      "text": "Force the agent to CITE the governing rule-IDs before/at finishing, turning 'consulted the rule' into a checkable artifact.",
+      "predicate": {"kind": "declaration", "spec": "the agent emits APPLIED-EXPERTISE: <name>#<rule-ids> naming the concrete rule ids it applied (not just the expertise name)."}
+    },
+    {
+      "id": "ea-4", "section": "§3.4", "type": "checkable",
+      "text": "Re-assert the top rules at the TAIL before consequential actions and every few turns, cache-safe (in-messages system entries / UserPromptSubmit / PreToolUse surfacing). Fights decay without cache-bust.",
+      "predicate": {"kind": "wiring", "spec": "a PreToolUse (gate) surfaces the relevant rules before a Write/Edit, and/or a per-turn re-assert hook is wired — not SessionStart-only."}
+    },
+    {
+      "id": "ea-5", "section": "§3.5", "type": "checkable",
+      "text": "Review must be independent, grounded, and fail-closed: a SEPARATE agent judges; never self-grade; ground on the expertise text + artifacts; may only block.",
+      "predicate": {"kind": "wiring", "spec": "the reviewer is a different agent/model from the author (never the same instance grading its own work) and its verdict can only block, never certify success."}
+    },
+    {
+      "id": "ea-6", "section": "§3.6", "type": "checkable",
+      "text": "Govern outputs and actions, not the reasoning trace. Never phrase a rule as 'in your thinking...'.",
+      "predicate": {"kind": "regex", "spec": "no rule text targets the private reasoning trace (reject phrasings like 'in your thinking', 'in your reasoning', 'in your extended thinking')."}
+    },
+    {
+      "id": "ea-7", "section": "§4 C1", "type": "checkable",
+      "text": "Self-critique helps ONLY as a visible output step grounded on external evidence (test/validator/retrieved rule/independent judge). Never intrinsic self-critique; never instructions aimed at the hidden reasoning trace.",
+      "predicate": {"kind": "wiring", "spec": "any self-critique/repair loop checks the output against an external artifact (test result / validator output / retrieved rule), not the model's unaided opinion."}
+    },
+    {
+      "id": "ea-8", "section": "§4 C2", "type": "checkable",
+      "text": "An LLM-as-judge must be INDEPENDENT (never self-grade), evidence-grounded, and fail-closed; a 'pass' is never proof of success — prove success with deterministic checks.",
+      "predicate": {"kind": "wiring", "spec": "the judge model is cross-family / a different instance from the author; grounded on the expertise text + artifacts; can only block; success is proven by deterministic checks, not the judge's 'pass'."}
+    },
+    {
+      "id": "ea-9", "section": "§4 C3", "type": "checkable",
+      "text": "Keep an immutable high expertise prefix (cache + primacy) AND tail re-assertion (in-messages entries, no cache-bust) — use both edges of the attention curve.",
+      "predicate": {"kind": "wiring", "spec": "the stable expertise is injected high/immutable (SessionStart) and the top rules are re-asserted at the tail before risky steps."}
+    },
+    {
+      "id": "ea-10", "section": "§5", "type": "checkable",
+      "text": "Measure per-rule adherence rate: deterministic checks for bucket-(a), independent-judge rate for bucket-(b), plus a multi-turn-stability slice. Stop ASSUMING application — measure it.",
+      "predicate": {"kind": "artifact", "spec": "an adherence log + per-rule adherence report exists and is produced over time (not a one-off)."}
+    },
+    {
+      "id": "ea-11", "section": "§6", "type": "principle",
+      "text": "Honest limit: constrained decoding / a declaration guarantees FORM, not correctness — a schema forces a rule_id field, not the RIGHT rule, and a bare declaration token does not prove the rule was applied. Verify the artifact embodies the rule, not just that the token exists."
+    },
+    {
+      "id": "ea-12", "section": "§6", "type": "principle",
+      "text": "Honest limit: the gate-checkable / raise-the-rest split is reasoned, not benchmarked (gap G2: no head-to-head of prompt-raise vs hard-gate on one ruleset). Do not oversell 'proven'."
+    }
+  ],
+  "sections_accounted": {
+    "§0 thesis": "ea-0",
+    "§1 presence != application (evidence: -39% multi-turn, >=50%@32K, U-shaped attention, distractors, sycophancy)": "rationale for the whole manifest; motivates ea-0/ea-4/ea-10 — no standalone rule, cited here so it is not lost",
+    "§2 determinism frontier": "ea-0 (the operating principle) + the checkable/judgment typing used across all rules",
+    "§3 design rules": "ea-1..ea-6 (one per sub-rule)",
+    "§4 resolutions": "ea-7 (C1), ea-8 (C2), ea-9 (C3)",
+    "§5 measure adherence": "ea-10",
+    "§6 honest limits": "ea-11, ea-12",
+    "§7 Genesis design delta": "the roadmap this manifest + the FIX tasks implement (rule decomposition ea-1, cite-rule ea-3, tail re-assertion ea-4, adherence ea-10); recorded so the section is accounted for"
+  }
+}

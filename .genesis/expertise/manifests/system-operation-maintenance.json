@@ -1,0 +1,225 @@
+{
+  "expertise": "system-operation-maintenance",
+  "source": "expertise/system-operation-maintenance.md",
+  "status": "COMPLETE — all of §0–§11 + Operational defaults + Source ledger captured in som-1..som-39 (every repo workflow/script/manifest/doc read in full; no context dropped). sections_accounted maps every section to its rules.",
+  "note": "Faithful rule manifest for operating and maintaining the Genesis repository, authored for the genesis-engineer agent. The .md is authoritative and unchanged; this indexes every actionable rule, typed checkable|judgment|principle, with a predicate (checkable) or reviewer_criterion (judgment). Grounded in THIS repo's real tooling (ci.yml, release.yml, bump-version.mjs, fetch-model.mjs, bin/genesis-memory.js, the three Cargo.toml, plugin.json, rust-toolchain.toml, the memory-sync skill + genesis:sync/fix/doctor/memory commands) plus the external primary specs (SemVer 2.0.0, Keep a Changelog 1.1.0, Cargo SemVer guide, GitHub Actions, Claude Code plugin/MCP docs, SQLite WAL backup). The autonomy/confirmation boundary is encoded as som-3 (wiring): no irreversible/outward-facing action runs unattended by default.",
+  "schema": {
+    "id": "stable rule id (som-N)",
+    "section": "source section the rule comes from",
+    "text": "faithful, imperative, scoped statement of the rule (same meaning as the source)",
+    "type": "checkable = a program can verify it | judgment = needs the independent reviewer | principle = governing rationale, not per-artifact checkable",
+    "predicate": "checkable only: {kind, spec} the hook/reviewer evaluates against produced artifacts",
+    "reviewer_criterion": "judgment only: the yes/no question the independent LLM-reviewer answers"
+  },
+  "rules": [
+    {
+      "id": "som-1", "section": "§0 Operating posture", "type": "principle",
+      "text": "Optimize for reversibility and integrity: prefer local reversible actions, gate every outward-facing irreversible one, and treat every published release artifact as immutable and consumer-facing — a mistake is corrected by shipping a NEW version, never by editing a published one. (SemVer 2.0.0 clause 3.)"
+    },
+    {
+      "id": "som-2", "section": "§0 Operating posture", "type": "checkable",
+      "text": "Verify every operational fact (the current release version, the CI gates, the pinned toolchain, the pinned model SHA) against a primary source in THIS repo before acting — the actual workflow YAML, script, Cargo.toml, plugin.json, or launcher constant — never a remembered or assumed value.",
+      "predicate": {"kind": "process", "spec": "operational values used in a decision are read from the concrete repo file (workflow/script/Cargo.toml/plugin.json/launcher) at decision time, not recalled or assumed; no action relies on an unverified value."}
+    },
+    {
+      "id": "som-3", "section": "§1 Autonomy & confirmation boundary", "type": "checkable",
+      "text": "THE autonomy boundary — never run an irreversible or outward-facing action (deploy, publish/release, git push or git push --force, create a release-triggering git tag v*, or delete data) without the user's explicit authorization.",
+      "predicate": {"kind": "wiring", "spec": "the agent requests confirmation before any deploy/publish/release, git push (or --force), release tag (v*), or data deletion; no such action occurs unattended by default."}
+    },
+    {
+      "id": "som-4", "section": "§1 Autonomy & confirmation boundary", "type": "checkable",
+      "text": "Let reversible, local, read-only actions proceed without a gate: build (cargo build --release), test, lint (clippy/fmt --check), dry-run, reading logs/state, fetching the model, and editing uncommitted working-tree files (a version bump, a changelog edit).",
+      "predicate": {"kind": "structure", "spec": "actions classified as free (build/test/lint/dry-run/read/uncommitted working-tree edits) touch nothing outside the local working tree and require no confirmation; only the som-3 set is gated."}
+    },
+    {
+      "id": "som-5", "section": "§1 Autonomy & confirmation boundary", "type": "checkable",
+      "text": "Never force-push and never discard either side of a divergence; on a conflict you cannot resolve losslessly (JSONL left with <<<<<<< markers, unrelated histories, an unreconcilable push), STOP and consult the user.",
+      "predicate": {"kind": "regex", "spec": "no code path runs git push --force / -f or resets away one side of a divergence; an unresolvable conflict halts and asks the user rather than discarding history."}
+    },
+    {
+      "id": "som-6", "section": "§1 Autonomy & confirmation boundary", "type": "checkable",
+      "text": "Before any gated action, present the exact command/diff and its blast radius (what changes, where it becomes visible — remote branch, public release, consumers' machines — and whether it is reversible), then wait for the go-ahead. Silence is not consent.",
+      "predicate": {"kind": "process", "spec": "each gated action is preceded by a stated plan/diff + blast-radius and an explicit user go-ahead before execution."}
+    },
+    {
+      "id": "som-7", "section": "§1 Autonomy & confirmation boundary", "type": "judgment",
+      "text": "Judge each requested operation's reversibility and blast radius to classify it as gated (som-3) or free (som-4); when in doubt, treat it as gated. Anything that leaves the machine, mutates shared history, or destroys data is gated; a local file edit is free.",
+      "reviewer_criterion": "Was each operation correctly classified by reversibility/blast-radius — gating everything that leaves the machine, mutates shared history, or deletes data, and defaulting to gated when uncertain — rather than acting first?"
+    },
+    {
+      "id": "som-8", "section": "§2 Versioning & the release-version contract", "type": "checkable",
+      "text": "Version per Semantic Versioning 2.0.0: MAJOR for incompatible/breaking changes, MINOR for backward-compatible new functionality (and whenever marking something deprecated), PATCH for backward-compatible bug fixes; a pre-release identifier (e.g. -beta) ranks BELOW the associated normal version; a released version is immutable — release a new one, never modify it.",
+      "predicate": {"kind": "semver", "spec": "the chosen version bump matches the change class per SemVer 2.0.0 (major=breaking, minor=backward-compatible feature/deprecation, patch=backward-compatible fix); pre-release tags denote lower precedence; no published version is ever modified in place."}
+    },
+    {
+      "id": "som-9", "section": "§2 Versioning & the release-version contract", "type": "checkable",
+      "text": "Keep the release version in lockstep across its TWO sources of truth — .claude-plugin/plugin.json \"version\" and bin/genesis-memory.js RELEASE_VERSION — by running node scripts/bump-version.mjs <semver>; never hand-edit one without the other (the release gate refuses a mismatch).",
+      "predicate": {"kind": "invariant", "spec": "plugin.json version and launcher RELEASE_VERSION are always equal, set together via bump-version.mjs; a version change never edits one file alone."}
+    },
+    {
+      "id": "som-10", "section": "§2 Versioning & the release-version contract", "type": "checkable",
+      "text": "Treat the three Rust crate versions (server/cli/hook Cargo.toml, each 0.1.0, publish=false) as INTERNAL and decoupled from the consumer-facing release/plugin version (0.2.0-beta); do not conflate them and do not cargo publish the crates.",
+      "predicate": {"kind": "structure", "spec": "crate versions are treated as internal (publish=false) and never used as, or synced to, the release/plugin version; no cargo publish of the crates is attempted."}
+    },
+    {
+      "id": "som-11", "section": "§2 Versioning & the release-version contract", "type": "checkable",
+      "text": "Cut a v<version> tag ONLY from a commit on main whose plugin.json version and launcher RELEASE_VERSION both equal the tag minus v; the release gate enforces the on-main ancestry + version match and refuses otherwise — satisfy the gate before tagging, never work around it. Flow: branch → merge to main → tag on main → release.",
+      "predicate": {"kind": "procedure", "spec": "a release tag is created only on a main-ancestor commit with plugin.json + launcher versions equal to the tag; the gate's on-main + version-match checks are satisfied, not bypassed."}
+    },
+    {
+      "id": "som-12", "section": "§3 The release procedure", "type": "checkable",
+      "text": "Cut a release in this fixed order: (1) green CI on the branch, (2) node scripts/bump-version.mjs <ver>, (3) update CHANGELOG, (4) merge to main, (5) tag v<ver> on main, (6) push the tag → release.yml gates/builds/publishes. Steps 4–6 (merge/tag/push) require the user's go-ahead (som-3).",
+      "predicate": {"kind": "procedure", "spec": "the release follows green-CI → bump → changelog → merge-main → tag → push in order, with the merge/tag/push boundary gated on user confirmation."}
+    },
+    {
+      "id": "som-13", "section": "§3 The release procedure", "type": "checkable",
+      "text": "Let CI (release.yml) perform the actual multi-platform build and publish — do not hand-build or hand-upload release assets; the pipeline builds self-contained binaries from the pure-Rust tract path (bundled SQLite, static Windows CRT) and verifies no dynamic inference-runtime sidecar is linked.",
+      "predicate": {"kind": "wiring", "spec": "release binaries + SHA256SUMS are produced and uploaded by release.yml (the 8-target build + self-contained/no-sidecar guard), not hand-built or hand-uploaded."}
+    },
+    {
+      "id": "som-14", "section": "§3 The release procedure", "type": "checkable",
+      "text": "Publish a pre-release tag (contains -, e.g. v0.2.0-beta) as a GitHub prerelease; publish only a final X.Y.Z tag as a full release. Never mark a -beta/-alpha/-rc build as a full release.",
+      "predicate": {"kind": "regex", "spec": "a tag containing '-' publishes with --prerelease; a tag with no pre-release identifier publishes as a full release; the two are never swapped."}
+    },
+    {
+      "id": "som-15", "section": "§4 CI & build health", "type": "checkable",
+      "text": "Keep CI green: never merge to main or cut a release while ci.yml is red; a red main blocks every release (the gate builds from main). Fix or revert the offending change first.",
+      "predicate": {"kind": "wiring", "spec": "no merge-to-main or release proceeds while ci.yml is failing; a broken build is fixed or reverted before any outward step."}
+    },
+    {
+      "id": "som-16", "section": "§4 CI & build health", "type": "checkable",
+      "text": "Preserve every CI gate; never weaken, skip, or continue-on-error a gate to go green. Gates: server+hook+cli build+test on all three primary OSes; clippy --all-targets -- -D warnings + cargo fmt --check on hook and cli; node parse-check of every JS/MJS + plugin/launcher unit tests; the no-runtime-Python assertion; and the self-contained-binary regression guard.",
+      "predicate": {"kind": "structure", "spec": "all ci.yml gates (3-OS rust build/test, clippy -D warnings + fmt --check on hook/cli, node parse-check + unit tests, python-free assertion, self-contained guard) remain enforced; none is disabled/continue-on-error to pass."}
+    },
+    {
+      "id": "som-17", "section": "§4 CI & build health", "type": "checkable",
+      "text": "Treat the pinned toolchain (rust-toolchain.toml = 1.93.0) and pinned load-bearing deps (rusqlite =0.39.0, ort =2.0.0-rc.13, ort-tract =0.4.0) as deliberate pins with documented reasons; never bump them casually — a bump is a change to verify and test across all release targets.",
+      "predicate": {"kind": "structure", "spec": "the pinned toolchain + load-bearing deps are changed only deliberately (with a documented reason) and re-verified across targets, never bumped as a convenience edit."}
+    },
+    {
+      "id": "som-18", "section": "§4 CI & build health", "type": "checkable",
+      "text": "Keep the embedding model pinned by revision + SHA-256 (scripts/fetch-model.mjs DEFAULT_REVISION + EXPECTED_MODEL_SHA256; fail-closed on mismatch); repointing the model requires --print-only capture AND regenerating the golden vectors + server embed::MODEL_* constants — never repoint it silently.",
+      "predicate": {"kind": "invariant", "spec": "the model revision+SHA stay pinned and fail-closed; any repoint regenerates golden vectors + server constants deliberately, never a silent revision change."}
+    },
+    {
+      "id": "som-19", "section": "§5 Distribution mechanics & integrity", "type": "checkable",
+      "text": "Distribute ONLY via GitHub Release assets downloaded by the Node launcher — no npm, no registry account, no publish token; the release uses only the auto-provided GITHUB_TOKEN. Do not reintroduce npm publishing.",
+      "predicate": {"kind": "architecture", "spec": "release distribution is GitHub Release assets fetched by bin/genesis-memory.js using only GITHUB_TOKEN; no npm/registry publish path is present or reintroduced."}
+    },
+    {
+      "id": "som-20", "section": "§5 Distribution mechanics & integrity", "type": "checkable",
+      "text": "SHA-256-verify every downloaded asset against the published SHA256SUMS before it is used; never serve or stage an unverified or mismatched asset (the launcher refuses an asset with no listed checksum or a mismatch).",
+      "predicate": {"kind": "invariant", "spec": "every fetched binary/model asset is hashed and compared to SHA256SUMS before use; a missing-checksum or mismatched asset is refused, never staged/served."}
+    },
+    {
+      "id": "som-21", "section": "§5 Distribution mechanics & integrity", "type": "checkable",
+      "text": "Preserve /plugin update propagation: bump the plugin.json version on every consumer-facing change (an unbumped version ships no update), and rely on the launcher's --sync + .staged-version stamp to refresh already-bootstrapped repos to the plugin version.",
+      "predicate": {"kind": "wiring", "spec": "every consumer-facing change bumps plugin.json version so /plugin update ships it; the --sync/.staged-version mechanism that refreshes bootstrapped repos is left intact."}
+    },
+    {
+      "id": "som-22", "section": "§6 Changelog discipline", "type": "checkable",
+      "text": "Maintain the changelog in Keep a Changelog format: one dated entry per released version, newest first, changes grouped under Added/Changed/Deprecated/Removed/Fixed/Security, an Unreleased section at the top, and a stated note that the project follows Semantic Versioning; an entry exists for every version.",
+      "predicate": {"kind": "structure", "spec": "the changelog has a top Unreleased section, dated newest-first version entries (one per version), grouped Added/Changed/Deprecated/Removed/Fixed/Security types, and a SemVer-adherence note."}
+    },
+    {
+      "id": "som-23", "section": "§6 Changelog discipline", "type": "judgment",
+      "text": "Write changelog entries for humans — user-visible impact, not a dump of git log lines — and mark a pulled release [YANKED].",
+      "reviewer_criterion": "Are the changelog entries human-readable, user-impact statements (not raw git-log dumps), with any pulled release marked [YANKED]?"
+    },
+    {
+      "id": "som-24", "section": "§7 Memory-store health & sync", "type": "checkable",
+      "text": "Keep the memory store's two artifacts consistent and BOTH committed, and never commit the sidecars: .genesis/memory.db is the ready vector store and source of truth; .genesis/memory/memory.jsonl is the diff-friendly mirror and merge safety-net (the .db self-heals from the JSONL on server start). Commit both together; never commit memory.db-wal / memory.db-shm.",
+      "predicate": {"kind": "invariant", "spec": "commits include both .genesis/memory.db and .genesis/memory/memory.jsonl together and never the WAL/shm sidecars; the .db is treated as source of truth with the JSONL as its self-healing mirror."}
+    },
+    {
+      "id": "som-25", "section": "§7 Memory-store health & sync", "type": "checkable",
+      "text": "Sync memory ONLY through the deterministic, lossless procedure (/genesis:sync / genesis-cli reconcile): commit both artifacts → fetch remote JSONL → UNION-reconcile keyed by (agent_id, text) (dedupe by content, never overwrite, never drop, stable-sorted + re-ided) → commit → push; consult the user only on a genuine git conflict; never force-push, never discard a side.",
+      "predicate": {"kind": "procedure", "spec": "memory sync runs commit-both → fetch → union-reconcile by (agent_id,text) → commit → push; it is lossless (no drop/overwrite) and only halts for a genuine git conflict, never force-pushing or discarding a side."}
+    },
+    {
+      "id": "som-26", "section": "§7 Memory-store health & sync", "type": "checkable",
+      "text": "Recover scattered memory via /genesis:doctor (read-only diagnosis) then /genesis:fix (consolidate THIS repo's agents' strays into the canonical .db), at a user-chosen scan scope, reading strays READ-ONLY; require an explicit --scope user|system or --root (never guess a scan area) and never pull a foreign repo's memory.",
+      "predicate": {"kind": "process", "spec": "stray recovery runs doctor (read-only) then fix at an explicit user-chosen scope, reads strays read-only, and consolidates only this repo's agents — never a foreign repo's memory, never a guessed scope."}
+    },
+    {
+      "id": "som-27", "section": "§7 Memory-store health & sync", "type": "checkable",
+      "text": "Do not file-copy the live memory DB for a backup while the server holds a WAL open (a raw cp mid-write can capture an inconsistent snapshot); for a consistent backup, checkpoint first, or back up via the JSONL export or SQLite's Online Backup API.",
+      "predicate": {"kind": "process", "spec": "a memory backup is taken via a WAL checkpoint + copy, the JSONL export, or the SQLite Online Backup API — never a plain file copy of an actively-written WAL database."}
+    },
+    {
+      "id": "som-28", "section": "§7 Memory-store health & sync", "type": "checkable",
+      "text": "Run /genesis:memory validate to check DB↔JSONL agreement and the embedding contract / drift canary; surface genuine contradictions to the user in the HTML report (full path given) and resolve WITH them — never auto-resolve silently and never serve a mixed-embedding-generation index (re-embed the whole store on a contract change).",
+      "predicate": {"kind": "process", "spec": "validate compares .db vs .jsonl and runs the embedding-contract/drift canary; contradictions are surfaced via the HTML report and resolved with the user, not auto-resolved; a mixed-generation index is re-embedded, never served."}
+    },
+    {
+      "id": "som-29", "section": "§8 Safe deploys & rollback", "type": "checkable",
+      "text": "Roll back by rolling forward: because a published version is immutable, correct a bad release by shipping a fixed NEW version (or re-pointing the plugin version), never by editing a released tag or re-uploading over a published asset under the same version (consumer caches are per-version, so a same-version overwrite would not reach cached installs).",
+      "predicate": {"kind": "invariant", "spec": "a bad release is remediated by a new version (roll-forward), never by mutating a released tag/asset under the same version; per-version caching is respected."}
+    },
+    {
+      "id": "som-30", "section": "§8 Safe deploys & rollback", "type": "checkable",
+      "text": "Verify a clean install on a real platform before declaring a release done, and let a straggler platform degrade gracefully: the release job publishes whatever built so one failing platform never sinks the rest, and the launcher treats a missing platform asset as a clear build-from-source path, not a crash.",
+      "predicate": {"kind": "process", "spec": "a release is confirmed by an actual clean-install verification (download → SHA verify → exec) on a target; a missing platform asset yields a build-from-source message and never blocks publishing the other platforms."}
+    },
+    {
+      "id": "som-31", "section": "§9 Issue & PR triage", "type": "checkable",
+      "text": "Reproduce and diagnose a reported bug against a primary source (the real code / real output) before proposing a fix; never speculate a cause. Collect OS, Node/rustc versions, exact command, expected vs actual, and full output; a minimal reproduction outweighs a description.",
+      "predicate": {"kind": "process", "spec": "a fix is proposed only after the bug is reproduced/diagnosed against the real code or real output with the environment + repro captured — no speculative cause drives a change."}
+    },
+    {
+      "id": "som-32", "section": "§9 Issue & PR triage", "type": "checkable",
+      "text": "Hold every change to the four hard rules (no shortcuts, no speculation, use the docs/expertise, production-ready + tested) and require a regression test: a bug fix ships a test that FAILS before the fix and PASSES after; new behavior ships with tests; the relevant CI gate passes before merge.",
+      "predicate": {"kind": "structure", "spec": "each change satisfies the four hard rules; a bug fix carries a fail-before/pass-after regression test and new behavior carries tests; CI passes before merge."}
+    },
+    {
+      "id": "som-33", "section": "§9 Issue & PR triage", "type": "checkable",
+      "text": "Route a security report or a committed secret PRIVATELY to the maintainer — never open, comment, or attach it on a public issue or PR.",
+      "predicate": {"kind": "process", "spec": "security vulnerabilities / leaked credentials are reported privately to the maintainer and never disclosed in the public issue/PR tracker."}
+    },
+    {
+      "id": "som-34", "section": "§10 Lifecycle, deprecation & deferred work", "type": "checkable",
+      "text": "Track deferred and unsupported work in TODO.md with its reason and fix-path (e.g. linux-arm64-musl, win32-arm64 blocked upstream), and never claim an unbuilt platform is supported (consumers on it get a clean unsupported-platform message).",
+      "predicate": {"kind": "structure", "spec": "deferred/unsupported items are recorded in TODO.md with reason + fix-path; supported-platform claims match what the release actually builds — no overstated coverage."}
+    },
+    {
+      "id": "som-35", "section": "§10 Lifecycle, deprecation & deferred work", "type": "checkable",
+      "text": "Deprecate before you remove: announce with a MINOR bump + a CHANGELOG Deprecated entry, keep a migration path, then remove the capability in a later (breaking/major) release; never remove a consumer-facing capability without a deprecation trail.",
+      "predicate": {"kind": "process", "spec": "removing a consumer-facing capability is preceded by a deprecation (minor bump + CHANGELOG Deprecated entry + migration path); no capability is removed without that trail."}
+    },
+    {
+      "id": "som-36", "section": "§10 Lifecycle, deprecation & deferred work", "type": "judgment",
+      "text": "Do not silently reverse a documented design decision (npm→GitHub-Releases distribution, .db-as-source-of-truth with .jsonl mirror, pure-Rust tract over ONNX Runtime); keep a superseded decision documented and surface a proposed reversal to the user rather than applying it unilaterally.",
+      "reviewer_criterion": "Was each documented design decision either upheld or its proposed reversal surfaced to the user (with the superseded decision kept documented), rather than silently flipped?"
+    },
+    {
+      "id": "som-37", "section": "§11 Safety invariants (house rules)", "type": "checkable",
+      "text": "Never write a credential/secret/key VALUE into any file, log, commit, changelog, or memory record — record 'credential present at <path>' instead — and never route around the genesis-hook gate that blocks credential shapes at write time.",
+      "predicate": {"kind": "regex", "spec": "no authored artifact contains a credential/secret/key value; secrets are referenced as 'credential present at <path>'; the gate's credential-shape block is never bypassed."}
+    },
+    {
+      "id": "som-38", "section": "§11 Safety invariants (house rules)", "type": "checkable",
+      "text": "Use 'structured reasoning' in all authored text; never emit the banned reasoning-trace phrase the gate's regex rejects. Govern outputs and actions, not the private reasoning trace.",
+      "predicate": {"kind": "regex", "spec": "authored text uses 'structured reasoning' and never emits the gate's banned reasoning-trace phrase; rules target outputs/actions, not the private reasoning trace."}
+    },
+    {
+      "id": "som-39", "section": "§11 Safety invariants (house rules)", "type": "principle",
+      "text": "Honest limit: a green pipeline proves FORM (it built, published, and checksummed), not field correctness or safety on a consumer's machine — prove a release is good with a real clean-install verification and the user's sign-off, and never overstate 'shipped' as 'verified in the field'."
+    }
+  ],
+  "sections_accounted": {
+    "§0 Operating posture": "som-1 (reversibility+integrity, immutable artifacts), som-2 (verify against primary source before acting)",
+    "§1 The autonomy & confirmation boundary": "som-3 (THE autonomy boundary — gate deploy/publish/push/tag/delete), som-4 (free reversible/local actions), som-5 (never force-push/discard), som-6 (present plan+blast-radius, wait), som-7 (judge reversibility/blast-radius; when in doubt gate)",
+    "§2 Versioning & the release-version contract": "som-8 (SemVer 2.0.0 correctness + pre-release + immutability), som-9 (plugin.json ↔ launcher lockstep via bump-version.mjs), som-10 (crate versions internal/decoupled), som-11 (tag only on main with matching versions; satisfy the gate)",
+    "§3 The release procedure": "som-12 (fixed order green-CI→bump→changelog→merge→tag→push), som-13 (CI builds+publishes; no hand-build/upload; self-contained guard), som-14 (pre-release tag→prerelease; final→full release)",
+    "§4 CI & build health": "som-15 (keep CI green; red main blocks releases), som-16 (preserve every gate; no weaken/skip/continue-on-error), som-17 (pinned toolchain+deps deliberate), som-18 (model pinned by revision+SHA; no silent repoint)",
+    "§5 Distribution mechanics & integrity": "som-19 (GitHub Releases only, GITHUB_TOKEN only, no npm), som-20 (SHA-256-verify every asset vs SHA256SUMS), som-21 (bump plugin version for /plugin update; --sync stamp)",
+    "§6 Changelog discipline": "som-22 (Keep a Changelog format — Unreleased, grouped types, dated, SemVer note), som-23 (human-impact entries, [YANKED] for pulled releases)",
+    "§7 Memory-store health & sync": "som-24 (both artifacts committed+consistent; .db truth self-heals from JSONL; no WAL/shm), som-25 (deterministic lossless union reconcile; conflict→consult; no force-push/discard), som-26 (doctor→fix stray recovery, read-only, explicit scope, no foreign memory), som-27 (no file-copy of live WAL DB; checkpoint/JSONL/Backup API), som-28 (validate DB↔JSONL + drift canary; contradictions→HTML→resolve with user; no mixed-generation serve)",
+    "§8 Safe deploys & rollback": "som-29 (rollback = roll forward to a new version; never edit a released tag/asset), som-30 (verify clean install before done; straggler degrades gracefully)",
+    "§9 Issue & PR triage": "som-31 (reproduce/diagnose against primary source before fixing; no speculation), som-32 (four hard rules + fail-before/pass-after regression test; CI passes before merge), som-33 (security/secret reports routed privately)",
+    "§10 Lifecycle, deprecation & deferred work": "som-34 (track deferred/unsupported in TODO.md; no overstated coverage), som-35 (deprecate before remove — minor bump + CHANGELOG Deprecated + migration path), som-36 (don't silently reverse a documented design decision)",
+    "§11 Safety invariants (house rules)": "som-37 (never write a credential value; 'credential present at <path>'; don't bypass the gate), som-38 (use 'structured reasoning'; never emit the banned reasoning-trace phrase), som-39 (honest limit: green pipeline proves form, not field correctness)",
+    "Operational defaults & quick reference": "the concrete pinned values (release version 0.2.0-beta, crate 0.1.0, Rust 1.93.0, pinned deps, model revision/SHA, 8 release targets, release assets, memory store paths, the gate/free action lists) that ground som-8/9/10/11/17/18/19/20/24/34 — recorded so the section is accounted for (no standalone rule)",
+    "Source ledger": "the repo + external primary sources every rule traces to (ci.yml, release.yml, bump-version.mjs, fetch-model.mjs, bin/genesis-memory.js, the three Cargo.toml, plugin.json, rust-toolchain.toml, DISTRIBUTION.md, architecture.md, CONTRIBUTING.md, NOTICE.md, README.md, TODO.md, .gitignore, .mcp.json, memory-sync + genesis:sync/fix/doctor/memory; SemVer 2.0.0, Keep a Changelog 1.1.0, Cargo SemVer guide, GitHub Actions docs, Claude Code plugin/MCP docs, SQLite WAL backup) + the sibling expertise cross-references (memory-management, expertise-application); no standalone rule — cited so the section is accounted for"
+  }
+}

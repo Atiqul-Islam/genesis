@@ -1,0 +1,186 @@
+{
+  "expertise": "spec-driven-development",
+  "source": "expertise/spec-driven-development.md",
+  "note": "Faithful rule manifest. The .md is authoritative and unchanged; this indexes every actionable rule in it, typed checkable|judgment|principle, with a predicate (checkable) or reviewer_criterion (judgment). No rule in the source is dropped — see sections_accounted. Tailored to genesis-engineer building THIS repo (server/ cucumber-rs BDD, cli/ + hook/ plain integration tests, plugin/docs prose).",
+  "schema": {
+    "id": "stable rule id",
+    "section": "source section the rule comes from",
+    "text": "faithful statement of the rule (same meaning as the source)",
+    "type": "checkable = a program can verify it | judgment = needs the independent reviewer | principle = governing rationale, not per-artifact checkable",
+    "predicate": "checkable only: {kind, spec} the hook evaluates against produced artifacts",
+    "reviewer_criterion": "judgment only: the yes/no question the independent LLM-reviewer answers"
+  },
+  "rules": [
+    {
+      "id": "sdd-0", "section": "§0", "type": "principle",
+      "text": "The spec — not the code — is the surface a human reviews: write behaviour in plain English first, compile it deterministically to executable Gherkin scenarios + typed tests, then make those tests pass; every requirement is traceable from an English sentence to a red-then-green test, and spec/code/tests are kept in lockstep by process gates, not by hope."
+    },
+    {
+      "id": "sdd-1", "section": "§1", "type": "checkable",
+      "text": "Spec-first: write (or update) a plain-English spec in test/specs/<slug>.md BEFORE writing the implementation for any behaviour change.",
+      "predicate": {"kind": "artifact", "spec": "a test/specs/<slug>.md spec exists for the change and is authored/ratified before its implementation lands."}
+    },
+    {
+      "id": "sdd-2", "section": "§1", "type": "principle",
+      "text": "Genesis operates spec-anchored: the ratified spec is retained and versioned as the primary human-review surface (code is the last-mile artifact), but the Rust code and tests remain first-class artifacts that are also reviewed — do not treat the spec as if it fully replaced the code."
+    },
+    {
+      "id": "sdd-3", "section": "§2", "type": "checkable",
+      "text": "Every feature ships a plain-English spec AND a matching compiled executable artifact (a test/features/<slug>.feature and/or unit tests) for the same change — never a spec with no test, never a test with no spec.",
+      "predicate": {"kind": "artifact", "spec": "for each change, a spec doc AND a corresponding test/features/<slug>.feature (or unit test file) both exist."}
+    },
+    {
+      "id": "sdd-4", "section": "§2", "type": "checkable",
+      "text": "Make traceability mechanical: each compiled .feature file's FIRST line is `# Source: test/specs/<slug>.md`, and every generated step/unit-stub file carries a `// Source:` / `# Source:` comment back to its spec.",
+      "predicate": {"kind": "regex", "spec": "the feature file's first line matches ^# Source: test/specs/.+\\.md and each generated step/unit-test file contains a Source: comment naming its spec."}
+    },
+    {
+      "id": "sdd-5", "section": "§3", "type": "checkable",
+      "text": "A spec uses the fixed shape: a `## Feature:`/`## Bug:` heading + 1-2 sentence description, an `### Expected Behavior` section, an `### Acceptance Criteria` section, and an optional `### Implementation Requirements` section.",
+      "predicate": {"kind": "structure", "spec": "the spec markdown contains a Feature/Bug heading, an Expected Behavior section, and an Acceptance Criteria section; Implementation Requirements is optional."}
+    },
+    {
+      "id": "sdd-6", "section": "§3", "type": "checkable",
+      "text": "Every Expected Behavior bullet has a 1:1 Acceptance Criterion, and any non-UI-observable line (storage backend, algorithm, DB table, performance number) lives under Implementation Requirements, never under Expected Behavior.",
+      "predicate": {"kind": "structure", "spec": "each Expected Behavior bullet maps to an Acceptance Criterion (no orphans), and no non-observable/implementation-detail line appears under Expected Behavior."}
+    },
+    {
+      "id": "sdd-7", "section": "§3", "type": "checkable",
+      "text": "Keep Implementation Requirements atomic: split compound requirements (e.g. 'hashed with bcrypt AND salted' becomes two requirements) so each compiles to its own independently-verifiable unit test.",
+      "predicate": {"kind": "regex", "spec": "no single Implementation Requirement bundles multiple atomic claims joined by 'and' — compound requirements are split into separate bullets."}
+    },
+    {
+      "id": "sdd-8", "section": "§3", "type": "judgment",
+      "text": "Describe WHAT the caller observes, not HOW it is implemented; use the requester's own natural language and inject no unrequested technical jargon; add happy/edge/error cases only when the request actually supplies them.",
+      "reviewer_criterion": "Does the spec describe observable behaviour in the requester's own words, keeping implementation choices out of Expected Behavior and adding no edge/error case the request never raised?"
+    },
+    {
+      "id": "sdd-9", "section": "§4", "type": "judgment",
+      "text": "Write no spec claim you cannot source from the request or from existing codebase facts; run the six-marker hallucination audit (invented_identifier, number_without_origin, implementation_specific, unconfirmed_edge_case, external_dependency, compound_requirement) and declare every unsourced claim for human ratification instead of baking it in.",
+      "reviewer_criterion": "Is every non-obvious spec claim traceable to the request or the codebase, with any assumption flagged for ratification rather than presented as fact (no invented identifiers, numbers, dependencies, or edge cases)?"
+    },
+    {
+      "id": "sdd-10", "section": "§4", "type": "checkable",
+      "text": "Label each spec claim's provenance inline: Sourced (cite the doc §-ref or scaffold), '(ratified choice — unsourced; rationale: …)', or Bootstrap/calibration item (state the requirement to pin it; the literal value is captured at first run and committed as a constant) — a reviewer must never mistake a ratified choice for a sourced fact.",
+      "predicate": {"kind": "declaration", "spec": "unsourced spec claims carry an inline '(ratified choice — unsourced …)' label and bootstrap values are named as calibration items, rather than being presented as sourced facts."}
+    },
+    {
+      "id": "sdd-11", "section": "§4", "type": "judgment",
+      "text": "When the build must diverge from a source, record the deliberate deviation — its rationale, its consequence on the acceptance criteria, and the deferred (v2) option — never silently absorb it as if it were the source's position.",
+      "reviewer_criterion": "Are all divergences from a cited source written down as explicit deviations (rationale + consequence + deferred option), rather than silently absorbed?"
+    },
+    {
+      "id": "sdd-12", "section": "§5", "type": "judgment",
+      "text": "Author Gherkin with the fixed step meaning — Given = initial context/scene (past state), When = the event/action, Then = the observable outcome — one behaviour per scenario at 3-5 steps, written declaratively in domain language rather than as imperative UI mechanics.",
+      "reviewer_criterion": "Does each scenario follow Given=context / When=event / Then=outcome, cover exactly one behaviour in a few steps, and read in domain language rather than imperative UI clicks?"
+    },
+    {
+      "id": "sdd-13", "section": "§5", "type": "judgment",
+      "text": "Factor Given steps repeated across a feature's scenarios into a Background block, reuse inventoried step definitions wherever they match, and parameterize steps with {string}/{int} instead of writing near-duplicate steps.",
+      "reviewer_criterion": "Are repeated Givens hoisted to Background and existing step definitions reused/parameterized rather than duplicated?"
+    },
+    {
+      "id": "sdd-14", "section": "§6", "type": "checkable",
+      "text": "For server/, generate each tests/bdd/<slug>_steps.rs together with a matching Cargo [[test]] block (name = \"bdd_<slug>\", path = the steps file, harness = false) — a block whose path is missing breaks cargo build, and a steps file with no block is never discovered.",
+      "predicate": {"kind": "wiring", "spec": "every server/tests/bdd/<slug>_steps.rs has a matching [[test]] block in server/Cargo.toml (name bdd_<slug>, correct path, harness=false) and vice versa — no dangling block, no orphan steps file."}
+    },
+    {
+      "id": "sdd-15", "section": "§6", "type": "checkable",
+      "text": "Compile BDD steps to the cucumber-rs (0.23) shape: a #[derive(Debug, Default, cucumber::World)] scenario-scoped World struct plus #[given/when/then(regex = …)] async step fns taking &mut World.",
+      "predicate": {"kind": "structure", "spec": "server BDD step files define a struct with #[derive(...cucumber::World)] and #[given/when/then(regex=...)] async fns over &mut <World>."}
+    },
+    {
+      "id": "sdd-16", "section": "§6", "type": "checkable",
+      "text": "Make RED stubs fail at runtime, never pass: generated Rust step/unit bodies use unimplemented!(\"Implement via TDD\") (which panics, and compiles because the lint gate sets unimplemented = warn); Python stubs use pytest.fail(...). Never emit a stub that passes.",
+      "predicate": {"kind": "regex", "spec": "generated step/unit stub bodies contain unimplemented!(\"Implement via TDD\") or pytest.fail(...) — never an empty or trivially-passing body."}
+    },
+    {
+      "id": "sdd-17", "section": "§6", "type": "judgment",
+      "text": "Use no mocks in the outer BDD loop: server/ scenarios run against the real SQLite + sqlite-vec + real ONNX embedder + the real spawned stdio binary, with per-scenario tempfile isolation in the World; only inner unit tests may mock.",
+      "reviewer_criterion": "Do the outer BDD scenarios exercise the real system (real DB, real embedder, real binary) with per-scenario isolation, reserving mocks for inner unit tests only?"
+    },
+    {
+      "id": "sdd-18", "section": "§7", "type": "judgment",
+      "text": "Develop by double-loop TDD: an outer BDD loop (behaviour, no mocks) wraps an inner unit TDD loop under Uncle Bob's Three Laws, with refactoring done inside the inner loop after each green rather than batched at the end.",
+      "reviewer_criterion": "Does the work follow double-loop TDD — outer BDD wrapping inner unit TDD under the Three Laws, refactoring after each green?"
+    },
+    {
+      "id": "sdd-19", "section": "§7", "type": "checkable",
+      "text": "Enforce RED before GREEN: run the test suite and confirm the new BDD scenarios and unit stubs FAIL before writing implementation; a test that passes before implementation is wrong and routes back to regenerate the stubs.",
+      "predicate": {"kind": "command", "spec": "the test runner is executed at the RED step and shows the new tests failing before any implementation; a premature pass triggers stub regeneration, not progression."}
+    },
+    {
+      "id": "sdd-20", "section": "§7", "type": "checkable",
+      "text": "GREEN for server/ is the full gate, not just passing tests: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --release must all exit 0; a non-zero fmt or clippy exit is not GREEN.",
+      "predicate": {"kind": "command", "spec": "GREEN is proven by `cargo fmt --check` && `cargo clippy --all-targets -- -D warnings` && `cargo test --release` all exiting 0."}
+    },
+    {
+      "id": "sdd-21", "section": "§7", "type": "judgment",
+      "text": "Run the ordered pipeline with no step skipped and none reordered: SPEC → RED → TDD-loop → GREEN → SIMPLIFY → VERIFY → REGRESSION → REVIEW → DOCS.",
+      "reviewer_criterion": "Were the ordered steps run in sequence with none skipped (RED not skipped, simplify before verify, regression before review, review before commit)?"
+    },
+    {
+      "id": "sdd-22", "section": "§8", "type": "judgment",
+      "text": "On a spec change, move the test first: update the .feature (and unit stubs) FIRST, verify it now fails (RED), and only then change the implementation.",
+      "reviewer_criterion": "When the spec changed, was the .feature/unit test updated and seen to fail before the implementation was touched?"
+    },
+    {
+      "id": "sdd-23", "section": "§8", "type": "checkable",
+      "text": "No implementation change ships without a corresponding spec in test/specs/ — no spec, no code.",
+      "predicate": {"kind": "artifact", "spec": "every implementation (src/) change traces to a test/specs/<slug>.md spec; no source change lacks a governing spec."}
+    },
+    {
+      "id": "sdd-24", "section": "§8", "type": "judgment",
+      "text": "Never edit a .feature file or a generated unit stub to make a failing test pass, and never delete or weaken an existing scenario; when fixing a bug, add a failing reproducer scenario BEFORE the fix so it can never re-appear.",
+      "reviewer_criterion": "Were tests left honest — no .feature/stub edited or scenario weakened to force a pass — and did every bug fix add a reproducer scenario that failed before the fix?"
+    },
+    {
+      "id": "sdd-25", "section": "§8", "type": "checkable",
+      "text": "Keep the spec anchored and the docs in sync: after structural changes re-sync docs/architecture.md via /docs-update, and let the suite only grow (new features/bug fixes add scenarios, never remove them).",
+      "predicate": {"kind": "artifact", "spec": "structural changes are followed by a docs/architecture.md update, and the change adds scenarios/tests rather than deleting existing ones."}
+    },
+    {
+      "id": "sdd-26", "section": "§9", "type": "checkable",
+      "text": "Done means every acceptance criterion is an executable, passing test AND the change-risk gate passes: the CRAP gate (test/tools/rust_crap_adapter.mjs → crap.py) exits 0 with no function over the fail line CRAP > 8; never lower the threshold to pass — fix the code.",
+      "predicate": {"kind": "command", "spec": "the CRAP gate exits 0 (no function CRAP > 8) and every acceptance criterion has a corresponding passing scenario/unit test; the >8 fail line is never lowered."}
+    },
+    {
+      "id": "sdd-27", "section": "§9", "type": "principle",
+      "text": "A self-declared 'pass' is not proof: GREEN is proven by the exit codes of fmt/clippy/test/crap, not by an assistant asserting success. Run the commands, read the exit codes, then claim it — never before."
+    },
+    {
+      "id": "sdd-28", "section": "§10", "type": "checkable",
+      "text": "Before commit, run an independent change-risk + code review over the diff: /spec-crap then /code-review (or the local requesting-code-review subagent). The review is a separate judge that may only BLOCK — success is proven by tests + gates, never by the review's approval.",
+      "predicate": {"kind": "wiring", "spec": "before commit, /spec-crap then an independent code review (/code-review or local requesting-code-review) runs over the diff; the review can only block, and success is proven by tests+gates not by the review's approval."}
+    },
+    {
+      "id": "sdd-29", "section": "§11", "type": "judgment",
+      "text": "Apply the right executable layer per artifact: full cucumber-rs BDD + unit TDD for server/; plain #[test] integration tests for cli/ and hook/ (no Gherkin); prose-contract consistency review for the plugin (.claude skills/hooks/templates) and docs/; and keep /spec-forge language detection parameterized rather than hardcoded.",
+      "reviewer_criterion": "Is the executable layer matched to the artifact — cucumber-rs BDD for server/, plain integration tests for cli/ and hook/, prose-contract review for plugin/docs — rather than force-fitting one layer everywhere?"
+    },
+    {
+      "id": "sdd-30", "section": "§13", "type": "principle",
+      "text": "Honest limit: executable tests prove only the acceptance criteria you encoded, not that the spec is complete or correct. Whether the criteria capture the real intent is a human judgement made on the plain-English review surface — which is precisely why the spec exists and must stay readable."
+    },
+    {
+      "id": "sdd-31", "section": "§13", "type": "principle",
+      "text": "Honest limit: confirm-don't-assume the mechanics — the cucumber-rs 0.23 runner entry point and the Rust CRAP calibration are flagged INFERRED in the repo's own plan and are verified at first compile / first run, not assumed; and never move a threshold to make a gate pass."
+    }
+  ],
+  "sections_accounted": {
+    "§0 thesis (one sentence)": "sdd-0",
+    "§1 what spec-driven development is, and why Genesis uses it (human reviewability; spec-anchored)": "sdd-1, sdd-2",
+    "§2 the pipeline: plain English -> Gherkin -> executable tests (mechanical traceability)": "sdd-3, sdd-4",
+    "§3 spec anatomy and authoring conventions": "sdd-5, sdd-6, sdd-7, sdd-8",
+    "§4 grounding: never invent — the hallucination audit + provenance labelling + deliberate deviations": "sdd-9, sdd-10, sdd-11",
+    "§5 Gherkin authoring conventions": "sdd-12, sdd-13",
+    "§6 executable tests in Rust: cucumber-rs (the server/ crate)": "sdd-14, sdd-15, sdd-16, sdd-17",
+    "§7 double-loop TDD and the ordered 9-step workflow": "sdd-18, sdd-19, sdd-20, sdd-21",
+    "§8 keeping spec <-> code <-> tests in sync (anti-drift)": "sdd-22, sdd-23, sdd-24, sdd-25",
+    "§9 acceptance criteria as the definition of done": "sdd-26, sdd-27",
+    "§10 independent review before commit": "sdd-28",
+    "§11 scope: where each discipline applies across the Genesis repo": "sdd-29",
+    "§12 anti-patterns": "rationale — this section restates, as do-not-do failures, the enforceable rules already carried elsewhere (sdd-4 traceability, sdd-6 WHAT-not-HOW, sdd-7 atomic reqs, sdd-9 no-invention, sdd-14 test-wiring pair, sdd-16 failing stubs, sdd-19 RED-before-GREEN, sdd-24 no test-editing, sdd-27 prove-before-claim); no standalone rule, recorded so the section is not lost",
+    "§13 honest limits (do not oversell)": "sdd-30, sdd-31"
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "expertise": "genesis-stack-mastery",
+  "source": "expertise/genesis-stack-mastery.md",
+  "note": "Faithful rule manifest for the version-locked stack expertise. The .md is authoritative and unchanged; this indexes every actionable engineering rule plus the load-bearing versioned facts, typed checkable|judgment|principle. Checkable rules carry a predicate; judgment rules carry a reviewer_criterion; principle rules record a governing versioned fact (knowledge-heavy module, so many rules are principles by design). Every version token in a rule is a concrete pinned version read from a Cargo.lock (never 'latest'/'*') and also appears verbatim in the guide. No guide section is dropped — see sections_accounted.",
+  "schema": {
+    "id": "stable rule id (prefix gsm-)",
+    "section": "source section the rule comes from",
+    "text": "faithful statement of the rule (same meaning as the source)",
+    "type": "checkable = a program can verify it | judgment = needs the independent reviewer | principle = governing versioned fact, not per-artifact checkable",
+    "predicate": "checkable only: {kind, spec} the hook evaluates against produced artifacts",
+    "reviewer_criterion": "judgment only: the yes/no question the independent LLM-reviewer answers"
+  },
+  "rules": [
+    {
+      "id": "gsm-1", "section": "§1", "type": "checkable",
+      "text": "Build and test with the toolchain pinned in rust-toolchain.toml (channel 1.93.0, components rustfmt+clippy). Do not silently change the channel; a bump must re-verify the cfg_select boundary that keeps libsqlite3-sys 0.37.0 buildable.",
+      "predicate": {"kind": "command", "spec": "the active toolchain == rust-toolchain.toml channel 1.93.0; `cargo build`/`cargo test` run under it; any channel edit is deliberate and paired with a clean build."}
+    },
+    {
+      "id": "gsm-2", "section": "§0/§7", "type": "judgment",
+      "text": "Target the PINNED version's API: verify every dependency behavior against docs.rs/<crate>/<the exact version in Cargo.lock> and that version's CHANGELOG, never 'latest'. Several crates are majors ahead of common tutorials (thiserror 2.0.19, schemars 1.2.1, ndarray 0.17.2, rmcp 2.2.0, ort 2.0.0-rc.13).",
+      "reviewer_criterion": "Did the change cite/verify the crate API against the pinned version's docs (docs.rs/<crate>/<locked-version>) rather than reasoning from 'latest' or an older-major example?"
+    },
+    {
+      "id": "gsm-3", "section": "§7", "type": "judgment",
+      "text": "Never add or upgrade a dependency without (a) reading its target-version CHANGELOG for breaking changes and (b) running the full crate test suite green afterward.",
+      "reviewer_criterion": "Was the dependency add/upgrade accompanied by evidence of reading the target-version changelog AND a green full test run for the affected crate?"
+    },
+    {
+      "id": "gsm-4", "section": "§0", "type": "checkable",
+      "text": "When an edit relies on a crate API, cite the crate@version you relied on (the version resolved in that crate's Cargo.lock).",
+      "predicate": {"kind": "declaration", "spec": "the change note names each load-bearing API as <crate>@<version> matching the crate's Cargo.lock, not a bare crate name."}
+    },
+    {
+      "id": "gsm-5", "section": "§3.4/§4", "type": "checkable",
+      "text": "Keep the SQLite trio identical across server/ and cli/: rusqlite =0.39.0, libsqlite3-sys 0.37.0, sqlite-vec 0.1.9 — so one SQLite compiles across the crates even without a workspace.",
+      "predicate": {"kind": "command", "spec": "server/Cargo.lock and cli/Cargo.lock both resolve rusqlite 0.39.0, libsqlite3-sys 0.37.0, sqlite-vec 0.1.9 (identical versions)."}
+    },
+    {
+      "id": "gsm-6", "section": "§1/§3.4", "type": "checkable",
+      "text": "Keep rusqlite pinned =0.39.0 (which resolves libsqlite3-sys 0.37.0). Do not move to rusqlite 0.40.x under toolchain 1.93.0: it pulls libsqlite3-sys >=0.38 whose build.rs uses the cfg_select macro stabilized only after 1.93.",
+      "predicate": {"kind": "command", "spec": "Cargo.toml requirement for rusqlite stays =0.39.0 and Cargo.lock keeps libsqlite3-sys 0.37.0; changing it is paired with a toolchain re-verification."}
+    },
+    {
+      "id": "gsm-7", "section": "§3.3", "type": "checkable",
+      "text": "Install the tract backend by calling ort::set_api(ort_tract::api()) BEFORE building any ort Session. Keep ort as default-features=false with alternative-backend + ndarray + std + api-17 so no ONNX Runtime is linked.",
+      "predicate": {"kind": "wiring", "spec": "ort::set_api(ort_tract::api()) runs before the first Session::builder(); ort's declared features are exactly default-features=false + alternative-backend,ndarray,std,api-17."}
+    },
+    {
+      "id": "gsm-8", "section": "§3.3/§7", "type": "checkable",
+      "text": "Keep ort =2.0.0-rc.13, ort-tract =0.4.0, and ort-sys 2.0.0-rc.13 in exact agreement. ort-sys is a single links crate, so any mismatch of the rc level is a hard build error.",
+      "predicate": {"kind": "command", "spec": "server/Cargo.lock resolves ort 2.0.0-rc.13, ort-sys 2.0.0-rc.13, ort-tract 0.4.0 together; Cargo.toml pins ort =2.0.0-rc.13 and ort-tract =0.4.0."}
+    },
+    {
+      "id": "gsm-9", "section": "§3.4", "type": "checkable",
+      "text": "Register the sqlite-vec extension via the one sanctioned unsafe call sqlite3_auto_extension(sqlite3_vec_init) (scoped #[allow(unsafe_code)] on VectorStore::open) BEFORE opening the connection that creates the vec0 virtual table; keep unsafe_code denied everywhere else.",
+      "predicate": {"kind": "wiring", "spec": "exactly one unsafe block registers sqlite3_vec_init via sqlite3_auto_extension, carries a scoped allow(unsafe_code), and runs before Connection::open + the CREATE VIRTUAL TABLE ... USING vec0; no other unsafe exists."}
+    },
+    {
+      "id": "gsm-10", "section": "§0/§2/§7", "type": "checkable",
+      "text": "Treat each crate's own Cargo.lock as authoritative: Genesis has no Cargo workspace, so server/, cli/, and hook/ resolve independently and versions legitimately differ between them. Verify a version in the specific crate you are editing.",
+      "predicate": {"kind": "structure", "spec": "there is no [workspace] Cargo.toml; each of server/, cli/, hook/ has its own Cargo.lock; a version claim is checked against that crate's lock, not another crate's."}
+    },
+    {
+      "id": "gsm-11", "section": "§3.2/§6", "type": "checkable",
+      "text": "The memory server advertises MCP protocol version 2024-11-05 via ProtocolVersion::V_2024_11_05 in get_info(); keep the server's declared protocol version aligned with the client contract.",
+      "predicate": {"kind": "command", "spec": "ServerHandler::get_info() sets .with_protocol_version(ProtocolVersion::V_2024_11_05); the tests assert protocol_version == V_2024_11_05."}
+    },
+    {
+      "id": "gsm-12", "section": "§6", "type": "checkable",
+      "text": "The Node launcher bin/genesis-memory.js depends ONLY on Node >=18 built-ins (fs, os, path, crypto, child_process) plus global fetch. Add no npm dependency and no package.json anywhere in the repo.",
+      "predicate": {"kind": "structure", "spec": "no package.json exists in the repo; genesis-memory.js requires only Node built-in modules and uses global fetch (Node 18+), no third-party import."}
+    },
+    {
+      "id": "gsm-13", "section": "§2", "type": "checkable",
+      "text": "Pass the house lint gate on every crate: clippy -D warnings with pedantic on; unwrap_used/expect_used/panic/todo denied; unsafe_code denied except the single sanctioned sqlite-vec registration in server/.",
+      "predicate": {"kind": "command", "spec": "cargo clippy -D warnings is clean; no new unwrap()/expect()/panic!/todo!; no new unsafe outside VectorStore::open."}
+    },
+    {
+      "id": "gsm-14", "section": "§3.2", "type": "checkable",
+      "text": "Derive tool input schemas through rmcp's re-exported schemars (schemars 1.2.1); use rmcp::schemars, do not add a second, differently-versioned schemars to the dependency graph.",
+      "predicate": {"kind": "structure", "spec": "tool argument structs derive JsonSchema via rmcp::schemars; the graph resolves a single schemars (1.2.1)."}
+    },
+    {
+      "id": "gsm-15", "section": "§4/§5", "type": "checkable",
+      "text": "Keep serde_json's preserve_order feature enabled in cli/ and hook/ so emitted settings.json/.mcp.json/required.json and hook decision JSON stay byte-identical (same key order) to the Node installer/hooks.",
+      "predicate": {"kind": "structure", "spec": "cli/Cargo.toml and hook/Cargo.toml both declare serde_json with the preserve_order feature (pulling indexmap 2.14.0)."}
+    },
+    {
+      "id": "gsm-16", "section": "§3.6/§6", "type": "checkable",
+      "text": "Keep stdout pristine in the memory server and the Node launcher (stdout is the MCP channel); route all diagnostics/logs to stderr (tracing fmt layer to stderr; launcher log() to stderr).",
+      "predicate": {"kind": "regex", "spec": "no diagnostic write targets stdout in the server or launcher; tracing-subscriber writes to stderr and the launcher's log() uses process.stderr."}
+    },
+
+    {
+      "id": "gsm-p-toolchain", "section": "§1", "type": "principle",
+      "text": "Pinned toolchain: Rust 1.93.0 (rustfmt+clippy). All three crates are edition 2021. 1.93.0 is the newest stable that still builds rusqlite =0.39.0 -> libsqlite3-sys 0.37.0 (the cfg_select boundary). Release profile is lto=fat, codegen-units=1, panic=unwind, strip=debuginfo."
+    },
+    {
+      "id": "gsm-p-server-mcp", "section": "§3.1/§3.2", "type": "principle",
+      "text": "server MCP layer: rmcp 2.2.0 (features server,macros,transport-io) is the official MCP Rust SDK; it re-exports schemars 1.2.1 and provides #[tool_router]/#[tool_handler]/#[tool], ServerHandler, ServiceExt::serve, transport::stdio, model::{CallToolResult,ContentBlock,Implementation,ProtocolVersion,ServerCapabilities,ServerInfo}, Parameters, and ErrorData. The server serves over stdio and advertises protocol 2024-11-05."
+    },
+    {
+      "id": "gsm-p-server-embed", "section": "§3.1/§3.3", "type": "principle",
+      "text": "server embeddings layer: ort 2.0.0-rc.13 keeps the ONNX Runtime API but swaps the engine to pure-Rust tract via ort-tract 0.4.0 (installed by ort::set_api(ort_tract::api())); tract-* 0.23.4 is the actual engine, tokenizers 0.23.1 loads via Tokenizer::from_file, ndarray 0.17.2 holds the tensors. Session is committed with commit_from_file at GraphOptimizationLevel::Level3; the 384-d output feeds vec0."
+    },
+    {
+      "id": "gsm-p-server-sqlite", "section": "§3.1/§3.4", "type": "principle",
+      "text": "server vector store: rusqlite 0.39.0 (bundled) over libsqlite3-sys 0.37.0, with sqlite-vec 0.1.9 registered via sqlite3_auto_extension(sqlite3_vec_init) to create vec0(embedding float[384]); bytemuck 1.25.1 casts f32 embeddings to/from byte blobs; sha2 0.10.9 + hex 0.4.3 form content-addressed memory ids."
+    },
+    {
+      "id": "gsm-p-server-runtime", "section": "§3.1/§3.5", "type": "principle",
+      "text": "server runtime/serialization/errors: tokio 1.53.0 (macros,rt,rt-multi-thread,io-std,signal), serde 1.0.229 (with serde_core 1.0.229 + serde_derive 1.0.229) and serde_json 1.0.150, schemars 1.2.1 (v1 is a redesign vs 0.8), anyhow 1.0.104 for app errors and thiserror 2.0.19 (a distinct major vs 1.x) for library error enums."
+    },
+    {
+      "id": "gsm-p-server-logging", "section": "§3.1/§3.6", "type": "principle",
+      "text": "server logging: tracing 0.1.44 + tracing-subscriber 0.3.23 (env-filter, fmt), emitting only to stderr because stdout is the MCP channel."
+    },
+    {
+      "id": "gsm-p-server-dev", "section": "§3.1/§3.7", "type": "principle",
+      "text": "server dev/test stack: cucumber 0.23.0 (macros) drives BDD with #[derive(World)] async steps and harness=false runners resolving ../test/features/<slug>.feature; assert_cmd 2.2.2 spawns the bin, approx 0.5.1 compares embeddings, insta 1.48.0 snapshots, tempfile 3.27.0 makes temp DBs, gherkin 0.16.0 parses features."
+    },
+    {
+      "id": "gsm-p-server-keytrans", "section": "§3.8", "type": "principle",
+      "text": "server load-bearing transitives: tract-* 0.23.4 (engine), prost 0.14.4 (ONNX protobuf decode), safetensors 0.8.0 (tensor load), rayon 1.12.0 (data parallelism), rustfft 6.4.1 (FFT), matrixmultiply 0.3.11 (matmul), memmap2 0.9.11 (mmap model), async-trait 0.1.91 + tokio-util 0.7.18 + bytes 1.12.1 + futures 0.3.33 (rmcp/async), regex 1.13.1 (tokenizers)."
+    },
+    {
+      "id": "gsm-p-cli", "section": "§4", "type": "principle",
+      "text": "cli stack (genesis-cli, build/install-time): serde_json 1.0.151 (preserve_order -> indexmap 2.14.0), serde 1.0.229 (derive), regex 1.13.1 (credential scrubbing), rusqlite 0.39.0 (bundled) + sqlite-vec 0.1.9 (fix copies memories + embedding blobs losslessly); dev tempfile 3.27.0. Same SQLite trio as the server."
+    },
+    {
+      "id": "gsm-p-hook", "section": "§5", "type": "principle",
+      "text": "hook stack (genesis-hook, hot path): deliberately only serde_json 1.0.151 (preserve_order) + regex 1.13.1 so cold-spawn stays ~2-10 ms; 33 resolved packages total; hand-walks serde_json::Value (no serde-derive); dev tempfile 3.27.0."
+    },
+    {
+      "id": "gsm-p-launcher", "section": "§6", "type": "principle",
+      "text": "Node launcher bin/genesis-memory.js: zero npm deps, Node >=18 built-ins + global fetch; RELEASE_VERSION 0.2.0-beta / REPO Atiqul-Islam/genesis is the single source of truth; downloads public GitHub Release binaries + ONNX model, SHA256-verifies against SHA256SUMS, caches per-user, and execs the server (default) or stages/runs hook/cli; diagnostics to stderr, no credential required."
+    },
+    {
+      "id": "gsm-p-plugin", "section": "§6", "type": "principle",
+      "text": "plugin/MCP surface: .claude-plugin/plugin.json declares name genesis, version 0.2.0-beta (moves with the launcher's RELEASE_VERSION); .mcp.json registers the genesis-memory server over node stdio; the server targets MCP protocol 2024-11-05; hook events wired: SessionStart, PreToolUse, PostToolUse (structure), SubagentStart/Stop, and a Stop gate."
+    },
+    {
+      "id": "gsm-p-gotchas", "section": "§7", "type": "principle",
+      "text": "Cross-cutting gotchas: no workspace -> the same crate resolves to different patches per crate (serde_json 1.0.150 server vs 1.0.151 cli/hook; libc 0.2.186 vs 0.2.189); the 1.93.0 <-> libsqlite3-sys 0.37.0 cfg_select boundary; the ort/ort-tract/ort-sys 2.0.0-rc.13 links-crate lock; preserve_order byte-parity; stdout is the MCP channel."
+    },
+    {
+      "id": "gsm-p-longtail", "section": "§8", "type": "principle",
+      "text": "The long tail of transitive crates is CATALOGUED (name + exact version from Cargo.lock + one-line role) in the appendix and not exhaustively doc-read: proc-macro/build plumbing, derive helpers, async support, tract/ml numerics, tokenizers support, hashing/collections, time/platform/fs, compression, CLI/terminal, tracing internals, and wasm-target crates present in the graph but not exercised by the native build."
+    }
+  ],
+  "sections_accounted": {
+    "§0 how to use this expertise (operating rule)": "gsm-2, gsm-4, gsm-10",
+    "§1 pinned toolchain (Rust 1.93.0, edition 2021, release profile)": "gsm-p-toolchain, gsm-1, gsm-6",
+    "§2 repository shape & no-workspace invariant + lint gate": "gsm-10, gsm-13",
+    "§3.1 server direct-dependency table": "gsm-p-server-mcp, gsm-p-server-embed, gsm-p-server-sqlite, gsm-p-server-runtime, gsm-p-server-logging, gsm-p-server-dev",
+    "§3.2 server MCP layer (rmcp 2.2.0)": "gsm-p-server-mcp, gsm-14, gsm-11",
+    "§3.3 server embeddings (ort/ort-tract/tract/tokenizers/ndarray)": "gsm-p-server-embed, gsm-7, gsm-8",
+    "§3.4 server vector store (rusqlite/libsqlite3-sys/sqlite-vec/bytemuck)": "gsm-p-server-sqlite, gsm-5, gsm-6, gsm-9",
+    "§3.5 server runtime/serialization/errors": "gsm-p-server-runtime",
+    "§3.6 server logging": "gsm-p-server-logging, gsm-16",
+    "§3.7 server dev/test stack (cucumber 0.23.0)": "gsm-p-server-dev",
+    "§3.8 server key transitive dependencies": "gsm-p-server-keytrans",
+    "§4 cli stack": "gsm-p-cli, gsm-5, gsm-15",
+    "§5 hook stack": "gsm-p-hook, gsm-15",
+    "§6 Node launcher + plugin/MCP/hooks surface": "gsm-p-launcher, gsm-p-plugin, gsm-12, gsm-11, gsm-16",
+    "§7 cross-cutting version gotchas": "gsm-p-gotchas, gsm-2, gsm-3, gsm-5, gsm-6, gsm-7, gsm-8, gsm-9, gsm-10",
+    "§8 appendix long-tail catalogue": "gsm-p-longtail"
+  }
+}
