@@ -33,6 +33,9 @@ fn gitignore_block() -> String {
         ".genesis/memory/archived-strays/",
         "*.db",
         "!.genesis/memory.db",
+        // db-travels (#23): the derived expertise store DB travels with the repo like memory.db, so the
+        // agent brain (incl. learned rules) is version-controlled. After `*.db`, so this re-include wins.
+        "!.genesis/expertise/expertise.db",
         ".mcp.json",
         GITIGNORE_END,
         "",

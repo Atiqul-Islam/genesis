@@ -20,7 +20,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawnSync, spawn } = require("child_process");
 
 const HERE = __dirname;
 const REPO = path.dirname(HERE);
@@ -419,6 +419,69 @@ function testSyncRunsMcp() {
   });
 }
 
+// Synchronous sleep (stdlib-only) for the interrupt test's timing.
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// ── #32: the --run-hook shim forwards an interrupt to its hook child (no orphan) ──
+// Regression for the bug where killing the Node wrapper left the spawned hook binary running (ESC could
+// not cancel a shim-run hook). Fail-before/pass-after: before the fix the child SURVIVES the wrapper kill.
+function testRunHookForwardsSignalToChild() {
+  if (process.platform === "win32") {
+    // Node cannot catch SIGTERM on Windows and this exec-based interrupt probe is not portable; the fix
+    // itself ships cross-platform (SIGBREAK/SIGINT forwarders, same mechanism as the server path).
+    check("--run-hook forwards an interrupt to its child (exec probe skipped on win32)", true);
+    return;
+  }
+  withTempDir((td) => {
+    const marker = path.join(td, "child.log");
+    const childScript = path.join(td, "slow_hook_child.js");
+    // Long-lived fake hook: record START at once, then SURVIVED after 2s. If the wrapper is killed and
+    // forwards the signal, the child dies before SURVIVED is ever written.
+    fs.writeFileSync(
+      childScript,
+      [
+        "'use strict';",
+        "const fs = require('fs');",
+        "const mark = process.argv[2];",
+        "fs.writeFileSync(mark, 'START\\n');",
+        "setTimeout(() => { fs.appendFileSync(mark, 'SURVIVED\\n'); process.exit(0); }, 2000);",
+        "",
+      ].join("\n")
+    );
+    // GENESIS_HOOK_BIN=NODE, so `--run-hook <childScript> <marker>` execs `node <childScript> <marker>`.
+    const proc = spawn(NODE, [LAUNCHER, "--run-hook", childScript, marker], {
+      env: baseEnv({ GENESIS_HOOK_BIN: NODE }),
+      stdio: "ignore",
+    });
+    // Wait until the child has actually started (up to ~5s).
+    let started = false;
+    for (let i = 0; i < 50; i += 1) {
+      if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").includes("START")) {
+        started = true;
+        break;
+      }
+      sleepMs(100);
+    }
+    check("--run-hook: child hook started", started);
+    // Interrupt the wrapper the way Claude Code does on ESC: SIGTERM to the Node shim process.
+    proc.kill("SIGTERM");
+    // Wait past the child's SURVIVED window (2s) plus margin.
+    sleepMs(3000);
+    const body = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
+    check(
+      "--run-hook forwards the interrupt to its child (no orphan): child did NOT survive the wrapper kill",
+      body.includes("START") && !body.includes("SURVIVED")
+    );
+    try {
+      proc.kill("SIGKILL");
+    } catch (_e) {
+      // already gone
+    }
+  });
+}
+
 function main() {
   check("launcher file exists", fs.existsSync(LAUNCHER));
   testTransparentExec();
@@ -427,6 +490,7 @@ function main() {
   testStageHook();
   testStageCli();
   testRunHook();
+  testRunHookForwardsSignalToChild();
   testRunCli();
   testSync();
   testModelFreeSubcommand();

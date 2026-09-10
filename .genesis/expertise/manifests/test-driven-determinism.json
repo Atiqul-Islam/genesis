@@ -1,0 +1,187 @@
+{
+  "expertise": "test-driven-determinism",
+  "source": "expertise/test-driven-determinism.md",
+  "note": "Faithful rule manifest for test-driven, determinism-first engineering by genesis-engineer (the single agent owning the Genesis repo: server/ cli/ hook/ Rust crates + the Claude Code plugin + docs). The .md is authoritative and unchanged; this indexes every actionable rule, typed checkable|judgment|principle, with a predicate (checkable) or reviewer_criterion (judgment). No rule in the source is dropped — see sections_accounted. Grounded in the pinned repo tooling (rust-toolchain 1.93.0; cucumber 0.23, assert_cmd 2.2, approx 0.5, insta 1, tempfile 3) and primary TDD/coverage/reliability sources. House rules honored: no credential value is written; the banned reasoning-trace phrase is never written.",
+  "schema": {
+    "id": "stable rule id (prefix tdd-)",
+    "section": "source section the rule comes from",
+    "text": "faithful, imperative, scoped statement of the rule (same meaning as the source)",
+    "type": "checkable = a program/hook can verify it | judgment = needs the independent reviewer | principle = governing rationale, not per-artifact checkable",
+    "predicate": "checkable only: {kind, spec} the hook/test evaluates against produced artifacts; kind in {structure, declaration, wiring, regex, artifact, command}",
+    "reviewer_criterion": "judgment only: the yes/no question the independent reviewer answers"
+  },
+  "rules": [
+    {
+      "id": "tdd-0", "section": "§0", "type": "principle",
+      "text": "Determinism is proven, not asserted: turn every completion claim into a fresh, full command whose exit code and output are the evidence; make the maximum fraction of each requirement a mechanically-checkable property a test or hook verifies; and wrap the irreducibly non-deterministic part (an LLM's / agent's behavior) in a deterministic harness that asserts store-level or output-level invariants, never trusting the forward pass. Determinism lives outside the forward pass."
+    },
+    {
+      "id": "tdd-1", "section": "§1", "type": "checkable",
+      "text": "Obey the Three Laws of TDD for every feature, bug fix, refactor, and behavior change in server/ cli/ hook/: (1) write no production code except to make a failing test pass; (2) write no more of a test than is sufficient to fail (a compilation failure counts); (3) write no more production code than is sufficient to pass the one failing test. If code was written before its test, delete it and start over from the test — do not keep it as reference.",
+      "predicate": {"kind": "structure", "spec": "every new or changed function in server/cli/hook src has an accompanying test (unit #[cfg(test)] mod tests, or an integration file under <crate>/tests/*.rs) that predates the implementation; no production code lands without a prior failing test."}
+    },
+    {
+      "id": "tdd-2", "section": "§1", "type": "checkable",
+      "text": "Verify RED before writing code: run the new test and confirm it FAILS for the intended reason (the feature is missing), not from a typo or compile error. A test that passes on its first run against absent code proves nothing and must be fixed until it fails correctly.",
+      "predicate": {"kind": "command", "spec": "the new test is executed and observed to fail (RED) for the intended reason before the implementation exists; `cargo test <the test>` returns failure against absent code, never an immediate pass."}
+    },
+    {
+      "id": "tdd-3", "section": "§1", "type": "checkable",
+      "text": "Run the loop as Red → verify-red → Green (simplest passing code, no YAGNI features) → verify-green → Refactor → stay-green → next; refactor only after green and add no new behavior during a refactor — the tests must stay green across it.",
+      "predicate": {"kind": "command", "spec": "after a refactor step `cargo test --release` is still green and no new behavior or new test was introduced during the refactor (refactor commits change structure, not behavior)."}
+    },
+    {
+      "id": "tdd-4", "section": "§2", "type": "judgment",
+      "text": "Before writing or changing a test for any file, read that file — and its reference implementation — in full; never grep-to-skip the content read. Partial understanding produces tests of a mock instead of real behavior, incomplete mocks, or assertions aimed at the wrong layer. When implementing a pattern, read the reference implementation completely before applying it.",
+      "reviewer_criterion": "Did the author read the full target file and its reference implementation before writing or changing the tests, rather than grepping to skip the content read?"
+    },
+    {
+      "id": "tdd-5", "section": "§3", "type": "checkable",
+      "text": "Place each test at its canonical Rust layer: unit tests in a #[cfg(test)] mod tests inside the src file under test (can reach private items); integration/E2E tests one-per-file under <crate>/tests/*.rs (each compiled as its own crate, seeing only the public API); doctests on public items; BDD acceptance in test/features/*.feature with step defs in server/tests/bdd/*_steps.rs wired as harness=false [[test]] bins on cucumber 0.23.",
+      "predicate": {"kind": "structure", "spec": "unit tests live in #[cfg(test)] mod tests within the src file; integration tests live under <crate>/tests/*.rs and use the crate's public API; BDD features live in test/features/*.feature with matching server/tests/bdd/*_steps.rs and harness=false [[test]] bins."}
+    },
+    {
+      "id": "tdd-6", "section": "§3", "type": "checkable",
+      "text": "Drive acceptance spec-first: every acceptance criterion in the spec maps to one Gherkin scenario (Given/When/Then) that cucumber-rs runs via `cargo test --release --test 'bdd_*'`. Features are the outer loop, unit tests the inner loop — a feature is not done until its scenario is green and the units beneath it are green. Assert the step definitions exist before claiming a feature is testable.",
+      "predicate": {"kind": "command", "spec": "`cargo test --release --test 'bdd_*'` runs every acceptance scenario green, each spec acceptance criterion has a corresponding scenario in test/features/*.feature backed by a step def in server/tests/bdd/*_steps.rs, and the feature's unit tests are green."}
+    },
+    {
+      "id": "tdd-7", "section": "§3", "type": "judgment",
+      "text": "Test at the altitude that matches the claim: a pure function via a unit test; a CLI/hook contract (event JSON in → decision JSON out) via an integration test against the real spawned binary; an acceptance criterion via a BDD scenario; a store-level property via an eval-harness invariant. Proving a binary's contract with a library unit test, or a store invariant with a single scenario, tests the wrong altitude.",
+      "reviewer_criterion": "Is each behavior proven at the altitude that matches the claim — unit test for a pure function, integration test against the real spawned binary for a CLI/hook contract, a BDD scenario for an acceptance criterion, an eval-harness invariant for a store-level property?"
+    },
+    {
+      "id": "tdd-8", "section": "§4", "type": "checkable",
+      "text": "GREEN for any Rust change = `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --release`, all three exiting 0. A non-zero cargo fmt --check or cargo clippy exit is NOT GREEN and must fail the step exactly as a failing test would.",
+      "predicate": {"kind": "command", "spec": "`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --release` all exit 0; a fmt or clippy failure downgrades the verdict from GREEN identically to a test failure."}
+    },
+    {
+      "id": "tdd-9", "section": "§4", "type": "checkable",
+      "text": "Keep the house lint gate intact across all three crates: unsafe_code=deny (with the single sanctioned FFI exception, a scoped #[allow(unsafe_code)] on VectorStore::open), and unwrap_used/expect_used/panic/todo=deny, clippy pedantic=warn. Never weaken a lint, widen an #[allow], or lower a threshold to make a run pass — fix the code. Test code may allow unwrap/expect/panic because a panic is the failure signal there; production code may not.",
+      "predicate": {"kind": "structure", "spec": "each crate's Cargo.toml [lints] keeps unsafe_code/unwrap_used/expect_used/panic/todo denied and pedantic=warn; no new #[allow(...)] beyond the one sanctioned FFI on VectorStore::open; no lint or threshold weakened to pass."}
+    },
+    {
+      "id": "tdd-10", "section": "§5", "type": "judgment",
+      "text": "Test real behavior against real dependencies (real SQLite + real ONNX embedder in the memory tests; the real spawned genesis-hook binary in the hook tests); mock only when unavoidable and never assert on a mock; when a mock is unavoidable, mirror the complete real data structure (partial mocks hide consumed fields). If mock setup exceeds the test logic, prefer an integration test with the real component.",
+      "reviewer_criterion": "Does each test exercise real dependencies (real SQLite/ONNX/spawned binary), using mocks only where unavoidable, never asserting on a mock, and mirroring the complete real data structure when a mock is used?"
+    },
+    {
+      "id": "tdd-11", "section": "§5", "type": "checkable",
+      "text": "Fail loud, never skip, when a required real dependency is missing: a test that needs the ONNX model asserts its presence and aborts if absent (assert!(m.exists(), ...)) — an eval that silently skips is worse than none. No test may quietly return/skip when a real dependency is unavailable; the absence must surface as a failure.",
+      "predicate": {"kind": "structure", "spec": "tests that require a real dependency assert its presence and abort on absence (e.g. assert!(model.exists())); no test path silently returns or skips when a real dependency is missing."}
+    },
+    {
+      "id": "tdd-12", "section": "§6", "type": "checkable",
+      "text": "Measure coverage with cargo-llvm-cov (LLVM source-based, -C instrument-coverage, llvm-tools-preview) via `cargo llvm-cov --json --release --output-path test-results/llvm-cov.json` (--lcov for CI, --doctests unstable). Regenerate coverage from the current src/; never carry a stale JSON across an implementation change (the 10-minute reuse window is only for back-to-back runs).",
+      "predicate": {"kind": "command", "spec": "coverage is produced by `cargo llvm-cov --json --release --output-path test-results/llvm-cov.json` from the current src/, freshly (not reused stale beyond the 10-minute window)."}
+    },
+    {
+      "id": "tdd-13", "section": "§6", "type": "checkable",
+      "text": "Gate change-risk with CRAP per function: CRAP(f)=CC(f)^2*(1-cov(f)/100)^3+CC(f), computed by rust-code-analysis-cli (CC) + cargo llvm-cov (coverage) → rust_crap_adapter.mjs → crap.mjs, with tiers alert>30, fail>8, target<=4; the tool exits 2 if any function has CRAP>8. Fix an offender by lowering complexity or raising coverage — never by lowering the threshold or deleting tests.",
+      "predicate": {"kind": "command", "spec": "`node test/tools/rust_crap_adapter.mjs` computes CRAP=CC^2*(1-cov/100)^3+CC per function and exits 0 (no function >8); a >8 offender is fixed by lowering CC or raising coverage, never by lowering the threshold or removing tests."}
+    },
+    {
+      "id": "tdd-14", "section": "§6", "type": "principle",
+      "text": "At 100% coverage CRAP reduces to CC — coverage cannot buy complexity risk down to zero; a fully-covered but convoluted function still carries change risk. Keep functions simple AND covered, not merely covered; high coverage over high complexity is still risky code."
+    },
+    {
+      "id": "tdd-15", "section": "§7", "type": "checkable",
+      "text": "For generated artifacts and machine-read output, assert exact/snapshot equality, not 'looks right': use insta (pinned insta 1) for snapshots and rely on serde_json preserve_order so emitted JSON is byte-identical (Rust<->Node parity), not merely semantically equal. Assert hook decisions field-by-field and guard committed generated files with a no-drift test.",
+      "predicate": {"kind": "structure", "spec": "generated artifacts (agent .md, settings.json, decision JSON) are asserted by exact equality or an insta snapshot; emitted JSON relies on serde_json preserve_order for byte-identical output rather than a semantic compare."}
+    },
+    {
+      "id": "tdd-16", "section": "§7", "type": "checkable",
+      "text": "Compare floating-point values with approx (pinned approx 0.5), never ==: embedding components, cosine/similarity scores, and composite ranks are f32/f64 and must be asserted with assert_relative_eq!/abs_diff_eq!/assert_ulps_eq! and an explicit epsilon/ULPs. Exact scalar equality (counts, ids, ordering) stays exact; only the floats get a tolerance.",
+      "predicate": {"kind": "regex", "spec": "similarity/score/embedding comparisons use approx macros (assert_relative_eq!, abs_diff_eq!, assert_ulps_eq!), not assert_eq!/== on f32/f64; integer counts/ids/ordering may stay exact."}
+    },
+    {
+      "id": "tdd-17", "section": "§8", "type": "principle",
+      "text": "Determinism lives outside the forward pass, and the hook crate is where it lives: a gate/validate/inject decision must be a pure function of its input (event JSON on stdin → decision JSON on stdout) with no dependence on the model's reasoning. Prove it by treating the hook as a black box and asserting the mapping, exactly as expertise-application ea-0 prescribes."
+    },
+    {
+      "id": "tdd-18", "section": "§8", "type": "checkable",
+      "text": "Test every enforcement branch by spawning the real genesis-hook with a crafted event on stdin and asserting the exact decision JSON: gate denies a banned reasoning-trace phrase, a credential-shaped assignment, and an over-budget write; gate surfaces rules advisorily on an authoring write; gate is a dormant no-op with no agent_type; --main-agent makes a promoted main fire; validate blocks on an offender artifact or an undeclared required expertise; inject delivers the house rules.",
+      "predicate": {"kind": "command", "spec": "for each enforcement branch a test spawns the real genesis-hook binary with event JSON on stdin and asserts the exact decision JSON on stdout (deny / advisory-surface / dormant no-op / --main-agent fire / validate block / inject deliver)."}
+    },
+    {
+      "id": "tdd-19", "section": "§8", "type": "checkable",
+      "text": "Enforcement code is deterministic and side-effect-free per call, and both fail directions are tested: same input ⇒ same output, with no clock, RNG, network, or ambient state in the decision path. Gates fail-closed (deny) so a bug cannot silently permit a violation; a path fails-open only where a miss must never break a session, and that fail-open is tested as explicitly as the fail-closed.",
+      "predicate": {"kind": "wiring", "spec": "the decision path uses no clock/RNG/network/ambient state (same input ⇒ same output); gates fail-closed (deny) and any fail-open path (e.g. --run-hook unresolved) is tested alongside its fail-closed counterpart (e.g. --run-cli fail-loud)."}
+    },
+    {
+      "id": "tdd-20", "section": "§9", "type": "checkable",
+      "text": "Wrap irreducibly non-deterministic behavior in a deterministic harness: where the real system uses an LLM (Mneme's write-time structuring), simulate the LLM step by calling the deterministic primitive directly (structure_memory) so there is no LLM in the loop and the run is reproducible; then assert the store-level consequences the LLM's output was supposed to produce (keyed supersession, active-set filtering).",
+      "predicate": {"kind": "structure", "spec": "the eval/harness simulates the LLM step by calling the deterministic primitive (e.g. structure_memory) directly with no LLM in the loop, and asserts the resulting store-level invariants deterministically."}
+    },
+    {
+      "id": "tdd-21", "section": "§9", "type": "checkable",
+      "text": "Assert the load-bearing invariants as hard equalities with a target of exactly 0 — and assert, do not merely print: superseded-serve-rate == 0 (a superseded fact must never be served), active-contradiction-rate == 0 (every (subject,relation) resolves to exactly one current value), and no false supersession from similarity (near-identical embeddings with different subjects never supersede). A report that only prints metrics without an assertion is not a test.",
+      "predicate": {"kind": "command", "spec": "the eval harness asserts superseded-serve-rate==0, active-contradiction-rate==0, and no-false-supersession-from-similarity as hard assert_eq! that fail CI, in addition to printing the metrics report."}
+    },
+    {
+      "id": "tdd-22", "section": "§10", "type": "checkable",
+      "text": "Assert idempotence for every generator and installer: a second run produces byte-identical output. assemble --main run twice must leave CLAUDE.md and settings.json unchanged; a re-bootstrap must not duplicate the promote-offer hook (count == 1); --sync must be a no-op when the version stamp is current.",
+      "predicate": {"kind": "command", "spec": "a test runs each generator/installer twice and asserts the second run's output equals the first byte-for-byte (assemble/bootstrap idempotent; promote-offer hook count==1; --sync no-op when stamp current)."}
+    },
+    {
+      "id": "tdd-23", "section": "§10", "type": "checkable",
+      "text": "Guard committed generated artifacts with a no-drift test: regenerate the artifact into a temp tree and assert equality with the committed copy (build-plugin-agents regenerated agents/*.md must equal the committed files). Drift between a source of truth and its committed derivative is a determinism defect.",
+      "predicate": {"kind": "command", "spec": "a test regenerates each committed generated artifact into a temp dir and assert_eq!s it against the committed copy; any drift fails the suite with the regenerate command to run."}
+    },
+    {
+      "id": "tdd-24", "section": "§11", "type": "checkable",
+      "text": "Find root cause before any fix, then encode it as a red-green regression test: follow root-cause investigation (read the full error/stack, reproduce, check recent changes, trace the bad value to its source), pattern analysis, single-hypothesis testing, implementation; write a failing test that reproduces the bug first, prove it with the red-green-revert cycle (write → fail → revert fix → MUST fail → restore → pass), then fix the root cause not the symptom, one change at a time.",
+      "predicate": {"kind": "command", "spec": "each bug fix ships a regression test that reproduces the bug and is proven by the red-green-revert cycle: it passes with the fix, and fails when the fix is reverted."}
+    },
+    {
+      "id": "tdd-25", "section": "§11", "type": "principle",
+      "text": "After three failed fixes, stop and question the architecture: 3+ failed attempts — each revealing a new problem elsewhere or demanding massive refactoring — signal a wrong design, not a wrong hypothesis. Do not attempt fix #4; escalate the architectural question rather than thrash."
+    },
+    {
+      "id": "tdd-26", "section": "§12", "type": "checkable",
+      "text": "No completion claim without fresh verification evidence in the same turn: before saying done/fixed/passing (or any synonym or implication of success), identify the proving command, run the FULL command fresh, read the exit code and failure counts, then state the claim WITH that evidence. 'Should pass', confidence, a previous run, or an agent's self-reported success are not evidence — when a delegated agent reports success, verify independently via the VCS diff.",
+      "predicate": {"kind": "command", "spec": "every completion/success claim is preceded, in the same turn, by running the full proving command and reading its exit code + counts; delegated-agent success is re-verified against the VCS diff before the claim."}
+    },
+    {
+      "id": "tdd-27", "section": "§12", "type": "checkable",
+      "text": "Declare the expertise you applied before finishing: emit APPLIED-EXPERTISE: test-driven-determinism#<rule-ids> naming the concrete rule ids applied (not just the expertise name), turning 'I followed the rules' into a checkable artifact the Stop hook enforces — the same cite-the-rule-ID forcing expertise-application ea-3 prescribes and the validate hook blocks on when absent.",
+      "predicate": {"kind": "declaration", "spec": "the agent emits APPLIED-EXPERTISE: test-driven-determinism#<rule-ids> naming the concrete tdd- rule ids it applied; the validate/Stop hook blocks finishing when the declaration is absent."}
+    },
+    {
+      "id": "tdd-28", "section": "§13", "type": "checkable",
+      "text": "Prove reliability with state-based success and pass^k: judge success by comparing the end state to the annotated goal state (not by matching surface text), exactly as the eval harness compares resolved active_object and returned recall ids to the current fact; and for any path whose behavior can vary across runs, run k independent trials and report pass^k (the fraction where all k trials succeed), never a single lucky pass.",
+      "predicate": {"kind": "artifact", "spec": "reliability is reported as state-based success (end state compared to the goal state) plus pass^k over k independent trials for variable paths, not as a single passing run."}
+    },
+    {
+      "id": "tdd-29", "section": "§13", "type": "principle",
+      "text": "One green run is necessary, not sufficient, for a variable path: inconsistency hides behind a single pass (τ-bench reports pass^8 < 25% in retail). A deterministic path proven green once holds by construction; a probabilistic path must be measured over trials and reported as pass^k before it can be called reliable."
+    },
+    {
+      "id": "tdd-30", "section": "§14", "type": "principle",
+      "text": "Honest limit: coverage measures execution, not correctness (a line run by a weak assertion is still 'covered'), and this repo's cyclomatic complexity comes from rust-code-analysis (tree-sitter), close but not bit-identical to radon on which the CRAP thresholds were calibrated — so treat the >8 fail line as a calibrated gate to re-validate on the real crate, not an absolute constant. A passing suite proves only what the tests assert."
+    },
+    {
+      "id": "tdd-31", "section": "§14", "type": "principle",
+      "text": "Honest limit: gates and tests verify FORM and asserted behavior, not intent — a green suite and a passing gate cannot prove a requirement was met, only that the encoded checks hold, and a schema can force an APPLIED-EXPERTISE token without proving the rule was applied (ea-11). Re-read the spec line-by-line against the work (requirements met by a checklist, not by 'tests pass'), and route the irreducibly-semantic judgment to an independent reviewer grounded on the spec — never self-certify green as done."
+    }
+  ],
+  "sections_accounted": {
+    "§0 thesis": "tdd-0 (determinism is proven, not asserted; the operating principle for the whole manifest)",
+    "§1 three laws of TDD + red-green-refactor cycle": "tdd-1 (Three Laws / Iron Law), tdd-2 (verify RED), tdd-3 (red-green-refactor loop)",
+    "§2 read the whole file before you test it": "tdd-4 (read the full file + reference before testing; no grep-to-skip)",
+    "§3 Rust test surface (unit/integration/doctest/BDD)": "tdd-5 (four test layers at canonical locations), tdd-6 (acceptance criterion → cucumber scenario; features outer, units inner), tdd-7 (test at the matching altitude)",
+    "§4 GREEN is stricter than green tests (fmt/clippy/lint gate)": "tdd-8 (GREEN = fmt --check && clippy -D warnings && cargo test --release), tdd-9 (keep the house lint gate intact; never weaken to pass)",
+    "§5 real dependencies, honest mocks": "tdd-10 (real deps; mocks only unavoidable, never asserted-on, complete), tdd-11 (fail loud, never skip, when a real dep is missing)",
+    "§6 coverage and CRAP change-risk gating": "tdd-12 (cargo-llvm-cov, fresh from current src), tdd-13 (CRAP gate CC^2*(1-cov/100)^3+CC, fail>8, fix code not threshold), tdd-14 (at 100% coverage CRAP reduces to CC)",
+    "§7 exactness (snapshots, byte-identical output, float tolerance)": "tdd-15 (exact/snapshot for generated artifacts; insta + preserve_order parity), tdd-16 (floats via approx, never ==)",
+    "§8 proving the enforcement layer deterministic": "tdd-17 (determinism outside the forward pass; hook is a pure event→decision function), tdd-18 (test every enforcement branch via the spawned binary), tdd-19 (deterministic & side-effect-free; fail-closed/open both tested)",
+    "§9 a deterministic harness around non-deterministic behavior": "tdd-20 (simulate the LLM step by the deterministic primitive; no LLM in the loop), tdd-21 (assert invariants as hard ==0; print AND assert)",
+    "§10 idempotence and no-drift as determinism invariants": "tdd-22 (idempotence: 2nd run byte-identical), tdd-23 (no-drift: regenerate committed artifacts and assert equality)",
+    "§11 systematic debugging and regression tests": "tdd-24 (root cause first; red-green-revert regression test; fix root not symptom), tdd-25 (3+ failed fixes ⇒ question the architecture)",
+    "§12 verification before completion": "tdd-26 (run the FULL proving command this turn; evidence before claims), tdd-27 (declare APPLIED-EXPERTISE: test-driven-determinism#<rule-ids>)",
+    "§13 reliability metrics (state-based success and pass^k)": "tdd-28 (state-based success + pass^k over k trials), tdd-29 (one green run necessary not sufficient for a variable path)",
+    "§14 honest limits": "tdd-30 (coverage=execution not correctness; CC tree-sitter is a calibrated gate), tdd-31 (form-not-intent; independent spec-grounded reviewer for the semantic remainder)",
+    "Commands and thresholds table": "the pinned deterministic toolbox (toolchain 1.93.0; cargo test/fmt/clippy GREEN; cargo-llvm-cov; CRAP tiers 30/8/4; dev-deps cucumber/assert_cmd/approx/insta/tempfile; invariant targets) — reference material implementing tdd-6/8/12/13/21/28; no standalone rule, recorded so the section is accounted for",
+    "Source ledger": "the primary external (Three Laws, CRAP/artima, Rust Book, cargo-llvm-cov, cucumber-rs, insta, assert_cmd, approx, τ-bench pass^k) and repo (Cargo.toml, eval.rs, hook cli.rs, integration.rs, launcher.test.js, recall.feature, crap tools, the discipline skills, expertise-application) citation base for every rule above; no standalone rule, recorded so the section is accounted for"
+  }
+}

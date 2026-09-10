@@ -9,8 +9,9 @@ server/models/
 .claude/worktrees/
 # Machine-local Claude Code settings (per-user permissions) — never committed.
 .claude/settings.local.json
-.genesis/
-# Local runtime memory DB (the launched genesis-memory server creates it on use; never committed).
+# Local runtime .db files (the memory server creates memory.db on use). The managed genesis block below
+# re-includes the stores that MUST travel with the repo (memory.db + expertise.db). NOTE: a bare
+# `.genesis/` here would over-ignore the whole workspace and defeat those re-includes — do not add it back.
 *.db
 
 # >>> genesis runtime (managed by bootstrap) >>>
@@ -31,3 +32,9 @@ server/models/
 !.genesis/memory.db
 .mcp.json
 # <<< genesis runtime <<<
+
+# Version-control the derived expertise store DB too, so genesis-engineer's brain (incl. learned rules like
+# tdd-32/som-40) travels with the repo like memory.db. This sits OUTSIDE the managed block on purpose so a
+# bootstrap/--sync regeneration of that block cannot re-ignore it (the source fix for bootstrapped repos is
+# tracked in #23).
+!.genesis/expertise/expertise.db
