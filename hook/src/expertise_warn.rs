@@ -57,14 +57,20 @@ impl Server {
     /// isolated `db` via `GENESIS_MEMORY_DB` so it never pollutes the agent's real store. The launcher
     /// resolves the cached server binary + ONNX model itself (a warm cache hit inside a genesis session).
     fn spawn(launcher: &Path, db: &Path) -> Option<Self> {
-        let mut child = Command::new("node")
-            .arg(launcher)
+        let mut cmd = Command::new("node");
+        cmd.arg(launcher)
             .env("GENESIS_MEMORY_DB", db)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
+            .stderr(Stdio::null());
+        // Windows: don't pop a console window for the background embedding server (matches spawn_detached).
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd.spawn().ok()?;
         let stdin = child.stdin.take()?;
         let stdout = child.stdout.take()?;
         Some(Self {

@@ -344,6 +344,10 @@ fn sync_gitignore_heals_stale_block_to_commit_memory_db() {
         "healed block re-includes the vector DB so memory.db can be committed, got:\n{gi}"
     );
     assert!(
+        gi.contains("!.genesis/expertise/expertise.db"),
+        "healed block re-includes the expertise DB so expertise.db travels (#23), got:\n{gi}"
+    );
+    assert!(
         gi.contains("# my own rule") && gi.contains("node_modules/"),
         "the user's own lines outside the sentinels are preserved"
     );

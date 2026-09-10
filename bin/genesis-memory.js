@@ -245,11 +245,49 @@ function resolveStagedHook() {
   return fs.existsSync(staged) ? staged : null;
 }
 
-// Spawn <bin> with <args>, inheriting stdio, forwarding the child's exit code / signal as ours.
+// Relay catchable termination signals to `child` so that killing THIS process (e.g. Claude Code
+// interrupting a hook via ESC) tears the spawned child down too, instead of orphaning it (#32 — the shim
+// used to leave its hook binary running after an interrupt). Returns a remover for the listeners.
+// Cross-platform: a signal unsupported on this OS is skipped; no native dependency (Node built-ins only).
+const FORWARD_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGBREAK"];
+function forwardSignals(child) {
+  const forwarders = {};
+  for (const sig of FORWARD_SIGNALS) {
+    forwarders[sig] = function () {
+      try {
+        child.kill(sig);
+      } catch (_e) {
+        // child already gone
+      }
+    };
+    try {
+      process.on(sig, forwarders[sig]);
+    } catch (_e) {
+      // signal not supported on this OS
+    }
+  }
+  return function removeForwarders() {
+    for (const sig of FORWARD_SIGNALS) {
+      try {
+        process.removeListener(sig, forwarders[sig]);
+      } catch (_e) {
+        // ignore
+      }
+    }
+  };
+}
+
+// Spawn <bin> with <args>, inheriting stdio, forwarding interrupts to the child (#32) and the child's exit
+// code / signal as ours.
 function execPassthrough(bin, args, onSpawnError) {
-  const child = childProcess.spawn(bin, args, { stdio: "inherit" });
-  child.on("error", onSpawnError);
+  const child = childProcess.spawn(bin, args, { stdio: "inherit", windowsHide: true });
+  const removeForwarders = forwardSignals(child);
+  child.on("error", function (err) {
+    removeForwarders();
+    onSpawnError(err);
+  });
   child.on("exit", function (code, signal) {
+    removeForwarders();
     if (signal) {
       try {
         process.kill(process.pid, signal);
@@ -324,7 +362,7 @@ async function syncRepo(genesisHome) {
     try {
       const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
       if (fs.existsSync(cliBin)) {
-        childProcess.spawnSync(cliBin, ["sync-gitignore", path.dirname(genesisHome)], { stdio: "ignore" });
+        childProcess.spawnSync(cliBin, ["sync-gitignore", path.dirname(genesisHome)], { stdio: "ignore", windowsHide: true });
       }
     } catch (_e) {
       // ignore — never block on a gitignore heal
@@ -337,7 +375,7 @@ async function syncRepo(genesisHome) {
     try {
       const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
       if (fs.existsSync(cliBin)) {
-        childProcess.spawnSync(cliBin, ["sync-settings", path.dirname(genesisHome)], { stdio: "ignore" });
+        childProcess.spawnSync(cliBin, ["sync-settings", path.dirname(genesisHome)], { stdio: "ignore", windowsHide: true });
       }
     } catch (_e) {
       // ignore — never block on a settings refresh
@@ -348,7 +386,7 @@ async function syncRepo(genesisHome) {
     try {
       const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
       if (fs.existsSync(cliBin)) {
-        childProcess.spawnSync(cliBin, ["sync-mcp", path.dirname(genesisHome)], { stdio: "ignore" });
+        childProcess.spawnSync(cliBin, ["sync-mcp", path.dirname(genesisHome)], { stdio: "ignore", windowsHide: true });
       }
     } catch (_e) {
       // ignore — never block on a .mcp.json heal
@@ -359,7 +397,7 @@ async function syncRepo(genesisHome) {
     try {
       const cliBin = path.join(binDir, "genesis-cli" + (process.platform === "win32" ? ".exe" : ""));
       if (fs.existsSync(cliBin)) {
-        childProcess.spawnSync(cliBin, ["migrate-expertise", path.join(genesisHome, "expertise")], { stdio: "ignore" });
+        childProcess.spawnSync(cliBin, ["migrate-expertise", path.join(genesisHome, "expertise")], { stdio: "ignore", windowsHide: true });
       }
     } catch (_e) {
       // ignore — never block on the expertise.db rebuild
@@ -395,36 +433,15 @@ function execServer(binPath, modelDir) {
   const env = Object.assign({}, process.env);
   if (modelDir) env.GENESIS_MODEL_DIR = modelDir;
   resolveMemEnv(env);
-  const child = childProcess.spawn(binPath, process.argv.slice(2), { stdio: "inherit", env });
-
-  const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGBREAK"];
-  const forwarders = {};
-  for (const sig of signals) {
-    forwarders[sig] = function () {
-      try {
-        child.kill(sig);
-      } catch (_e) {
-        // child already gone
-      }
-    };
-    try {
-      process.on(sig, forwarders[sig]);
-    } catch (_e) {
-      // signal not supported on this OS
-    }
-  }
+  const child = childProcess.spawn(binPath, process.argv.slice(2), { stdio: "inherit", env, windowsHide: true });
+  const removeForwarders = forwardSignals(child);
   child.on("error", function (err) {
+    removeForwarders();
     log("ERROR: failed to launch " + binPath + ": " + err.message);
     process.exit(1);
   });
   child.on("exit", function (code, signal) {
-    for (const sig of signals) {
-      try {
-        process.removeListener(sig, forwarders[sig]);
-      } catch (_e) {
-        // ignore
-      }
-    }
+    removeForwarders();
     if (signal) {
       try {
         process.kill(process.pid, signal);
