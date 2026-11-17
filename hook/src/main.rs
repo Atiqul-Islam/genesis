@@ -13,7 +13,6 @@ fn main() {
         "inject" => genesis_hook::inject::run(&rest),
         "precompact" => genesis_hook::precompact::run(&rest),
         "capture-session" => genesis_hook::capture_session::run(&rest),
-        "expertise-warn" => genesis_hook::expertise_warn::run(&rest),
         "reflect-surface" => genesis_hook::reflect_surface::run(&rest),
         "validate" => genesis_hook::validate::run(&rest),
         "session-pointer" => genesis_hook::session_pointer::run(&rest),

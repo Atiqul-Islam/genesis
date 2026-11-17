@@ -305,55 +305,20 @@ fn validate_allows_clean_unrequired_agent() {
 }
 
 #[test]
-fn validate_blocks_when_required_expertise_undeclared() {
-    // 'method' HAS required expertise in ../expertise/required.json; with no declarations it must block.
+fn validate_no_longer_blocks_on_undeclared_expertise() {
+    // #39: the APPLIED-EXPERTISE declaration gate was removed. A required-expertise agent ('method')
+    // with NO declarations and a clean artifact must now FINISH (empty stdout == allow) — it used to block.
     let td = tempfile::tempdir().unwrap();
     std::fs::write(td.path().join("worker.persona.md"), "clean persona").unwrap();
     let ev = json!({"agent_type":"method","transcript_path":"","session_id":"s"});
     let root = td.path().to_str().unwrap();
-    let v = parse(&run(
-        &["validate", root, "method", "--expertise", EXP],
-        &ev.to_string(),
-    ));
-    assert_eq!(v["decision"], "block");
-    assert!(v["reason"]
-        .as_str()
-        .unwrap_or("")
-        .contains("APPLIED-EXPERTISE"));
-}
-
-#[test]
-fn validate_allows_when_declared_via_quiet_record_channel() {
-    // Feature 2 (verbose-declarations) AC1/AC6: an agent that RECORDS its declarations to
-    // `applied-expertise.jsonl` (a Write tool_use) — with NO declarations in visible prose — finishes
-    // exactly as if it had printed them. mneme requires memory-management + expertise-application.
-    let td = tempfile::tempdir().unwrap();
-    // Evidence must be a VERBATIM quote of each rule's text (verbatim-rule-quote check).
-    let recorded = "APPLIED-EXPERTISE: memory-management#mm-1 — Model memory as a six-phase lifecycle\n\
-         APPLIED-EXPERTISE: memory-management#mm-2 — The single most important correctness feature\n\
-         APPLIED-EXPERTISE: memory-management#mm-3 — The vector DB stays the recall engine\n\
-         APPLIED-EXPERTISE: expertise-application#ea-1 — Decompose expertise into scoped\n\
-         APPLIED-EXPERTISE: expertise-application#ea-2 — Compile each rule into a bucket\n\
-         APPLIED-EXPERTISE: expertise-application#ea-3 — Force the agent to CITE the governing";
-    let human = json!({"type":"user","message":{"role":"user","content":"do it"}});
-    let rec = json!({"type":"assistant","message":{"content":[
-        {"type":"text","text":"Done — declarations recorded quietly."},
-        {"type":"tool_use","name":"Write","input":{
-            "file_path":"/proj/.genesis/applied-expertise.jsonl","content":recorded}}
-    ]}});
-    let tpath = td.path().join("transcript.jsonl");
-    std::fs::write(&tpath, format!("{human}\n{rec}\n")).unwrap();
-    let ev =
-        json!({"agent_type":"mneme","transcript_path":tpath.to_str().unwrap(),"session_id":"s"});
-    let root = td.path().to_str().unwrap();
-    // Empty stdout == allow (no block emitted).
     assert_eq!(
         run(
-            &["validate", root, "mneme", "--expertise", EXP],
+            &["validate", root, "method", "--expertise", EXP],
             &ev.to_string()
         ),
         "",
-        "quiet record-channel declarations must satisfy validate the same as printed ones"
+        "validate must no longer block for undeclared expertise (#39)"
     );
 }
 

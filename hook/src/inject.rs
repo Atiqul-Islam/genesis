@@ -33,20 +33,16 @@ pub fn run(args: &[String]) {
     let cwd = std::env::current_dir().unwrap_or_default();
 
     let pointers = build_pointers(&exp_dir);
-    let required = build_required(&exp_dir, &active, verbose_on(&cwd, &active));
+    let required = build_required(&exp_dir, &active);
     // issue #1: on a post-compaction / resume start, surface the snapshot written by the precompact hook
     // so the agent continues where it left off. Placed high so it survives the CTX cap.
     let resume = build_resume(&ev, &cwd);
     // issue #9: on a startup/resume start, restore any committed transcript(s) into this machine's Claude
     // Code store so native `claude -c` / `--resume` works, and notify the user with the exact command.
     let session_restore = build_session_restore(&ev, &cwd);
-    // vector-completeness-warn AC7: surface the background skip-detector's advisory (rules the last turn
-    // looked like it used but did not declare) and DELETE it (surface-once). Advisory only — never blocks.
-    let warnings = build_warnings(&cwd);
     let summary_block = build_summary(&exp_dir, &active, &cwd);
 
-    let mut ctx =
-        format!("{RULES}{required}{resume}{session_restore}{warnings}{pointers}{summary_block}");
+    let mut ctx = format!("{RULES}{required}{resume}{session_restore}{pointers}{summary_block}");
     if ctx.chars().count() > CTX_CAP {
         ctx = format!("{}\n…(truncated)", cli::take_chars(&ctx, CTX_CAP));
     }
@@ -110,7 +106,7 @@ fn build_pointers(exp_dir: &str) -> String {
     )
 }
 
-fn build_required(exp_dir: &str, agent: &str, verbose: bool) -> String {
+fn build_required(exp_dir: &str, agent: &str) -> String {
     if agent.is_empty() || exp_dir.is_empty() {
         return String::new();
     }
@@ -118,61 +114,17 @@ fn build_required(exp_dir: &str, agent: &str, verbose: bool) -> String {
     if req.is_empty() {
         return String::new();
     }
-    declaration_instruction(agent, &req.join(", "), verbose)
+    expertise_instruction(agent, &req.join(", "))
 }
 
-/// Whether the active agent's declarations are DISPLAYED in prose (verbose) or recorded quietly
-/// (default). On only when `<cwd>/.genesis/verbose/<agent>.json` exists with `{"verbose":true}`.
-fn verbose_on(cwd: &Path, agent: &str) -> bool {
-    if agent.is_empty() {
-        return false;
-    }
-    let path = cwd
-        .join(".genesis")
-        .join("verbose")
-        .join(format!("{agent}.json"));
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    serde_json::from_str::<Value>(&text)
-        .ok()
-        .and_then(|v| v.get("verbose").and_then(Value::as_bool))
-        == Some(true)
-}
-
-/// The APPLIED-EXPERTISE instruction in one of two modes (Feature 2 — verbose-declarations): verbose =
-/// declare in the visible reply (legacy); quiet (default) = record to the `applied-expertise.jsonl`
-/// file channel and do NOT print. Enforcement is identical either way — only the channel differs.
-fn declaration_instruction(agent: &str, req: &str, verbose: bool) -> String {
-    if verbose {
-        format!(
-            "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {req}. Each has \
-             a rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
-             finishing, declare the governing rules you actually applied — ONE LINE PER RULE in your \
-             reply:\n  APPLIED-EXPERTISE: <name>#<rule-id> — <verbatim quote of the rule's text>\nThe \
-             evidence MUST be a verbatim snippet (>= 20 chars) of THAT rule's own `text` from the \
-             manifest — you cannot quote a rule you did not read. The Stop hook (validate) verifies each \
-             citation: a bare `APPLIED-EXPERTISE: <name>` with no rule-id, a rule-id not in the \
-             manifest, or evidence that is NOT a verbatim quote of the rule all BLOCK finishing. Cite \
-             at least the rules you truly used (a token gesture fails). (To stop showing these in \
-             replies, run /genesis:verbose_deactivate {agent}.)"
-        )
-    } else {
-        format!(
-            "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {req}. Each has \
-             a rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates). Before \
-             finishing, RECORD the governing rules you actually applied by WRITING them to \
-             `.genesis/applied-expertise.jsonl` — one line per rule, format \
-             `APPLIED-EXPERTISE: <name>#<rule-id> — <verbatim quote of the rule's text>` (evidence MUST \
-             be a verbatim snippet, >= 20 chars, of THAT rule's own `text` from the manifest — you \
-             cannot quote a rule you did not read). Do NOT print these lines in your \
-             reply; they are recorded, not displayed. The Stop hook (validate) reads that file and \
-             verifies each citation: a rule-id not in the manifest, or evidence that is not a verbatim \
-             quote of the rule, BLOCKS finishing. Record at least the \
-             rules you truly used (a token gesture fails). (To show these in replies, run \
-             /genesis:verbose_activate {agent}.)"
-        )
-    }
+/// Tell the agent which REQUIRED expertise to load for every task (pointers to its decoupled store).
+/// The APPLIED-EXPERTISE declaration mandate was removed (#39) — the validator no longer blocks on it.
+fn expertise_instruction(agent: &str, req: &str) -> String {
+    format!(
+        "\nYou are '{agent}'. Every task, load and apply these REQUIRED expertise: {req}. Each has a \
+         rule manifest at expertise/manifests/<name>.json (stable rule-ids + predicates); read the \
+         ones your task needs before deep work."
+    )
 }
 
 fn required_list(exp_dir: &str, agent: &str) -> Vec<String> {
@@ -226,25 +178,6 @@ fn build_resume(ev: &Value, cwd: &Path) -> String {
         "\n\n## Resume — recent session state recovered after compaction\n{shown}\nThe full snapshot is \
          on disk at {disp} — read it to recover anything not shown above."
     )
-}
-
-/// The expertise skip-warning block (vector-completeness-warn AC7): surface the background worker's
-/// `<cwd>/.genesis/expertise-warnings.md` (rules the last turn looked like it used but did not declare) and
-/// DELETE it (surface-once), so it appears exactly at the next SessionStart. Advisory only — never blocks.
-/// Fail-open: a missing/empty/unreadable file injects nothing (and a stale empty file is cleared).
-fn build_warnings(cwd: &Path) -> String {
-    let path = cwd.join(".genesis").join("expertise-warnings.md");
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return String::new();
-    };
-    let body = raw.trim();
-    if body.is_empty() {
-        let _ = std::fs::remove_file(&path);
-        return String::new();
-    }
-    let out = format!("\n\n{body}");
-    let _ = std::fs::remove_file(&path); // surface-once
-    out
 }
 
 /// The cross-system resume block (issue #9): on a SessionStart whose `source` is `startup` or `resume`,
@@ -352,33 +285,12 @@ mod tests {
     }
 
     #[test]
-    fn verbose_flag_read_from_per_agent_file() {
-        // Feature 2 (verbose-declarations): off by default; on only when the per-agent flag file exists
-        // with {"verbose":true}.
-        let td = tempfile::tempdir().unwrap();
-        let cwd = td.path();
-        assert!(!verbose_on(cwd, "method"), "absent flag => quiet (default)");
-        let vdir = cwd.join(".genesis").join("verbose");
-        std::fs::create_dir_all(&vdir).unwrap();
-        std::fs::write(vdir.join("method.json"), r#"{"verbose":true}"#).unwrap();
-        assert!(verbose_on(cwd, "method"), "flag present => verbose");
-        assert!(!verbose_on(cwd, "sensei"), "flag is per-agent, not global");
-        std::fs::write(vdir.join("sensei.json"), r#"{"verbose":false}"#).unwrap();
-        assert!(!verbose_on(cwd, "sensei"), "verbose:false => quiet");
-    }
-
-    #[test]
-    fn declaration_instruction_switches_on_verbose() {
-        let quiet = declaration_instruction("method", "persona-creation", false);
-        let loud = declaration_instruction("method", "persona-creation", true);
-        // Quiet: record to the file channel, do not print in prose.
-        assert!(quiet.contains("applied-expertise.jsonl"));
-        assert!(quiet.to_lowercase().contains("do not print"));
-        // Verbose: declare in the reply itself.
-        assert!(loud.contains("APPLIED-EXPERTISE"));
-        assert!(!loud.contains("applied-expertise.jsonl"));
-        // Both keep the required-expertise list and the enforcement note.
-        assert!(quiet.contains("persona-creation") && loud.contains("persona-creation"));
+    fn expertise_instruction_lists_required_without_declaration_mandate() {
+        let out = expertise_instruction("method", "persona-creation, prompt-engineering");
+        assert!(out.contains("REQUIRED expertise: persona-creation, prompt-engineering"));
+        // #39: no APPLIED-EXPERTISE recording mandate, no applied-expertise.jsonl, no block note.
+        assert!(!out.contains("APPLIED-EXPERTISE"));
+        assert!(!out.contains("applied-expertise.jsonl"));
     }
 
     #[test]
@@ -440,31 +352,6 @@ mod tests {
         std::fs::create_dir_all(repo2.join(".genesis/sessions")).unwrap();
         std::fs::write(repo2.join(".genesis/sessions/s.jsonl"), "x").unwrap();
         assert!(build_session_restore(&json!({"source":"compact"}), &repo2).is_empty());
-    }
-
-    #[test]
-    fn build_warnings_surfaces_and_clears() {
-        // vector-completeness-warn AC7: SessionStart surfaces the background worker's warnings file into
-        // context and DELETES it (surface-once); a missing/empty file injects nothing.
-        let td = tempfile::tempdir().unwrap();
-        let cwd = td.path();
-        std::fs::create_dir_all(cwd.join(".genesis")).unwrap();
-        let p = cwd.join(".genesis").join("expertise-warnings.md");
-        // missing file -> empty, no panic
-        assert!(build_warnings(cwd).is_empty());
-        std::fs::write(
-            &p,
-            "## Expertise skip-warning (advisory)\n- test-driven-determinism#tdd-1\n",
-        )
-        .unwrap();
-        let out = build_warnings(cwd);
-        assert!(out.contains("skip-warning") && out.contains("tdd-1"));
-        assert!(
-            !p.exists(),
-            "surface-once: the file is deleted after being surfaced"
-        );
-        // second call -> empty (already cleared)
-        assert!(build_warnings(cwd).is_empty());
     }
 
     #[test]

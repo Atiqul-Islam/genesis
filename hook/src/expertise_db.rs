@@ -12,7 +12,6 @@
 //! reader would — ids lowercased on the validate path, RAW on the gate path, `checkable` filtered, file
 //! order preserved by `ordinal`. The `expertise_db_parity_*` tests assert this against a fixture store.
 
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// The derived DB path for an expertise `root` (sibling of the committed manifests). Only referenced by
@@ -25,8 +24,8 @@ pub(crate) fn db_file(root: &Path) -> std::path::PathBuf {
 
 #[cfg(feature = "expertise-db")]
 mod backend {
-    use super::{db_file, HashMap, HashSet, Path};
-    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+    use super::{db_file, Path};
+    use rusqlite::{Connection, OpenFlags};
 
     /// Open `<root>/expertise.db` read-only, or `None` if it is absent/unopenable (→ file fallback).
     fn open(root: &Path) -> Option<Connection> {
@@ -35,29 +34,6 @@ mod backend {
             return None;
         }
         Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
-    }
-
-    /// True if the bucket is present in the DB at all (an `expertise` row or any `rules` row). Used to
-    /// mirror the file reader's "missing manifest → `None`" semantics precisely.
-    fn bucket_exists(c: &Connection, name: &str) -> bool {
-        let has_bucket = c
-            .query_row("SELECT 1 FROM expertise WHERE name=?1", [name], |_| Ok(()))
-            .optional()
-            .ok()
-            .flatten()
-            .is_some();
-        if has_bucket {
-            return true;
-        }
-        c.query_row(
-            "SELECT 1 FROM rules WHERE expertise=?1 LIMIT 1",
-            [name],
-            |_| Ok(()),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .is_some()
     }
 
     /// Agent → required expertise names (array order), mirroring `required_for` / `required_list`.
@@ -72,66 +48,6 @@ mod backend {
             v.push(row.ok()?);
         }
         Some(v)
-    }
-
-    /// `(all_ids, checkable_ids)` for a bucket, ids LOWERCASED — mirrors `load_manifest`. `None` if the
-    /// bucket is absent (so the caller falls back exactly as it would on a missing manifest file).
-    pub(crate) fn manifest_ids(
-        root: &Path,
-        name: &str,
-    ) -> Option<(HashSet<String>, HashSet<String>)> {
-        let c = open(root)?;
-        if !bucket_exists(&c, name) {
-            return None;
-        }
-        let mut stmt = c
-            .prepare("SELECT id, type FROM rules WHERE expertise=?1 AND status='active'")
-            .ok()?;
-        let rows = stmt
-            .query_map([name], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })
-            .ok()?;
-        let mut all = HashSet::new();
-        let mut checkable = HashSet::new();
-        for row in rows {
-            let (id, ty) = row.ok()?;
-            let idl = id.to_lowercase();
-            if idl.is_empty() {
-                continue;
-            }
-            all.insert(idl.clone());
-            if ty == "checkable" {
-                checkable.insert(idl);
-            }
-        }
-        Some((all, checkable))
-    }
-
-    /// Rule-id (LOWERCASED) → text, non-empty only — mirrors `manifest_rule_texts` (the verbatim-quote
-    /// evidence map). `None` if the bucket is absent.
-    pub(crate) fn rule_texts(root: &Path, name: &str) -> Option<HashMap<String, String>> {
-        let c = open(root)?;
-        if !bucket_exists(&c, name) {
-            return None;
-        }
-        let mut stmt = c
-            .prepare("SELECT id, text FROM rules WHERE expertise=?1 AND status='active'")
-            .ok()?;
-        let rows = stmt
-            .query_map([name], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })
-            .ok()?;
-        let mut m = HashMap::new();
-        for row in rows {
-            let (id, t) = row.ok()?;
-            let idl = id.to_lowercase();
-            if !idl.is_empty() && !t.is_empty() {
-                m.insert(idl, t);
-            }
-        }
-        Some(m)
     }
 
     /// Checkable active rules as `(RAW id, raw text)` in file order (`ordinal`) — mirrors gate's
@@ -158,18 +74,9 @@ mod backend {
 
 #[cfg(not(feature = "expertise-db"))]
 mod backend {
-    use super::{HashMap, HashSet, Path};
+    use super::Path;
 
     pub(crate) fn required(_root: &Path, _agent: &str) -> Option<Vec<String>> {
-        None
-    }
-    pub(crate) fn manifest_ids(
-        _root: &Path,
-        _name: &str,
-    ) -> Option<(HashSet<String>, HashSet<String>)> {
-        None
-    }
-    pub(crate) fn rule_texts(_root: &Path, _name: &str) -> Option<HashMap<String, String>> {
         None
     }
     pub(crate) fn top_checkable(_root: &Path, _name: &str) -> Option<Vec<(String, String)>> {
@@ -177,11 +84,11 @@ mod backend {
     }
 }
 
-pub(crate) use backend::{manifest_ids, required, rule_texts, top_checkable};
+pub(crate) use backend::{required, top_checkable};
 
 #[cfg(all(test, feature = "expertise-db"))]
 mod tests {
-    use super::{db_file, manifest_ids, required, rule_texts, top_checkable};
+    use super::{db_file, required, top_checkable};
     use rusqlite::Connection;
     use std::path::Path;
 
@@ -218,49 +125,12 @@ mod tests {
     }
 
     #[test]
-    fn required_parity_db_equals_file() {
+    fn required_db_reads_agent_expertise() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         fixture(root).unwrap();
         let db = required(root, "bot").unwrap();
-        let file = crate::validate::required_for(Some(&root.join("required.json")), "bot");
-        assert_eq!(db, file, "DB required == file required_for");
         assert_eq!(db, vec!["tdd".to_string(), "mm".to_string()]);
-    }
-
-    #[test]
-    fn rule_texts_parity_db_equals_file() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        fixture(root).unwrap();
-        let db = rule_texts(root, "tdd").unwrap();
-        let file = crate::validate::manifest_rule_texts(Some(&root.join("manifests")), "tdd");
-        assert_eq!(db, file, "DB rule_texts == file manifest_rule_texts");
-        assert!(
-            db.contains_key("tdd-1") && db.contains_key("tdd-2"),
-            "ids lowercased"
-        );
-        assert!(!db.contains_key("tdd-3"), "empty-text rule dropped");
-    }
-
-    #[test]
-    fn manifest_ids_lowercased_and_checkable_filtered() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        fixture(root).unwrap();
-        let (all, checkable) = manifest_ids(root, "tdd").unwrap();
-        assert!(
-            all.contains("tdd-1") && all.contains("tdd-2") && all.contains("tdd-3"),
-            "all ids, lowercased"
-        );
-        assert!(
-            checkable.contains("tdd-1") && checkable.contains("tdd-3"),
-            "checkable set"
-        );
-        assert!(
-            !checkable.contains("tdd-2"),
-            "judgment rule is not checkable"
-        );
     }
 
     #[test]
@@ -282,8 +152,6 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path(); // no expertise.db written -> every reader None -> caller falls back to files
         assert!(required(root, "bot").is_none());
-        assert!(manifest_ids(root, "tdd").is_none());
-        assert!(rule_texts(root, "tdd").is_none());
         assert!(top_checkable(root, "tdd").is_none());
     }
 }
